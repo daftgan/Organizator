@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Organizator</title>
+<link rel="stylesheet" href="organic.css">
+<link rel="stylesheet" href="fonts.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<div class="app" id="app">
+  <div class="shell" id="shell">
+
+    <header class="app-header">
+      <h1>Organizator</h1>
+      <div class="usage" id="usage" aria-label="Quotas des agents"></div>
+    </header>
+
+    <div class="filters">
+      <div class="filter-chips" id="filter-chips"></div>
+      <div class="filter-right">
+        <input class="input search" id="search" type="text" data-focus-key="search" placeholder="Rechercher…" autocomplete="off" spellcheck="false">
+        <button class="icon-btn" id="remarks-btn" type="button" data-act="open-remarks" title="Remarques sur Organizator" aria-label="Remarques sur Organizator">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M8 9h8M8 13h5"></path></svg>
+          <span class="btn-badge" hidden></span>
+          <span class="btn-dot" hidden></span>
+        </button>
+        <button class="icon-btn" id="settings-btn" type="button" title="Réglages" aria-label="Réglages">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="list-wrap">
+      <div class="list" id="list"></div>
+    </div>
+
+  </div>
+</div>
+
+<div id="panel"></div>
+<div id="dialogs"></div>
+<div id="toast-host"></div>
+
+<script src="bridge.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

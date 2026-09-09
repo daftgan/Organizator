@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Organizator</AssemblyName>
+    <RootNamespace>Organizator</RootNamespace>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Product>Organizator</Product>
+    <Company>Organizator</Company>
+    <NeutralLanguage>fr-FR</NeutralLanguage>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Pas de .xml de documentation ni de .pdb des dependances dans la sortie. -->
+    <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
+    <!-- Suppression de la session vide creee par la sonde de modeles dans session-store.db de Copilot. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.15" />
+    <!-- Ligne de commande des processus claude/copilot vivants (WMI Win32_Process), pour l'etat des sessions. -->
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
+
+  <!-- Les fichiers de wwwroot/ sont embarques avec un LogicalName qui conserve
+       le chemin relatif (ex. wwwroot/fonts/figtree-400-latin.woff2). Le glob est
+       evalue au build : tout fichier ajoute par la suite est pris automatiquement. -->
+  <Target Name="OrganizatorEmbedWwwRoot" BeforeTargets="PrepareResourceNames;AssignTargetPaths">
+    <ItemGroup>
+      <OrganizatorWwwFile Include="wwwroot\**\*" />
+      <EmbeddedResource Include="@(OrganizatorWwwFile)">
+        <LogicalName>wwwroot/$([System.String]::Copy('%(OrganizatorWwwFile.RecursiveDir)').Replace('\','/'))%(OrganizatorWwwFile.Filename)%(OrganizatorWwwFile.Extension)</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Type>Non-Resx</Type>
+      </EmbeddedResource>
+    </ItemGroup>
+  </Target>
+
+  <!-- Le build doit se relancer si un fichier de wwwroot change. -->
+  <Target Name="OrganizatorWwwRootInputs" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <CustomAdditionalCompileInputs Include="wwwroot\**\*" />
+    </ItemGroup>
+  </Target>
+
+</Project>

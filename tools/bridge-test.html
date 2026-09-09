@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Organizator — test du pont</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; padding: 24px; background: #f5ead8; color: #201e1d;
+         font: 14px/1.55 "Segoe UI", system-ui, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 18px; color: #6b3813; }
+  #verdict { font-weight: 700; font-size: 16px; padding: 10px 14px; border-radius: 12px;
+             background: #fffaf1; border: 2px solid #eee7db; margin-bottom: 16px; }
+  #verdict.ok { border-color: #7a8a5e; color: #3d472b; }
+  #verdict.fail { border-color: #c67139; color: #8c491a; }
+  ol { margin: 0; padding-left: 22px; }
+  li { margin-bottom: 4px; }
+  li.ok::marker { color: #7a8a5e; }
+  li.ko::marker { color: #c67139; }
+  code { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12.5px;
+         background: #fffaf1; padding: 1px 5px; border-radius: 6px; }
+  .ko { color: #8c491a; }
+</style>
+</head>
+<body>
+<h1>Organizator — test du pont</h1>
+<p class="sub">Page autonome. Elle n'appelle ni <code>startSession</code>, ni <code>resumeSession</code>, ni <code>pickFolder</code>.</p>
+<div id="verdict">Test en cours…</div>
+<ol id="steps"></ol>
+
+<script>
+(function () {
+  'use strict';
+
+  var TIMEOUT_MS = 8000;
+  var steps = document.getElementById('steps');
+  var verdict = document.getElementById('verdict');
+  var failures = [];
+  var events = [];
+
+  function note(label, ok, detail) {
+    var li = document.createElement('li');
+    li.className = ok ? 'ok' : 'ko';
+    li.textContent = label + ' — ' + (ok ? 'OK' : 'ECHEC') + (detail ? ' : ' + detail : '');
+    steps.appendChild(li);
+    if (!ok) { failures.push(label + (detail ? ' (' + detail + ')' : '')); }
+  }
+
+  var bridge = window.chrome && window.chrome.webview;
+  if (!bridge) {
+    verdict.className = 'fail';
+    verdict.textContent = 'BRIDGE-TEST FAIL : window.chrome.webview absent (page ouverte hors de l\u2019hote).';
+    return;
+  }
+
+  var pending = new Map();
+  var seq = 0;
+
+  bridge.addEventListener('message', function (ev) {
+    var msg = ev.data;
+    if (!msg || typeof msg !== 'object') { return; }
+    if (msg.event) { events.push(msg.event); return; }
+    var entry = pending.get(msg.id);
+    if (!entry) { return; }
+    pending.delete(msg.id);
+    if (msg.ok) { entry.resolve(msg.payload); }
+    else { entry.reject(new Error(msg.error || 'erreur sans message')); }
+  });
+
+  function send(type, payload) {
+    var id = 'bt-' + (++seq);
+    return new Promise(function (resolve, reject) {
+      pending.set(id, { resolve: resolve, reject: reject });
+      setTimeout(function () {
+        if (pending.has(id)) { pending.delete(id); reject(new Error('pas de reponse en ' + TIMEOUT_MS + ' ms')); }
+      }, TIMEOUT_MS);
+      bridge.postMessage({ id: id, type: type, payload: payload || {} });
+    });
+  }
+
+  function query(name) {
+    var m = new RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search);
+    return m ? decodeURIComponent(m[1].replace(/\+/g, ' ')) : '';
+  }
+
+  var taskId = 'bt' + Date.now();
+  var summary = [];
+
+  function run() {
+    var initialState = null;
+
+    return send('getState', {})
+      .then(function (state) {
+        initialState = state;
+        var ok = !!state && !!state.data && !!state.settings && !!state.env
+              && Array.isArray(state.data.tasks)
+              && Array.isArray(state.data.types)
+              && Array.isArray(state.data.convos)
+              && typeof state.env.dataDir === 'string' && state.env.dataDir.length > 0
+              && typeof state.env.hasClaude === 'boolean';
+        note('getState', ok, ok ? ('dataDir=' + state.env.dataDir + ', hasClaude=' + state.env.hasClaude
+             + ', hasWt=' + state.env.hasWt + ', version=' + state.env.version) : JSON.stringify(state));
+        summary.push('getState=' + (ok ? 'ok' : 'ko'));
+      })
+
+      .then(function () {
+        return send('saveSettings', {
+          topCount: 5, showBands: false, compact: true,
+          defaultCwd: '', terminal: 'powershell'
+        });
+      })
+      .then(function () {
+        return send('getState', {}).then(function (state) {
+          var s = state.settings;
+          var ok = s.topCount === 5 && s.showBands === false && s.compact === true && s.terminal === 'powershell';
+          note('saveSettings', ok, ok ? 'topCount=5, showBands=false, compact=true' : JSON.stringify(s));
+          summary.push('saveSettings=' + (ok ? 'ok' : 'ko'));
+        });
+      })
+
+      .then(function () {
+        var tasks = (initialState.data.tasks || []).slice();
+        tasks.push({ id: taskId, type: 'bt-type', text: 'Tache fictive du test de pont\nDeuxieme ligne',
+                     done: false, doing: false, created: Date.now() });
+        return send('saveData', {
+          tasks: tasks,
+          types: [{ id: 'bt-type', label: 'Test', bg: '#eee7db', fg: '#201e1d', bd: '#c67139', custom: true }],
+          convos: initialState.data.convos || [],
+          lastType: 'bt-type'
+        });
+      })
+      .then(function () { note('saveData', true, 'tache ' + taskId + ' ecrite'); summary.push('saveData=ok'); })
+
+      .then(function () {
+        return send('getState', {}).then(function (state) {
+          var found = (state.data.tasks || []).filter(function (t) { return t && t.id === taskId; })[0];
+          var ok = !!found && found.text.indexOf('Deuxieme ligne') > 0 && state.data.lastType === 'bt-type'
+                && (state.data.types || []).length === 1;
+          note('getState (relecture)', ok, ok ? 'tache relue avec son texte multiligne'
+               : 'tache absente ou alteree : ' + JSON.stringify(found));
+          summary.push('reread=' + (ok ? 'ok' : 'ko'));
+        });
+      })
+
+      .then(function () {
+        return send('getSessions', { sessions: [{ sessionId: '00000000-0000-4000-8000-000000000000', cwd: 'D:\\dossier-inexistant-organizator' }] })
+          .then(function (res) {
+            var s = res.sessions && res.sessions[0];
+            var ok = !!s && s.exists === false && s.messageCount === 0 && typeof s.title === 'string';
+            note('getSessions (session absente)', ok, ok ? 'exists=false, messageCount=0' : JSON.stringify(res));
+            summary.push('getSessions=' + (ok ? 'ok' : 'ko'));
+          });
+      })
+
+      .then(function () {
+        return send('getTranscript', { sessionId: '00000000-0000-4000-8000-000000000000', cwd: 'D:\\dossier-inexistant-organizator' })
+          .then(function (res) {
+            var ok = res && res.exists === false && Array.isArray(res.messages) && res.messages.length === 0;
+            note('getTranscript (session absente)', ok, ok ? 'exists=false, 0 message' : JSON.stringify(res));
+            summary.push('getTranscript=' + (ok ? 'ok' : 'ko'));
+          });
+      })
+
+      // Optionnel : ?sessionId=<uuid>&cwd=<dossier> teste le parseur sur une vraie session.
+      .then(function () {
+        var sessionId = query('sessionId');
+        var cwd = query('cwd');
+        if (!sessionId || !cwd) { return null; }
+
+        return send('getSessions', { sessions: [{ sessionId: sessionId, cwd: cwd }] })
+          .then(function (res) {
+            var s = res.sessions && res.sessions[0];
+            var ok = !!s && s.exists === true && s.messageCount > 0 && s.updated > 0
+                  && typeof s.title === 'string' && s.title.length > 0;
+            note('getSessions (session reelle)', ok,
+                 s ? ('exists=' + s.exists + ', messageCount=' + s.messageCount + ', updated=' + s.updated
+                      + ', titre de ' + (s.title || '').length + ' caracteres') : JSON.stringify(res));
+            summary.push('realSessions=' + (ok ? 'ok' : 'ko') + '(' + (s ? s.messageCount : '?') + ' messages)');
+          })
+          .then(function () { return send('getTranscript', { sessionId: sessionId, cwd: cwd }); })
+          .then(function (res) {
+            var roles = {};
+            (res.messages || []).forEach(function (m) { roles[m.role] = (roles[m.role] || 0) + 1; });
+            var withTs = (res.messages || []).filter(function (m) { return m.ts > 0; }).length;
+            var ok = res.exists === true && (res.messages || []).length > 0
+                  && roles.user > 0 && roles.assistant > 0
+                  && (res.messages || []).length <= 300 && withTs > 0;
+            note('getTranscript (session reelle)', ok,
+                 (res.messages || []).length + ' messages, user=' + (roles.user || 0)
+                 + ', assistant=' + (roles.assistant || 0) + ', horodates=' + withTs
+                 + ', titre de ' + (res.title || '').length + ' caracteres');
+            summary.push('realTranscript=' + (ok ? 'ok' : 'ko')
+                         + '(user=' + (roles.user || 0) + ',assistant=' + (roles.assistant || 0) + ')');
+          });
+      })
+
+      .catch(function (err) {
+        note('sequence interrompue', false, err && err.message ? err.message : String(err));
+        summary.push('exception=' + (err && err.message ? err.message : String(err)));
+      });
+  }
+
+  run().then(function () {
+    var ok = failures.length === 0;
+    var line = (ok ? 'BRIDGE-TEST OK ' : 'BRIDGE-TEST FAIL ') + summary.join(' | ')
+             + (ok ? '' : ' || echecs: ' + failures.join(' ; '));
+    verdict.className = ok ? 'ok' : 'fail';
+    verdict.textContent = line;
+    return send('log', { level: ok ? 'info' : 'error', message: line });
+  }).catch(function (err) {
+    verdict.className = 'fail';
+    verdict.textContent = 'BRIDGE-TEST FAIL : ' + (err && err.message ? err.message : String(err));
+  });
+})();
+</script>
+</body>
+</html>

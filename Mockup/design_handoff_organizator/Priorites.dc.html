@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/organic-8a216841-61fc-48d1-a327-c0111b722e95/styles.css">
+<script src="_ds/organic-8a216841-61fc-48d1-a327-c0111b722e95/_ds_bundle.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; background: var(--color-bg); font-family: var(--font-body); color: var(--color-text); }
+  a { color: var(--color-accent-700); text-decoration: none; }
+  a:hover { color: var(--color-accent-800); }
+  textarea, input, button { font-family: inherit; }
+  *:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  @keyframes blink { 50% { opacity: 0.25; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+</style>
+</helmet>
+
+<div style="min-height: 100vh; display: flex; flex-direction: column;">
+ <div style="{{ padStyle }}">
+
+  <header style="display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding: 34px clamp(20px, 4vw, 56px) 18px;">
+    <h1 style="font-family: var(--font-heading); font-size: clamp(32px, 4.2vw, 48px); line-height: 1.02; margin: 0;">Organizator</h1>
+  </header>
+
+  <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 0 clamp(20px, 4vw, 56px) 20px;">
+    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+      <sc-for list="{{ filterChips }}" as="chip" hint-placeholder-count="6">
+        <button onClick="{{ chip.toggle }}" onContextMenu="{{ chip.remove }}" title="{{ chip.title }}" style="{{ chip.style }}">{{ chip.label }}</button>
+      </sc-for>
+    </div>
+    <div style="flex: 1; min-width: 180px; display: flex; justify-content: flex-end; gap: 10px; align-items: center;">
+      <input class="input" placeholder="Rechercher…" value="{{ search }}" onChange="{{ onSearch }}" style="max-width: 260px;">
+    </div>
+  </div>
+
+  <sc-if value="{{ composerOpen }}">
+    <div class="dialog-backdrop" onClick="{{ closeComposer }}" style="position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 24px;">
+    <div class="dialog" onClick="{{ stopClick }}" style="width: min(600px, 100%); max-height: 88vh; overflow: auto; padding: 26px 28px; border-radius: var(--radius-lg); background: var(--color-surface, #fffaf1); box-shadow: var(--shadow-lg); animation: rise 0.18s ease-out;">
+      <div class="dialog-title" style="font-family: var(--font-heading); font-size: 24px; margin: 0 0 18px;">Nouvelle tâche</div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px;">
+        <sc-for list="{{ composerTypes }}" as="opt" hint-placeholder-count="5">
+          <button onClick="{{ opt.pick }}" onContextMenu="{{ opt.remove }}" title="{{ opt.title }}" style="{{ opt.style }}">{{ opt.label }}</button>
+        </sc-for>
+        <button onClick="{{ openCatForm }}" title="Créer une catégorie" style="padding: 7px 15px; border-radius: 999px; font-size: 13px; font-weight: 600; cursor: pointer; border: 2px dashed var(--color-neutral-400); background: transparent; color: var(--color-neutral-700);">+ catégorie</button>
+      </div>
+
+      <sc-if value="{{ catFormOpen }}">
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; padding: 14px 16px; border-radius: var(--radius-lg); background: var(--color-neutral-100); border: 2px solid var(--color-neutral-200); animation: rise 0.18s ease-out;">
+          <input class="input" ref="{{ catRef }}" placeholder="Nom de la catégorie" value="{{ catName }}" onChange="{{ onCatName }}" onKeyDown="{{ onCatKey }}" style="max-width: 210px;">
+          <div style="display: flex; gap: 8px;">
+            <sc-for list="{{ catPalettes }}" as="p" hint-placeholder-count="5">
+              <button onClick="{{ p.pick }}" title="{{ p.title }}" style="{{ p.style }}"></button>
+            </sc-for>
+          </div>
+          <span style="flex: 1;"></span>
+          <button class="btn btn-ghost" onClick="{{ closeCatForm }}">Annuler</button>
+          <button class="btn btn-secondary" onClick="{{ addCat }}">Créer la catégorie</button>
+        </div>
+      </sc-if>
+      <textarea class="input" rows="3" ref="{{ taRef }}" placeholder="Décrivez la tâche… (plusieurs lignes possibles, Cmd/Ctrl + Entrée pour ajouter)" value="{{ composerText }}" onChange="{{ onComposerText }}" onKeyDown="{{ onComposerKey }}" style="width: 100%; box-sizing: border-box; border-radius: var(--radius-md, 12px); resize: vertical; line-height: 1.5;"></textarea>
+      <div class="dialog-actions" style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+        <span style="flex: 1; font-size: 13px; color: var(--color-accent-700); align-self: center;">{{ composerHint }}</span>
+        <button class="btn btn-ghost" onClick="{{ closeComposer }}">Annuler</button>
+        <button class="btn btn-primary" disabled="{{ composerBlocked }}" onClick="{{ addTask }}">Ajouter la tâche</button>
+      </div>
+    </div>
+    </div>
+  </sc-if>
+
+  <div style="flex: 1; display: flex; align-items: stretch; gap: 0; padding: 0 clamp(20px, 4vw, 56px) 60px;">
+
+    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px;">
+      <sc-for list="{{ tasks }}" as="t" hint-placeholder-count="5">
+        <div>
+          <sc-if value="{{ t.showBand }}">
+            <div style="display: flex; align-items: center; gap: 12px; margin: 14px 0 12px;">
+              <span style="font-family: var(--font-heading); font-size: 15px; letter-spacing: 0.02em; color: var(--color-accent-800);">{{ t.band }}</span>
+              <span style="flex: 1; height: 2px; background: var(--color-neutral-200); border-radius: 999px;"></span>
+              <span style="font-size: 12px; color: var(--color-neutral-600);">{{ t.bandHint }}</span>
+            </div>
+          </sc-if>
+          <div onMouseEnter="{{ t.onGapEnter }}" onMouseLeave="{{ t.onGapLeave }}" onClick="{{ t.addHere }}" onDragOver="{{ t.onGapDragOver }}" onDrop="{{ t.onDrop }}" title="Ajouter une tâche ici" style="height: 18px; margin: -9px 0; position: relative; z-index: 3; cursor: pointer;">
+            <sc-if value="{{ t.showGap }}">
+              <div style="position: absolute; left: 0; right: 0; top: 8px; height: 2px; border-radius: 999px; background: var(--color-accent-300);"></div>
+              <div style="position: absolute; left: 50%; top: -3px; margin-left: -12px; width: 24px; height: 24px; border-radius: 999px; background: var(--color-accent-500); color: #fff; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 3px var(--color-bg);">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+              </div>
+            </sc-if>
+          </div>
+          <sc-if value="{{ t.dropBefore }}">
+            <div style="position: relative; height: 0;">
+              <div style="position: absolute; left: 0; right: 0; top: -8px; height: 4px; border-radius: 999px; background: var(--color-accent-500);"></div>
+              <div style="position: absolute; left: -5px; top: -13px; width: 14px; height: 14px; border-radius: 999px; background: var(--color-accent-500); box-shadow: 0 0 0 3px var(--color-bg);"></div>
+            </div>
+          </sc-if>
+          <div draggable="{{ t.draggable }}" onMouseEnter="{{ t.onCardEnter }}" onMouseLeave="{{ t.onCardLeave }}" onDragStart="{{ t.onDragStart }}" onDragOver="{{ t.onDragOver }}" onDrop="{{ t.onDrop }}" onDragEnd="{{ t.onDragEnd }}" style="{{ t.cardStyle }}">
+            <div style="display: flex; align-items: flex-start; gap: 14px;">
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 2px;">
+                <span style="{{ t.rankStyle }}">{{ t.rank }}</span>
+                <span title="Glisser pour déplacer" style="cursor: grab; color: var(--color-neutral-500); display: flex;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>
+                </span>
+              </div>
+
+              <div style="flex: 1; min-width: 0;">
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px;">
+                  <span style="{{ t.typeStyle }}">{{ t.typeLabel }}</span>
+                  <sc-if value="{{ t.isDoing }}">
+                    <span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 12px; border-radius: 999px; background: var(--color-accent-2-700); color: var(--color-bg); font-size: 12px; font-weight: 600;">
+                      <span style="width: 7px; height: 7px; border-radius: 999px; background: var(--color-bg); animation: blink 1.4s ease-in-out infinite;"></span>
+                      <span>En cours</span>
+                    </span>
+                  </sc-if>
+
+                </div>
+
+                <sc-if value="{{ t.editing }}">
+                  <textarea class="input" rows="{{ t.rows }}" value="{{ t.text }}" onChange="{{ t.onText }}" onKeyDown="{{ t.onEditKey }}" style="width: 100%; box-sizing: border-box; border-radius: var(--radius-md, 12px); line-height: 1.55; font-size: 15.5px; resize: vertical;"></textarea>
+                </sc-if>
+                <sc-if value="{{ t.editing }}">
+                  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px;">
+                    <span style="font-size: 12px; color: var(--color-neutral-700); font-weight: 600;">Catégorie</span>
+                    <sc-for list="{{ t.catChips }}" as="c" hint-placeholder-count="3">
+                      <button onClick="{{ c.pick }}" style="{{ c.style }}">{{ c.label }}</button>
+                    </sc-for>
+                    <span style="flex: 1;"></span>
+                    <button class="btn btn-ghost" onClick="{{ t.stopEdit }}" style="padding: 5px 14px; font-size: 13px;">Terminé</button>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ t.reading }}">
+                  <div onClick="{{ t.startEdit }}" title="Cliquer pour modifier" style="{{ t.textStyle }}">{{ t.text }}</div>
+                </sc-if>
+              </div>
+
+              <div style="display: flex; gap: 6px; align-items: flex-start;">
+                <div style="{{ t.actionsStyle }}">
+                <button onClick="{{ t.toggleDoing }}" title="Passer en cours" style="{{ t.doingBtnStyle }}">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5l12 7-12 7z"></path></svg>
+                </button>
+                <button class="btn btn-icon btn-ghost" onClick="{{ t.toggleDone }}" title="Marquer terminée">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"></path></svg>
+                </button>
+                <button class="btn btn-icon btn-ghost" onClick="{{ t.remove }}" title="Supprimer">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V5h5v2M6.5 7l1 12.5h9L17.5 7"></path></svg>
+                </button>
+                </div>
+                <button onClick="{{ t.openTerminal }}" title="Ouvrir le terminal de l'agent" style="{{ t.termBtnStyle }}">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l3 3-3 3M12.5 15h5"></path><rect x="2.5" y="4" width="19" height="16" rx="4"></rect></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          <sc-if value="{{ t.dropAfter }}">
+            <div style="position: relative; height: 0;">
+              <div style="position: absolute; left: 0; right: 0; top: 8px; height: 4px; border-radius: 999px; background: var(--color-accent-500);"></div>
+              <div style="position: absolute; left: -5px; top: 3px; width: 14px; height: 14px; border-radius: 999px; background: var(--color-accent-500); box-shadow: 0 0 0 3px var(--color-bg);"></div>
+            </div>
+          </sc-if>
+        </div>
+      </sc-for>
+
+      <sc-if value="{{ notEmpty }}">
+        <div onMouseEnter="{{ onTailEnter }}" onMouseLeave="{{ onTailLeave }}" onClick="{{ addTail }}" onDragOver="{{ onTailDragOver }}" onDrop="{{ onTailDrop }}" title="Ajouter une tâche en bas de file" style="height: 22px; margin: -4px 0 0; position: relative; z-index: 3; cursor: pointer;">
+          <sc-if value="{{ tailShow }}">
+            <div style="position: absolute; left: 0; right: 0; top: 10px; height: 2px; border-radius: 999px; background: var(--color-accent-300);"></div>
+            <div style="position: absolute; left: 50%; top: -1px; margin-left: -12px; width: 24px; height: 24px; border-radius: 999px; background: var(--color-accent-500); color: #fff; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 3px var(--color-bg);">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isEmpty }}">
+        <div style="padding: 52px 28px; text-align: center; border: 2px dashed var(--color-neutral-300); border-radius: var(--radius-lg); color: var(--color-neutral-700);">
+          <div style="font-family: var(--font-heading); font-size: 22px; color: var(--color-text); margin-bottom: 8px;">File vide</div>
+          <div style="font-size: 15px; margin-bottom: 18px;">Ajoutez une tâche ou changez les filtres.</div>
+          <button class="btn btn-primary" onClick="{{ addTail }}">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+            <span>Nouvelle tâche</span>
+          </button>
+        </div>
+      </sc-if>
+    </div>
+
+    <sc-if value="{{ terminalOpen }}">
+      <div style="width: min(46vw, 520px); flex: none; margin-left: 24px; position: fixed; right: clamp(20px, 4vw, 56px); top: 18px; bottom: 18px; z-index: 20; display: flex; flex-direction: column; background: var(--color-neutral-900); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); overflow: hidden; animation: rise 0.2s ease-out;">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 14px 18px; background: rgba(255,255,255,0.06);">
+          <span style="display: flex; gap: 6px;">
+            <span style="width: 10px; height: 10px; border-radius: 999px; background: var(--color-accent-500);"></span>
+            <span style="width: 10px; height: 10px; border-radius: 999px; background: var(--color-accent-2-400);"></span>
+            <span style="width: 10px; height: 10px; border-radius: 999px; background: rgba(255,255,255,0.25);"></span>
+          </span>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: rgba(255,255,255,0.72); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">agent — {{ terminalTaskTitle }}</span>
+          <span style="flex: 1;"></span>
+          <sc-if value="{{ convOpen }}">
+            <button onClick="{{ backToList }}" style="background: none; border: none; color: rgba(255,255,255,0.6); cursor: pointer; font-size: 12.5px; font-family: 'JetBrains Mono', monospace; white-space: nowrap; flex: none;">‹ historique</button>
+          </sc-if>
+          <button onClick="{{ closeTerminal }}" style="background: none; border: none; color: rgba(255,255,255,0.6); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px;">✕</button>
+        </div>
+
+        <sc-if value="{{ listOpen }}">
+          <div style="flex: 1; overflow: auto; padding: 20px;">
+            <button onClick="{{ newConversation }}" style="width: 100%; text-align: left; padding: 14px 16px; border-radius: var(--radius-md, 12px); border: 2px solid var(--color-accent-500); background: rgba(198,113,57,0.14); color: var(--color-accent-200); font-size: 14px; cursor: pointer; margin-bottom: 16px;">+ Nouvelle conversation</button>
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.4); margin-bottom: 10px;">Conversations</div>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <sc-for list="{{ taskConversations }}" as="c" hint-placeholder-count="2">
+                <div style="display: flex; align-items: stretch; gap: 6px; border-radius: var(--radius-md, 12px); border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.05); overflow: hidden;">
+                  <button onClick="{{ c.open }}" style="flex: 1; min-width: 0; text-align: left; padding: 13px 15px; border: none; background: none; cursor: pointer; color: rgba(255,255,255,0.9);">
+                    <div style="font-size: 13.5px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ c.title }}</div>
+                    <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: rgba(255,255,255,0.45);">{{ c.meta }}</div>
+                  </button>
+                  <button onClick="{{ c.remove }}" title="Supprimer la conversation" style="flex: none; width: 42px; border: none; background: none; cursor: pointer; color: rgba(255,255,255,0.4); font-size: 14px;">✕</button>
+                </div>
+              </sc-for>
+            </div>
+            <sc-if value="{{ noConvos }}">
+              <div style="font-size: 13px; color: rgba(255,255,255,0.45); padding: 6px 2px;">Aucune conversation pour cette tâche.</div>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ convOpen }}">
+          <div style="flex: 1; overflow: auto; padding: 18px 20px; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.65;">
+            <sc-for list="{{ activeMessages }}" as="m" hint-placeholder-count="2">
+              <div style="margin-bottom: 16px;">
+                <div style="{{ m.roleStyle }}">{{ m.role }}</div>
+                <div style="{{ m.bodyStyle }}">{{ m.content }}</div>
+              </div>
+            </sc-for>
+            <sc-if value="{{ sending }}">
+              <div style="color: var(--color-accent-2-300);">agent ▍<span style="animation: blink 1s steps(1) infinite;">…</span></div>
+            </sc-if>
+          </div>
+          <div style="padding: 14px 16px; background: rgba(255,255,255,0.05); display: flex; gap: 10px; align-items: flex-end;">
+            <textarea rows="2" placeholder="Demandez à l'agent… (Entrée pour envoyer)" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onDraftKey }}" style="flex: 1; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.18); border-radius: 12px; color: #fff; padding: 10px 12px; font-family: 'JetBrains Mono', monospace; font-size: 13px; resize: none;"></textarea>
+            <button onClick="{{ send }}" style="border: none; border-radius: 999px; background: var(--color-accent-500); color: #fff; padding: 11px 18px; font-size: 13.5px; cursor: pointer;">Envoyer</button>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+  </div>
+
+ </div>
+
+  <sc-if value="{{ toast }}">
+    <div style="position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: var(--color-neutral-900); color: var(--color-neutral-100); padding: 13px 20px; border-radius: 999px; box-shadow: var(--shadow-lg); font-size: 14px; max-width: 80vw; animation: rise 0.2s ease-out;">{{ toast }}</div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: &quot;100%&quot;, &quot;height&quot;: 900}, &quot;topCount&quot;: {&quot;editor&quot;: &quot;int&quot;, &quot;default&quot;: 3, &quot;min&quot;: 1, &quot;max&quot;: 8, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;File&quot;}, &quot;showBands&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;File&quot;}, &quot;compact&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;File&quot;}, &quot;agentModel&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;Rapide (Haiku)&quot;, &quot;Réfléchi (Sonnet)&quot;], &quot;default&quot;: &quot;Rapide (Haiku)&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Agent&quot;}}">
+const TYPES = [];
+const LEGACY = {
+  bug: { label: 'Bug', p: 0 }, story: { label: 'Story', p: 1 }, merge: { label: 'Merge', p: 2 },
+  review: { label: 'Review', p: 3 }, divers: { label: 'Divers', p: 4 }
+};
+const NOTYPE = { id: '', label: 'sans catégorie', bg: 'transparent', fg: 'var(--color-neutral-600)', bd: 'var(--color-neutral-300)' };
+const PALETTES = [
+  { id: 'terracotta', title: 'Terracotta', bg: 'oklch(0.9 0.06 55)', fg: 'oklch(0.4 0.11 50)', bd: 'oklch(0.76 0.1 55)' },
+  { id: 'sauge', title: 'Sauge', bg: 'oklch(0.9 0.05 128)', fg: 'oklch(0.38 0.07 128)', bd: 'oklch(0.74 0.07 128)' },
+  { id: 'ocre', title: 'Ocre', bg: 'oklch(0.92 0.08 90)', fg: 'oklch(0.42 0.09 80)', bd: 'oklch(0.79 0.1 85)' },
+  { id: 'prune', title: 'Prune', bg: 'oklch(0.89 0.05 345)', fg: 'oklch(0.4 0.1 345)', bd: 'oklch(0.74 0.08 345)' },
+  { id: 'ardoise', title: 'Ardoise', bg: 'oklch(0.89 0.04 235)', fg: 'oklch(0.4 0.07 240)', bd: 'oklch(0.73 0.06 235)' },
+  { id: 'encre', title: 'Encre', bg: 'oklch(0.89 0.012 60)', fg: 'oklch(0.32 0.012 60)', bd: 'oklch(0.72 0.015 60)' }
+];
+const TKEY = 'prio.tasks.v1';
+const YKEY = 'prio.types.v1';
+const LKEY = 'prio.lastType.v1';
+const CKEY = 'prio.convos.v1';
+const SEED = [
+  { type: 'bug', text: "Paiement refusé sur mobile Safari\nL'erreur remonte de la lib 3DS, seulement en iOS 17.\nÀ reproduire avec le compte de test." },
+  { type: 'review', text: "Relire la PR #482 — refonte du cache produit" },
+  { type: 'story', text: "Onboarding : sauvegarder la progression\nL'utilisateur doit pouvoir quitter à l'étape 3 et reprendre plus tard." },
+  { type: 'merge', text: "Merger release/2.7 dans main après le feu vert QA" },
+  { type: 'divers', text: "Préparer les notes du point équipe de vendredi" }
+];
+
+class Component extends DCLogic {
+  state = {
+    tasks: [],
+    convos: [],
+    customTypes: [],
+    catFormOpen: false,
+    catName: '',
+    catPalette: 'terracotta',
+    editingId: null,
+    hidden: [],
+    showDone: false,
+    search: '',
+    composerOpen: false,
+    composerText: '',
+    composerType: 'story',
+    insertAt: 'top',
+    hoverGap: null,
+    hoverCard: null,
+    dragId: null,
+    overId: null,
+    overBefore: null,
+    termTaskId: null,
+    termConvId: null,
+    draft: '',
+    sending: false,
+    autosorting: false,
+    toast: ''
+  };
+
+  componentDidMount() {
+    try {
+      const t = JSON.parse(localStorage.getItem(TKEY) || 'null');
+      const c = JSON.parse(localStorage.getItem(CKEY) || 'null');
+      const y = JSON.parse(localStorage.getItem(YKEY) || 'null');
+      if (Array.isArray(t) && t.length) this.setState({ tasks: t });
+      if (Array.isArray(c)) this.setState({ convos: c });
+      const UPGRADE = {
+        'var(--color-accent-100)': 0, 'var(--color-accent-600)': 0, 'var(--color-accent-700)': 0,
+        'var(--color-accent-2-100)': 1, 'var(--color-accent-2-700)': 1,
+        'oklch(0.79 0.14 82)': 2, 'oklch(0.44 0.11 348)': 3,
+        'transparent': 4, 'oklch(0.5 0.07 232)': 4,
+        'var(--color-neutral-200)': 5, 'var(--color-neutral-900)': 5
+      };
+      let types = (Array.isArray(y) ? y : []).map(ct => {
+        const p = PALETTES[UPGRADE[ct.bg]];
+        return p ? Object.assign({}, ct, { bg: p.bg, fg: p.fg, bd: p.bd }) : ct;
+      });
+      (Array.isArray(t) ? t : []).forEach(task => {
+        if (!task.type || types.some(x => x.id === task.type)) return;
+        const leg = LEGACY[task.type];
+        const p = PALETTES[leg ? leg.p : 4];
+        types.push({ id: task.type, label: leg ? leg.label : task.type, bg: p.bg, fg: p.fg, bd: p.bd, custom: true });
+      });
+      this.setState({ customTypes: types });
+      const last = localStorage.getItem(LKEY);
+      const known = types;
+      if (last && known.some(x => x.id === last)) this.setState({ composerType: last });
+      else this.setState({ composerType: known.length ? known[known.length - 1].id : null });
+    } catch (e) {}
+    this._keys = (e) => {
+      if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+      const id = this.state.editingId; if (!id) return;
+      e.preventDefault();
+      this.move(id, e.key === 'ArrowUp' ? -1 : 1);
+    };
+    window.addEventListener('keydown', this._keys);
+  }
+  componentWillUnmount() { window.removeEventListener('keydown', this._keys); }
+
+  taRef = React.createRef();
+  catRef = React.createRef();
+  componentDidUpdate() {
+    const open = this.state.composerOpen;
+    const target = this.state.catFormOpen ? this.catRef.current : this.taRef.current;
+    if (open && target && this._focused !== (this.state.catFormOpen ? 'cat' : 'text')) {
+      target.focus();
+      this._focused = this.state.catFormOpen ? 'cat' : 'text';
+    }
+    if (!open) this._focused = null;
+  }
+
+  persist(patch) {
+    this.setState(patch, () => {
+      try {
+        localStorage.setItem(TKEY, JSON.stringify(this.state.tasks));
+        localStorage.setItem(CKEY, JSON.stringify(this.state.convos));
+        localStorage.setItem(YKEY, JSON.stringify(this.state.customTypes));
+        if (this.state.composerType) localStorage.setItem(LKEY, this.state.composerType);
+      } catch (e) {}
+    });
+  }
+  allTypes() { return TYPES.concat(this.state.customTypes); }
+  flash(msg) {
+    this.setState({ toast: msg });
+    clearTimeout(this._toast);
+    this._toast = setTimeout(() => this.setState({ toast: '' }), 3400);
+  }
+  typeOf(id) { return this.allTypes().find(t => t.id === id) || NOTYPE; }
+  addCat = () => {
+    const name = this.state.catName.trim();
+    if (!name) return;
+    const p = PALETTES.find(x => x.id === this.state.catPalette) || PALETTES[0];
+    const t = { id: 'k' + Date.now(), label: name, bg: p.bg, fg: p.fg, bd: p.bd, custom: true };
+    this.persist({ customTypes: this.state.customTypes.concat([t]), catFormOpen: false, catName: '', composerType: t.id, composerOpen: true });
+  };
+  removeCat(id) {
+    if (this.state.tasks.some(t => t.type === id)) {
+      this.flash('Cette catégorie est utilisée par des tâches.');
+      return;
+    }
+    const rest = this.state.customTypes.filter(t => t.id !== id);
+    this.persist({
+      customTypes: rest,
+      composerType: this.state.composerType === id ? (rest.length ? rest[rest.length - 1].id : null) : this.state.composerType
+    });
+  }
+  move(id, delta) {
+    const list = this.state.tasks.slice();
+    const i = list.findIndex(t => t.id === id);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    list.splice(j, 0, list.splice(i, 1)[0]);
+    this.persist({ tasks: list });
+  }
+  dropNow() {
+    const { dragId, overId, overBefore } = this.state;
+    if (!dragId || !overId || dragId === overId) { this.setState({ dragId: null, overId: null }); return; }
+    const list = this.state.tasks.slice();
+    const from = list.findIndex(t => t.id === dragId);
+    if (from < 0) return;
+    const moved = list.splice(from, 1)[0];
+    let to = list.findIndex(t => t.id === overId);
+    if (to < 0) to = list.length; else if (!overBefore) to += 1;
+    list.splice(to, 0, moved);
+    this.persist({ tasks: list, dragId: null, overId: null, overBefore: null });
+  }
+
+  age(ts) {
+    const h = Math.round((Date.now() - ts) / 3600000);
+    if (h < 1) return "à l'instant";
+    if (h < 24) return 'il y a ' + h + ' h';
+    const d = Math.round(h / 24);
+    return 'il y a ' + d + (d > 1 ? ' jours' : ' jour');
+  }
+
+  async askAgent(convId, prompt) {
+    const conv = this.state.convos.find(c => c.id === convId);
+    const task = this.state.tasks.find(t => t.id === conv.taskId);
+    const history = conv.messages.map(m => ({ role: m.role, content: m.content }));
+    const model = (this.props.agentModel || 'Rapide (Haiku)').indexOf('Sonnet') >= 0 ? 'claude-sonnet-4-5' : 'claude-haiku-4-5';
+    const system = "Tu es un agent de développement en binôme, dans un terminal. Réponds en français, concis, orienté action. "
+      + "Structure tes réponses en lignes courtes, sans markdown lourd. "
+      + "Tâche courante — type: " + this.typeOf(task ? task.type : 'divers').label + "\n" + (task ? task.text : '');
+    try {
+      const text = await window.claude.complete({ messages: history.concat([{ role: 'user', content: prompt }]), system, model, max_tokens: 900 });
+      return text;
+    } catch (e) {
+      return "⚠ L'agent est injoignable pour le moment. (" + (e && e.message ? e.message : 'erreur') + ')';
+    }
+  }
+
+  send = async () => {
+    const prompt = this.state.draft.trim();
+    const convId = this.state.termConvId;
+    if (!prompt || !convId || this.state.sending) return;
+    const withUser = this.state.convos.map(c => c.id === convId
+      ? Object.assign({}, c, { messages: c.messages.concat([{ role: 'user', content: prompt }]), title: c.messages.length ? c.title : prompt.split('\n')[0].slice(0, 46), updated: Date.now() })
+      : c);
+    this.setState({ convos: withUser, draft: '', sending: true });
+    const reply = await this.askAgent(convId, prompt);
+    this.persist({
+      sending: false,
+      convos: this.state.convos.map(c => c.id === convId
+        ? Object.assign({}, c, { messages: c.messages.concat([{ role: 'assistant', content: reply }]), updated: Date.now() })
+        : c)
+    });
+  };
+
+  openTerm(taskId) {
+    const convs = this.state.convos.filter(c => c.taskId === taskId);
+    this.setState({ termTaskId: taskId, termConvId: convs.length === 1 ? convs[0].id : null });
+  }
+  newConv = () => {
+    const c = { id: 'c' + Date.now(), taskId: this.state.termTaskId, title: 'Nouvelle session', messages: [], updated: Date.now() };
+    this.persist({ convos: this.state.convos.concat([c]), termConvId: c.id });
+  };
+
+  renderVals() {
+    const s = this.state;
+    const topCount = this.props.topCount == null ? 3 : this.props.topCount;
+    const showBands = this.props.showBands !== false;
+    const compact = this.props.compact === true;
+    const pad = compact ? '13px 16px' : '18px 20px';
+    const q = s.search.trim().toLowerCase();
+
+    const visible = s.tasks.filter(t =>
+      (s.hidden.indexOf(t.type) < 0) &&
+      (!q || t.text.toLowerCase().indexOf(q) >= 0)
+    ).slice().sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0));
+
+    let seen = {};
+    let r = 0;
+    const tasks = visible.map((t, i) => {
+      const ty = this.typeOf(t.type);
+      if (!t.done) r++;
+      const band = t.done ? 'Terminées' : (r <= topCount ? 'Maintenant' : (r <= topCount * 2 ? 'Ensuite' : 'Plus tard'));
+      const showBand = showBands && !seen[band] && (seen[band] = true) === true;
+      const convs = s.convos.filter(c => c.taskId === t.id);
+      const dragging = s.dragId === t.id;
+      const isTop = r <= topCount && !t.done;
+      const showDrop = !!s.dragId && s.dragId !== t.id && s.overId === t.id;
+      const gapValue = i === 0 ? 'top' : visible[i - 1].id;
+      return {
+        id: t.id,
+        showGap: s.hoverGap === t.id && !s.dragId,
+        onGapEnter: () => this.setState({ hoverGap: t.id }),
+        onGapLeave: () => { if (this.state.hoverGap === t.id) this.setState({ hoverGap: null }); },
+        addHere: () => { if (this.state.dragId) return; this.setState({ composerOpen: true, insertAt: gapValue, hoverGap: null, catFormOpen: this.allTypes().length === 0, termTaskId: null, termConvId: null }); },
+        onGapDragOver: (e) => {
+          e.preventDefault();
+          if (!this.state.dragId || this.state.dragId === t.id) return;
+          if (this.state.overId !== t.id || this.state.overBefore !== true) this.setState({ overId: t.id, overBefore: true });
+        },
+        dropBefore: showDrop && s.overBefore === true,
+        dropAfter: showDrop && s.overBefore === false,
+        rank: t.done ? '✓' : String(r),
+        text: t.text,
+        rows: Math.min(12, Math.max(2, t.text.split('\n').length + 1)),
+        typeLabel: ty.label,
+        typeStyle: 'display:inline-block;padding:3px 12px;border-radius:999px;border:2px solid ' + ty.bd + ';background:' + ty.bg + ';color:' + ty.fg + ';font-size:12px;font-weight:600;letter-spacing:0.03em;',
+        rankStyle: 'display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:999px;font-family:var(--font-heading);font-size:14px;'
+          + (isTop ? 'background:var(--color-accent-500);color:#fff;' : 'background:var(--color-neutral-200);color:var(--color-neutral-700);'),
+        onCardEnter: () => this.setState({ hoverCard: t.id }),
+        onCardLeave: () => { if (this.state.hoverCard === t.id) this.setState({ hoverCard: null }); },
+        actionsStyle: 'display:flex;gap:6px;align-items:center;transition:opacity .15s ease;opacity:'
+          + (s.hoverCard === t.id || s.editingId === t.id ? '1' : '0') + ';pointer-events:'
+          + (s.hoverCard === t.id || s.editingId === t.id ? 'auto' : 'none') + ';',
+        isDoing: !!t.doing && !t.done,
+        doingBtnStyle: 'display:flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:999px;cursor:pointer;border-width:2px;border-style:solid;border-color:'
+          + (t.doing ? 'var(--color-accent-2-700)' : 'var(--color-neutral-300)') + ';background:'
+          + (t.doing ? 'var(--color-accent-2-700)' : 'transparent') + ';color:' + (t.doing ? 'var(--color-bg)' : 'var(--color-accent-2-800)') + ';',
+        toggleDoing: () => this.persist({ tasks: s.tasks.map(x => x.id === t.id ? Object.assign({}, x, { doing: !x.doing, done: false }) : x) }),
+        cardStyle: 'padding:' + pad + ';border-radius:var(--radius-lg);background:var(--color-surface,#fffaf1);border-width:2px;border-style:solid;border-color:'
+          + (dragging ? 'var(--color-accent-500)' : (t.doing && !t.done ? 'var(--color-accent-2-600)' : 'var(--color-neutral-200)')) + ';box-shadow:'
+          + (dragging ? 'var(--shadow-lg)' : 'var(--shadow-sm)') + ';opacity:' + (dragging ? '0.55' : (t.done ? '0.62' : '1'))
+          + ';transition:box-shadow .15s ease,border-color .15s ease;cursor:grab;',
+        textStyle: 'white-space:pre-wrap;font-size:15.5px;line-height:1.55;cursor:text;text-wrap:pretty;'
+          + (t.done ? 'text-decoration:line-through;color:var(--color-neutral-600);' : ''),
+        termBtnStyle: 'display:flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:999px;cursor:pointer;border:2px solid '
+          + (convs.length ? 'var(--color-accent-2-500)' : 'var(--color-neutral-300)') + ';background:'
+          + (convs.length ? 'var(--color-accent-2-100)' : 'transparent') + ';color:var(--color-accent-2-800);transition:opacity .15s ease;opacity:'
+          + (convs.length || s.hoverCard === t.id || s.editingId === t.id ? '1' : '0') + ';pointer-events:'
+          + (convs.length || s.hoverCard === t.id || s.editingId === t.id ? 'auto' : 'none') + ';',
+        band, showBand,
+        bandHint: band === 'Maintenant' ? 'cette session' : (band === 'Ensuite' ? 'cette semaine' : 'quand ce sera calme'),
+        ageLabel: this.age(t.created),
+        hasConvos: convs.length > 0,
+        convLabel: convs.length + (convs.length > 1 ? ' conversations' : ' conversation'),
+        editing: s.editingId === t.id,
+        reading: s.editingId !== t.id,
+        draggable: s.editingId !== t.id,
+        onText: (e) => { const v = e.target.value; this.persist({ tasks: s.tasks.map(x => x.id === t.id ? Object.assign({}, x, { text: v }) : x) }); },
+        onEditKey: (e) => { if (e.key === 'Escape') this.setState({ editingId: null }); },
+        catChips: this.allTypes().map(ct => ({
+          label: ct.label,
+          style: 'padding:4px 12px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;border-width:2px;border-style:solid;border-color:'
+            + (ct.id === t.type ? ct.bd : 'var(--color-neutral-300)') + ';background:' + (ct.id === t.type ? ct.bg : 'transparent')
+            + ';color:' + (ct.id === t.type ? ct.fg : 'var(--color-neutral-600)') + ';',
+          pick: () => this.persist({ tasks: s.tasks.map(x => x.id === t.id ? Object.assign({}, x, { type: ct.id }) : x) })
+        })),
+        startEdit: () => this.setState({ editingId: t.id }),
+        stopEdit: () => this.setState({ editingId: null }),
+        toggleDone: () => this.persist({ tasks: s.tasks.map(x => x.id === t.id ? Object.assign({}, x, { done: !x.done }) : x) }),
+        remove: () => this.persist({ tasks: s.tasks.filter(x => x.id !== t.id), termTaskId: s.termTaskId === t.id ? null : s.termTaskId }),
+        openTerminal: () => this.openTerm(t.id),
+        onDragStart: (e) => { this.setState({ dragId: t.id, editingId: null, overId: null }); if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'; },
+        onDragOver: (e) => {
+          e.preventDefault();
+          if (!this.state.dragId || this.state.dragId === t.id) return;
+          const box = e.currentTarget.getBoundingClientRect();
+          const before = (e.clientY - box.top) < box.height / 2;
+          if (this.state.overId !== t.id || this.state.overBefore !== before) this.setState({ overId: t.id, overBefore: before });
+        },
+        onDrop: (e) => { e.preventDefault(); this.dropNow(); },
+        onDragEnd: () => this.setState({ dragId: null, overId: null, overBefore: null })
+      };
+    });
+
+    const termTask = s.tasks.find(t => t.id === s.termTaskId);
+    const taskConvos = s.convos.filter(c => c.taskId === s.termTaskId)
+      .sort((a, b) => b.updated - a.updated)
+      .map(c => ({
+        title: c.title,
+        meta: c.messages.length + ' messages · ' + new Date(c.updated).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }),
+        open: () => this.setState({ termConvId: c.id }),
+        remove: () => this.persist({ convos: s.convos.filter(x => x.id !== c.id), termConvId: s.termConvId === c.id ? null : s.termConvId })
+      }));
+    const activeConv = s.convos.find(c => c.id === s.termConvId);
+
+    return {
+      padStyle: 'display:flex;flex-direction:column;flex:1;min-height:0;transition:padding-right .2s ease;padding-right:'
+        + (s.termTaskId ? 'calc(min(46vw, 520px) + 24px)' : '0px') + ';',
+      tasks,
+      isEmpty: tasks.length === 0,
+      notEmpty: tasks.length > 0,
+      tailShow: s.hoverGap === 'tail' && !s.dragId,
+      onTailEnter: () => this.setState({ hoverGap: 'tail' }),
+      onTailLeave: () => { if (this.state.hoverGap === 'tail') this.setState({ hoverGap: null }); },
+      addTail: () => { if (s.dragId) return; this.setState({ composerOpen: true, insertAt: 'bottom', hoverGap: null, catFormOpen: this.allTypes().length === 0, termTaskId: null, termConvId: null }); },
+      onTailDragOver: (e) => {
+        e.preventDefault();
+        const last = visible[visible.length - 1];
+        if (!this.state.dragId || !last || this.state.dragId === last.id) return;
+        if (this.state.overId !== last.id || this.state.overBefore !== false) this.setState({ overId: last.id, overBefore: false });
+      },
+      onTailDrop: (e) => { e.preventDefault(); this.dropNow(); },
+      search: s.search,
+      onSearch: (e) => this.setState({ search: e.target.value }),
+
+
+      filterChips: this.allTypes().filter(ty => s.tasks.some(t => t.type === ty.id)).map(ty => {
+        const off = s.hidden.indexOf(ty.id) >= 0;
+        return {
+          label: ty.label,
+          title: ty.custom ? 'Clic droit pour supprimer la catégorie' : 'Filtrer',
+          remove: (e) => { if (!ty.custom) return; e.preventDefault(); this.removeCat(ty.id); },
+          style: 'padding:6px 15px;border-radius:999px;font-size:13px;cursor:pointer;font-weight:600;border:2px solid '
+            + (off ? 'var(--color-neutral-300)' : ty.bd) + ';background:' + (off ? 'transparent' : ty.bg)
+            + ';color:' + (off ? 'var(--color-neutral-500)' : ty.fg) + ';',
+          toggle: () => this.setState({ hidden: off ? s.hidden.filter(x => x !== ty.id) : s.hidden.concat([ty.id]) })
+        };
+      }),
+
+      catFormOpen: s.catFormOpen,
+      catName: s.catName,
+      openCatForm: () => this.setState({ catFormOpen: true }),
+      closeCatForm: () => this.setState({ catFormOpen: false, catName: '' }),
+      onCatName: (e) => this.setState({ catName: e.target.value }),
+      onCatKey: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.addCat(); } },
+      addCat: this.addCat,
+      catPalettes: PALETTES.map(p => ({
+        title: p.title,
+        style: 'width:30px;height:30px;border-radius:999px;cursor:pointer;background:' + (p.bg === 'transparent' ? 'var(--color-bg)' : p.bg)
+          + ';border:' + (s.catPalette === p.id ? '3px' : '2px') + ' solid ' + p.bd
+          + ';box-shadow:' + (s.catPalette === p.id ? '0 0 0 3px var(--color-neutral-200)' : 'none') + ';',
+        pick: () => this.setState({ catPalette: p.id })
+      })),
+
+      composerOpen: s.composerOpen,
+      composerText: s.composerText,
+      stopClick: (e) => e.stopPropagation(),
+      taRef: this.taRef,
+      catRef: this.catRef,
+
+      closeComposer: () => this.setState({ composerOpen: false, composerText: '' }),
+      onComposerText: (e) => this.setState({ composerText: e.target.value }),
+      onComposerKey: (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); this.addFromComposer(); } },
+      composerHint: this.allTypes().length === 0
+        ? 'Créez d\u2019abord une catégorie.'
+        : (s.composerType ? '' : 'Choisissez une catégorie.'),
+      composerBlocked: !s.composerType,
+      composerTypes: this.allTypes().map(ty => {
+        const on = s.composerType === ty.id;
+        return {
+          label: ty.label,
+          title: ty.custom ? 'Clic droit pour supprimer la catégorie' : 'Catégorie',
+          remove: (e) => { if (!ty.custom) return; e.preventDefault(); this.removeCat(ty.id); },
+          style: 'padding:7px 16px;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer;border:2px solid '
+            + (on ? ty.bd : 'var(--color-neutral-300)') + ';background:' + (on ? ty.bg : 'transparent')
+            + ';color:' + (on ? ty.fg : 'var(--color-neutral-600)') + ';',
+          pick: () => this.persist({ composerType: ty.id })
+        };
+      }),
+      addTask: () => this.addFromComposer(),
+
+      terminalOpen: !!s.termTaskId,
+      terminalTaskTitle: termTask ? termTask.text.split('\n')[0].slice(0, 40) : '',
+      closeTerminal: () => this.persist({ termTaskId: null, termConvId: null, convos: s.convos.filter(c => c.messages.length > 0) }),
+      listOpen: !!s.termTaskId && !s.termConvId,
+      convOpen: !!s.termConvId,
+      backToList: () => this.persist({ termConvId: null, convos: s.convos.filter(c => c.messages.length > 0) }),
+      newConversation: this.newConv,
+      taskConversations: taskConvos,
+      noConvos: !!s.termTaskId && taskConvos.length === 0,
+      activeMessages: (activeConv ? activeConv.messages : []).map(m => ({
+        role: m.role === 'user' ? 'vous ›' : 'agent ›',
+        content: m.content,
+        roleStyle: 'font-size:11px;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:5px;color:'
+          + (m.role === 'user' ? 'var(--color-accent-300)' : 'var(--color-accent-2-300)') + ';',
+        bodyStyle: 'white-space:pre-wrap;color:' + (m.role === 'user' ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.8)') + ';'
+      })),
+      draft: s.draft,
+      onDraft: (e) => this.setState({ draft: e.target.value }),
+      onDraftKey: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.send(); } },
+      send: this.send,
+      sending: s.sending,
+      toast: s.toast
+    };
+  }
+
+  addFromComposer() {
+    const text = this.state.composerText.trim();
+    if (!text || !this.state.composerType) return;
+    const t = { id: 'n' + Date.now(), type: this.state.composerType, text, done: false, created: Date.now() };
+    const list = this.state.tasks.slice();
+    const at = this.state.insertAt || 'top';
+    let idx = 0;
+    if (at === 'bottom') idx = list.length;
+    else if (at !== 'top') { const j = list.findIndex(x => x.id === at); idx = j < 0 ? 0 : j + 1; }
+    list.splice(idx, 0, t);
+    this.persist({ tasks: list, composerOpen: false, composerText: '', catFormOpen: false });
+  }
+}
+</script>
+</body>
+</html>
