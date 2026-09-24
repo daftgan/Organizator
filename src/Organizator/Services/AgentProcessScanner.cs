@@ -28,7 +28,7 @@ public sealed class AgentProcessScanner : IDisposable
     private readonly HostLog _log;
     private readonly Dispatcher? _dispatcher;
     private readonly Timer _timer;
-    private HashSet<string> _alive = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, int> _alive = new(StringComparer.OrdinalIgnoreCase);
     private volatile bool _ready;
     private int _failures;
     private int _scanning;
@@ -57,13 +57,30 @@ public sealed class AgentProcessScanner : IDisposable
             return _ready ? false : null;
         }
 
-        return Volatile.Read(ref _alive).Contains(guid.ToString("D"));
+        return Volatile.Read(ref _alive).ContainsKey(guid.ToString("D"));
     }
 
-    /// <summary>Identifiants de session portes par les processus d'agent vivants. Peut lever si WMI est indisponible.</summary>
-    public static HashSet<string> ScanNow()
+    /// <summary>
+    /// Processus d'agent qui porte cette session, <c>null</c> tant qu'aucun balayage ne l'a vu.
+    /// Sert a retrouver la fenetre de console deja ouverte au lieu d'en ouvrir une seconde.
+    /// </summary>
+    public int? PidFor(string sessionId)
     {
-        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!_ready || !Guid.TryParse(sessionId, out var guid))
+        {
+            return null;
+        }
+
+        return Volatile.Read(ref _alive).TryGetValue(guid.ToString("D"), out var pid) && pid > 0 ? pid : null;
+    }
+
+    /// <summary>
+    /// Sessions portees par les processus d'agent vivants, chacune avec le processus qui la porte.
+    /// Peut lever si WMI est indisponible.
+    /// </summary>
+    public static Dictionary<string, int> ScanNow()
+    {
+        var found = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         using var searcher = new ManagementObjectSearcher(Query);
         using var results = searcher.Get();
         foreach (var item in results)
@@ -75,11 +92,12 @@ public sealed class AgentProcessScanner : IDisposable
                     continue;
                 }
 
+                var pid = item["ProcessId"] is { } value ? Convert.ToInt32(value) : 0;
                 foreach (Match match in SessionArg.Matches(commandLine))
                 {
                     if (Guid.TryParse(match.Groups[1].Value, out var guid))
                     {
-                        found.Add(guid.ToString("D"));
+                        found[guid.ToString("D")] = pid;
                     }
                 }
             }
@@ -99,7 +117,8 @@ public sealed class AgentProcessScanner : IDisposable
         {
             var found = ScanNow();
             var previous = Volatile.Read(ref _alive);
-            var changed = !_ready || !found.SetEquals(previous);
+            var changed = !_ready || found.Count != previous.Count
+                || found.Keys.Any(id => !previous.ContainsKey(id));
             Volatile.Write(ref _alive, found);
             _ready = true;
             _failures = 0;

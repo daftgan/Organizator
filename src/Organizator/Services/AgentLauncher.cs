@@ -33,6 +33,7 @@ public sealed class AgentLauncher
 
     private readonly DataStore _store;
     private readonly HostLog _log;
+    private readonly Lazy<string?> _claudePath;
     private readonly Lazy<string?> _claudeInvocation;
     private readonly Lazy<CommandLine?> _copilotCommand;
     private readonly Lazy<string?> _wtPath;
@@ -41,6 +42,7 @@ public sealed class AgentLauncher
     {
         _store = store;
         _log = log;
+        _claudePath = new Lazy<string?>(FindClaude);
         _claudeInvocation = new Lazy<string?>(FindClaudeInvocation);
         _copilotCommand = new Lazy<CommandLine?>(FindCopilotCommand);
         _wtPath = new Lazy<string?>(FindWindowsTerminal);
@@ -54,6 +56,14 @@ public sealed class AgentLauncher
 
     /// <summary>Ligne de commande de la CLI Copilot, pour la lancer directement (sonde ACP) ; <c>null</c> si introuvable.</summary>
     public CommandLine? CopilotCommand => _copilotCommand.Value;
+
+    /// <summary>Ligne de commande de Claude Code, pour la lancer directement (redaction assistee) ; <c>null</c> si introuvable.</summary>
+    public CommandLine? ClaudeCommand
+        => _claudePath.Value is null ? null : new CommandLine(_claudePath.Value, Array.Empty<string>());
+
+    /// <summary>Ligne de commande de l'agent demande, pour un lancement hors terminal.</summary>
+    public CommandLine? CommandFor(string provider)
+        => AgentProvider.Normalize(provider) == AgentProvider.Copilot ? CopilotCommand : ClaudeCommand;
 
     public bool Has(string provider)
         => AgentProvider.Normalize(provider) == AgentProvider.Copilot ? HasCopilot : HasClaude;
@@ -97,7 +107,8 @@ public sealed class AgentLauncher
         return new StartedSession(sessionId, directory, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     }
 
-    public void ResumeSession(string provider, string sessionId, string cwd, string title, string context, string prompt, string model, string effort, string terminal)
+    /// <returns>PID du <c>powershell.exe</c> ouvert, pour retrouver sa fenetre ; null sous <c>wt.exe</c>, qui ne fait que relayer.</returns>
+    public int? ResumeSession(string provider, string sessionId, string cwd, string title, string context, string prompt, string model, string effort, string terminal)
     {
         if (!Guid.TryParse(sessionId, out var parsed))
         {
@@ -108,8 +119,9 @@ public sealed class AgentLauncher
         var normalized = parsed.ToString("D");
         var directory = RequireDirectory(cwd);
         var script = WriteScript(provider, normalized, directory, title, context, prompt, model, effort, resume: true);
-        Launch(script, directory, terminal);
+        var processId = Launch(script, directory, terminal);
         _log.Info($"Session {provider} reprise : {normalized} dans {directory}{Describe(model, effort, prompt)}");
+        return processId;
     }
 
     private static string Describe(string? model, string? effort, string? prompt)
@@ -329,7 +341,8 @@ public sealed class AgentLauncher
 
     // ------------------------------------------------------------------ processus
 
-    private void Launch(string scriptPath, string cwd, string? terminal)
+    /// <returns>PID du <c>powershell.exe</c> lance ; null sous <c>wt.exe</c> ou si Windows ne l'a pas donne.</returns>
+    private int? Launch(string scriptPath, string cwd, string? terminal)
     {
         var useWt = string.Equals(terminal, "wt", StringComparison.OrdinalIgnoreCase) && HasWt;
 
@@ -342,7 +355,8 @@ public sealed class AgentLauncher
 
         try
         {
-            Process.Start(psi);
+            using var process = Process.Start(psi);
+            return useWt ? null : process?.Id;
         }
         catch (Exception ex)
         {
@@ -399,7 +413,7 @@ public sealed class AgentLauncher
 
     private string? FindClaudeInvocation()
     {
-        var path = FindClaude();
+        var path = _claudePath.Value;
         if (path is null)
         {
             return null;

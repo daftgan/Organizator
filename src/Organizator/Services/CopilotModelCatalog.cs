@@ -3,7 +3,6 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Microsoft.Data.Sqlite;
 
 namespace Organizator.Services;
 
@@ -509,71 +508,9 @@ public sealed class CopilotModelCatalog
 
     // ------------------------------------------------------------------- nettoyage
 
-    /// <summary>
-    /// Supprime la session vide creee par la sonde : son dossier (seulement s'il ne contient pas
-    /// d'<c>events.jsonl</c>) et sa ligne dans <c>session-store.db</c>, pour qu'elle n'apparaisse
-    /// pas dans le selecteur <c>copilot --resume</c>.
-    /// </summary>
+    /// <summary>Supprime la session vide creee par la sonde (dossier et ligne de <c>session-store.db</c>).</summary>
     private void CleanupProbeSession(string sessionId)
-    {
-        try
-        {
-            var dir = _sessions.GetSessionDir(sessionId);
-            if (Directory.Exists(dir))
-            {
-                if (File.Exists(Path.Combine(dir, "events.jsonl")))
-                {
-                    _log.Warn($"Session de sonde {sessionId} conservee : elle contient des evenements.");
-                }
-                else
-                {
-                    Directory.Delete(dir, recursive: true);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _log.Warn($"Suppression du dossier de la session de sonde {sessionId} impossible : {ex.Message}");
-        }
-
-        var db = Path.Combine(_sessions.CopilotRoot, "session-store.db");
-        if (!File.Exists(db))
-        {
-            return;
-        }
-
-        try
-        {
-            var deleted = DeleteSessionRow(db, sessionId);
-            _log.Info($"Session de sonde {sessionId} retiree de session-store.db ({deleted} ligne(s)).");
-        }
-        catch (Exception ex)
-        {
-            // Inclut l'absence de la bibliotheque SQLite : le dossier est deja supprime, seule la ligne reste.
-            _log.Warn($"Suppression de la session de sonde {sessionId} dans session-store.db impossible : {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// Isole dans sa propre methode : si Microsoft.Data.Sqlite ne se charge pas, seul cet appel
-    /// echoue, et le nettoyage du dossier (fait avant) reste acquis.
-    /// </summary>
-    private static int DeleteSessionRow(string db, string sessionId)
-    {
-        var builder = new SqliteConnectionStringBuilder
-        {
-            DataSource = db,
-            Mode = SqliteOpenMode.ReadWrite,
-            DefaultTimeout = 5,
-        };
-
-        using var connection = new SqliteConnection(builder.ConnectionString);
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM sessions WHERE id = $id";
-        command.Parameters.AddWithValue("$id", sessionId);
-        return command.ExecuteNonQuery();
-    }
+        => CopilotSessionCleanup.Remove(_sessions, sessionId, keepIfUsed: true, _log, "de sonde");
 
     private static string? GetString(JsonElement element, string property)
         => element.ValueKind == JsonValueKind.Object

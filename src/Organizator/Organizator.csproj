@@ -30,6 +30,8 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.15" />
     <!-- Ligne de commande des processus claude/copilot vivants (WMI Win32_Process), pour l'etat des sessions. -->
     <PackageReference Include="System.Management" Version="8.0.0" />
+    <!-- Rendu HTML des rapports Markdown produits par les agents, lus dans la fenetre (ArtifactReader). -->
+    <PackageReference Include="Markdig" Version="1.3.2" />
   </ItemGroup>
 
   <!-- Les fichiers de wwwroot/ sont embarques avec un LogicalName qui conserve

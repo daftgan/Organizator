@@ -24,6 +24,7 @@ public partial class MainWindow : Window
     private SessionsWatcher? _claudeWatcher;
     private SessionsWatcher? _copilotWatcher;
     private AgentProcessScanner? _scanner;
+    private PerfMonitor? _perf;
     private bool _closingHandled;
 
     public MainWindow(
@@ -166,6 +167,7 @@ public partial class MainWindow : Window
 
             core.NewWindowRequested += OnNewWindowRequested;
             core.NavigationStarting += OnNavigationStarting;
+            core.FrameNavigationStarting += OnFrameNavigationStarting;
             core.ProcessFailed += OnProcessFailed;
 
             core.SetVirtualHostNameToFolderMapping(
@@ -174,7 +176,8 @@ public partial class MainWindow : Window
                 CoreWebView2HostResourceAccessKind.Allow);
 
             _scanner = new AgentProcessScanner(_log, Dispatcher);
-            _bridge = new BridgeHost(core, this, _log, _store, _sessions, _copilot, _launcher, _scanner);
+            _perf = new PerfMonitor(_log, Dispatcher);
+            _bridge = new BridgeHost(core, this, _log, _store, _sessions, _copilot, _launcher, _scanner, _perf);
 
             _claudeWatcher = new SessionsWatcher(_sessions.ProjectsRoot, "*.jsonl", "Claude Code", Dispatcher, _log);
             _claudeWatcher.Changed += (_, _) => _bridge?.PostEvent("sessionsChanged");
@@ -223,6 +226,26 @@ public partial class MainWindow : Window
             e.Cancel = true;
             OpenExternally(e.Uri);
         }
+    }
+
+    /// <summary>
+    /// Les cadres du lecteur d'artefacts affichent un rapport (page HTML, PDF) servi par l'hote
+    /// virtuel des rapports ; un lien externe qui y serait clique ne doit pas charger un site dans
+    /// le cadre, mais s'ouvrir dans le navigateur. Les autres schemas (about:srcdoc du cadre isole,
+    /// extension du lecteur PDF...) sont laisses tranquilles.
+    /// </summary>
+    private void OnFrameNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
+    {
+        if (!Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri)
+            || uri.Scheme is not ("http" or "https")
+            || string.Equals(uri.Host, VirtualHost, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(uri.Host, ArtifactReader.Host, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        OpenExternally(e.Uri);
     }
 
     private void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
@@ -281,6 +304,8 @@ public partial class MainWindow : Window
         _copilotWatcher = null;
         _scanner?.Dispose();
         _scanner = null;
+        _perf?.Dispose();
+        _perf = null;
 
         Close();
     }

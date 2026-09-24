@@ -126,6 +126,12 @@ internal static class UsageJson
             : 0;
 }
 
+/// <summary>Jeton OAuth de Claude Code, tel que <c>~/.claude/.credentials.json</c> le porte.</summary>
+/// <param name="AccessToken">Jeton a passer en <c>Bearer</c>, jamais journalise.</param>
+/// <param name="ExpiresAt">Peremption en ms Unix, 0 si inconnue.</param>
+/// <param name="Plan">Abonnement lisible (« Max 5× »), sinon null.</param>
+public sealed record ClaudeCredentials(string AccessToken, long ExpiresAt, string? Plan);
+
 /// <summary>
 /// Quota de l'abonnement Claude (session de 5 h, semaine, limites par modele) via l'API OAuth
 /// que Claude Code interroge pour <c>/usage</c>, avec le jeton de <c>~/.claude/.credentials.json</c>.
@@ -134,7 +140,8 @@ internal static class UsageJson
 public sealed class ClaudeUsageReader
 {
     public const string Endpoint = "https://api.anthropic.com/api/oauth/usage";
-    private const string BetaHeader = "oauth-2025-04-20";
+    /// <summary>En-tete beta qui accompagne le jeton OAuth de Claude Code, pour <c>/usage</c> comme pour <c>/v1/models</c>.</summary>
+    public const string OAuthBeta = "oauth-2025-04-20";
 
     private readonly string _credentialsPath;
 
@@ -146,7 +153,7 @@ public sealed class ClaudeUsageReader
 
     public async Task<UsageReport> FetchAsync(HttpClient http, CancellationToken ct)
     {
-        Credentials? credentials;
+        ClaudeCredentials? credentials;
         try
         {
             credentials = ReadCredentials();
@@ -168,7 +175,7 @@ public sealed class ClaudeUsageReader
 
         using var request = new HttpRequestMessage(HttpMethod.Get, Endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credentials.AccessToken);
-        request.Headers.TryAddWithoutValidation("anthropic-beta", BetaHeader);
+        request.Headers.TryAddWithoutValidation("anthropic-beta", OAuthBeta);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
@@ -272,9 +279,8 @@ public sealed class ClaudeUsageReader
         return multiplier.Success ? name + " " + multiplier.Groups[1].Value + "×" : name;
     }
 
-    private sealed record Credentials(string AccessToken, long ExpiresAt, string? Plan);
-
-    private Credentials? ReadCredentials()
+    /// <summary>Jeton OAuth de <c>~/.claude/.credentials.json</c> ; null si le fichier ou le jeton manque. Peut lever IOException / JsonException.</summary>
+    public ClaudeCredentials? ReadCredentials()
     {
         if (!File.Exists(_credentialsPath))
         {
@@ -293,7 +299,7 @@ public sealed class ClaudeUsageReader
             ? ms
             : 0;
 
-        return new Credentials(token, expiresAt, DescribePlan(UsageJson.GetString(oauth, "subscriptionType"), UsageJson.GetString(oauth, "rateLimitTier")));
+        return new ClaudeCredentials(token, expiresAt, DescribePlan(UsageJson.GetString(oauth, "subscriptionType"), UsageJson.GetString(oauth, "rateLimitTier")));
     }
 }
 

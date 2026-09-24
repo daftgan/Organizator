@@ -14,10 +14,18 @@ textarea, input, button { font-family: inherit; }
 
 @keyframes blink { 50% { opacity: 0.25; } }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-/* Réponse prête : une onde discrète autour de la pastille, plutôt qu'un clignotement. */
+/* Réponse prête : une onde discrète autour de la pastille, plutôt qu'un clignotement. L'onde est
+   un disque posé derrière la pastille (.btn-dot::before), qui grandit en s'effaçant : `transform`
+   et `opacity` s'animent sur le compositeur, sans repeindre la page. Animer `box-shadow` la
+   repeignait à chaque image, pour chaque carte « réponse prête », tant que la fenêtre était ouverte. */
 @keyframes halo {
-  from { box-shadow: 0 0 0 0 rgba(43, 122, 75, 0.45); }
-  to { box-shadow: 0 0 0 7px rgba(43, 122, 75, 0); }
+  from { transform: scale(1); opacity: 1; }
+  to { transform: scale(2.15); opacity: 0; }
+}
+/* Question de l'agent : la même onde, en bleu. */
+@keyframes halo-ask {
+  from { transform: scale(1); opacity: 1; }
+  to { transform: scale(1.95); opacity: 0; }
 }
 
 /* Le fond des champs garde la teinte d'origine du DS (voir organic.css). */
@@ -38,8 +46,12 @@ textarea, input, button { font-family: inherit; }
 .app-header h1 { font-family: var(--font-heading); font-size: clamp(32px, 4.2vw, 48px); line-height: 1.02; margin: 0; }
 
 .filters { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 0 clamp(20px, 4vw, 56px) 20px; }
-.filter-chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .filter-right { flex: 1; min-width: 180px; display: flex; justify-content: flex-end; gap: 10px; align-items: center; }
+/* Les pastilles de catégorie n'occupent plus la barre en permanence : le bouton entonnoir les
+   déplie sous elle, sur toute la largeur. */
+.filter-chips { flex-basis: 100%; display: flex; gap: 8px; flex-wrap: wrap; }
+/* Un `display` en dur l'emporterait sur l'attribut `hidden` : le rendre explicite. */
+.filter-chips[hidden], .icon-btn[hidden] { display: none; }
 .search { max-width: 260px; }
 
 .list-wrap { flex: 1; display: flex; align-items: stretch; gap: 0; padding: 0 clamp(20px, 4vw, 56px) 60px; }
@@ -107,7 +119,32 @@ textarea, input, button { font-family: inherit; }
 .compact .task { padding: 13px 16px; }
 .task.is-doing { border-color: var(--color-accent-2-600); }
 .task.is-done { opacity: 0.62; }
+/* Une question attend une réponse : la carte se cerne de bleu, repérable dans la file sans
+   survoler la carte ni ouvrir le panneau. */
+.task.is-asking { border-color: #2f6fb5; box-shadow: 0 0 0 3px rgba(47, 111, 181, 0.16), var(--shadow-sm); }
 .task.is-dragging { border-color: var(--color-accent-500); box-shadow: var(--shadow-lg); opacity: 0.55; }
+
+/* ── Sous-tâches ────────────────────────────────────────────────────────
+   Une sous-tâche se range sous son parent, en retrait, le long d'un filet : elle suit le parent
+   quand il bouge, et son numéro (3.1) dit d'où elle vient. */
+.item.is-sub { margin-left: 44px; position: relative; }
+.item.is-sub::before {
+  content: ''; position: absolute; left: -24px; top: -6px; bottom: -6px; width: 2px;
+  background: var(--color-neutral-200); border-radius: 999px;
+}
+.task.is-sub { padding: 14px 18px; }
+.compact .task.is-sub { padding: 11px 14px; }
+.rank.is-sub { width: auto; min-width: 30px; padding: 0 8px; font-size: 12px; }
+.sub-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px;
+  background: var(--color-neutral-200); color: var(--color-neutral-700); font-size: 12px; font-weight: 600;
+}
+.sub-chip.all { background: var(--color-accent-2-100); color: var(--color-accent-2-700); }
+.composer-parent {
+  display: flex; align-items: center; gap: 7px; margin: -8px 0 14px;
+  font-size: 13px; color: var(--color-neutral-600);
+}
+.composer-parent svg { flex: none; color: var(--color-accent-600); }
 
 .task-row { display: flex; align-items: flex-start; gap: 14px; }
 .rank-col { display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 2px; }
@@ -126,6 +163,18 @@ textarea, input, button { font-family: inherit; }
   display: inline-block; padding: 3px 12px; border-radius: 999px;
   border: 2px solid transparent; font-size: 12px; font-weight: 600; letter-spacing: 0.03em;
 }
+.jira-chip, .pr-chip {
+  display: inline-flex; align-items: center; gap: 3px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--color-neutral-300); color: var(--color-neutral-700); background: transparent;
+  font-size: 12px; font-weight: 600; letter-spacing: 0.03em; text-decoration: none; cursor: pointer;
+}
+.jira-chip:hover, .pr-chip:hover { border-color: var(--color-neutral-500); color: var(--color-neutral-900); }
+.jira-chip-arrow { font-size: 11px; opacity: 0.7; }
+.pr-chip { gap: 4px; max-width: 100%; }
+.pr-chip svg { flex: none; opacity: 0.75; }
+/* Un nom de dépôt trop long est tronqué, jamais le numéro de la PR. */
+.pr-chip-repo { min-width: 0; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-chip-more { font-size: 12px; font-weight: 600; color: var(--color-neutral-600); cursor: default; }
 .doing-chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 3px 12px; border-radius: 999px;
   background: var(--color-accent-2-700); color: var(--color-bg); font-size: 12px; font-weight: 600;
@@ -164,11 +213,30 @@ textarea, input, button { font-family: inherit; }
 /* État des conversations de la tâche, lu directement sur l'icône : couleur du bouton et
    pastille en coin (.btn-dot). La carte n'affiche plus de chip texte. */
 .term-btn.is-working { border-color: #d98b1f; background: rgba(240, 179, 91, 0.18); }
-.term-btn.is-waiting { border-color: #6a48c9; background: rgba(196, 166, 255, 0.22); }
+.term-btn.is-waiting { border-color: #2f6fb5; background: rgba(47, 111, 181, 0.16); }
+.term-btn.is-waiting:hover { background: rgba(47, 111, 181, 0.28); }
 .term-btn.is-ready { border-color: #2b7a4b; background: rgba(126, 212, 159, 0.24); }
 .term-btn.is-error { border-color: #b23a2e; background: rgba(255, 143, 126, 0.22); }
 .term-btn.is-ready:hover { background: rgba(126, 212, 159, 0.36); }
-.term-btn.is-ready .btn-dot { animation: halo 2s ease-out infinite; }
+.term-btn.is-ready .btn-dot::before {
+  content: ''; position: absolute; inset: -2px; border-radius: 999px; z-index: -1;
+  background: rgba(43, 122, 75, 0.45); animation: halo 2s ease-out infinite;
+}
+.artifact-btn { position: relative; border-color: var(--color-accent-500); background: rgba(198, 113, 57, 0.12); }
+.artifact-btn:hover { background: rgba(198, 113, 57, 0.22); }
+.artifact-count {
+  position: absolute; right: -6px; top: -6px; min-width: 17px; height: 17px; padding: 0 4px;
+  box-sizing: border-box; border-radius: 999px; background: var(--color-accent-500); color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 17px; text-align: center;
+}
+/* Combien d'agents travaillent pour la tâche : le terminal qui traite un prompt compte pour un,
+   chaque agent qu'il a lancé pour un de plus. Se lit comme le badge des rapports, dans la teinte
+   du travail en cours. */
+.term-count {
+  position: absolute; right: -6px; top: -6px; min-width: 17px; height: 17px; padding: 0 4px;
+  box-sizing: border-box; border-radius: 999px; background: #d98b1f; color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 17px; text-align: center; pointer-events: none;
+}
 
 /* ── État vide ──────────────────────────────────────────────────────────── */
 .empty {
@@ -214,6 +282,264 @@ textarea, input, button { font-family: inherit; }
 .dialog-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
 .dialog-hint { flex: 1; font-size: 13px; color: var(--color-accent-700); align-self: center; }
 
+/* ── PRs Bitbucket (Nouvelle tâche) ─────────────────────────────────────── */
+/* L'aperçu prend la place de la zone de texte : une ligne cochable par ticket, ses PRs dessous.
+   Un ticket déjà en file n'est pas doublé : sa ligne est grisée, ou marquée « +n PR ». */
+.pr-import { margin-top: 4px; }
+.pr-import-lead { font-size: 12.5px; color: var(--color-neutral-600); margin-bottom: 10px; }
+.pr-import-error {
+  font-size: 13px; line-height: 1.5; color: #b23a2e; padding: 10px 12px; border-radius: var(--radius-md);
+  border: 1px dashed #b23a2e; background: rgba(178, 58, 46, 0.08);
+}
+.pr-import-empty { font-size: 13px; color: var(--color-neutral-700); padding: 10px 2px; }
+.pr-groups { display: flex; flex-direction: column; gap: 8px; max-height: min(46vh, 520px); overflow-y: auto; padding-right: 2px; }
+.pr-group {
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--radius-md);
+  border: 2px solid var(--color-neutral-200); background: var(--color-neutral-100); cursor: pointer;
+}
+.pr-group.on { border-color: var(--color-accent-500); background: rgba(198, 113, 57, 0.06); }
+.pr-group.is-same { opacity: 0.55; cursor: default; }
+.pr-check { width: 16px; height: 16px; margin: 2px 0 0; flex: none; accent-color: var(--color-accent-500); cursor: pointer; }
+.pr-group.is-same .pr-check { cursor: default; }
+.pr-group-main { flex: 1; min-width: 0; }
+.pr-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.pr-key { font-weight: 700; color: var(--color-accent-700); white-space: nowrap; }
+.pr-title { font-size: 13.5px; font-weight: 600; }
+.pr-badge {
+  font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--color-neutral-300); color: var(--color-neutral-600); white-space: nowrap;
+}
+.pr-badge-more { border-color: var(--color-accent-500); color: var(--color-accent-700); }
+.pr-lines { display: flex; flex-direction: column; gap: 3px; margin-top: 5px; }
+/* Une PR sur deux lignes : dépôt et numéro avec l'auteur et la date, puis la branche seule,
+   en chasse fixe — coupée à droite si elle déborde, mais jamais écrasée par le reste. */
+.pr-line {
+  display: grid; grid-template-columns: auto 1fr; column-gap: 10px; row-gap: 1px; align-items: baseline;
+  font-size: 12px; color: var(--color-neutral-600); min-width: 0; margin-top: 3px;
+}
+.pr-line.is-known { opacity: 0.55; }
+.pr-link {
+  grid-area: 1 / 1; justify-self: start;
+  border: none; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--color-accent-700);
+  cursor: pointer; white-space: nowrap; text-decoration: underline; text-decoration-color: transparent;
+}
+.pr-link:hover { text-decoration-color: currentColor; }
+.pr-meta { grid-area: 1 / 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-branch {
+  grid-area: 2 / 1 / 3 / 3; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono); font-size: 11.5px;
+}
+/* Adresse dans le texte d'une tâche : cliquable, sans ouvrir l'édition. */
+.task-link { color: var(--color-accent-700); text-decoration: underline; text-decoration-color: rgba(198, 113, 57, 0.4); cursor: pointer; word-break: break-all; }
+.task-link:hover { text-decoration-color: currentColor; }
+
+/* ── Catégories et mots-clés (dialogue) ─────────────────────────────────── */
+.dialog-wide { width: min(760px, 100%); }
+.dialog-lead { font-size: 13px; color: var(--color-neutral-600); line-height: 1.5; margin: -10px 0 16px; }
+.cat-empty { font-size: 13px; color: var(--color-neutral-600); padding: 4px 0 10px; }
+.cat-rows { display: flex; flex-direction: column; gap: 10px; max-height: 54vh; overflow-y: auto; }
+.cat-row { border: 2px solid var(--color-neutral-200); border-radius: var(--radius-md); padding: 12px 14px; }
+.cat-row-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cat-row-name { flex: 1; min-width: 150px; font-weight: 600; }
+.cat-row-count { font-size: 12px; color: var(--color-neutral-600); white-space: nowrap; }
+.cat-row-kw { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.cat-kw-label { font-size: 12px; font-weight: 600; color: var(--color-neutral-700); }
+.kw-tag {
+  display: inline-flex; align-items: center; gap: 2px; padding: 4px 5px 4px 4px; border-radius: 999px;
+  border: 2px solid var(--color-neutral-300); background: var(--color-neutral-100); font-size: 12.5px;
+}
+/* Un mot-clé qui porte une consigne pour l'agent se distingue de celui qui n'est qu'un mot. */
+.kw-tag.guided { border-color: var(--color-accent-500); }
+.kw-tag.open { border-color: var(--color-accent-700); background: var(--color-neutral-200); }
+.kw-open {
+  border: none; background: none; cursor: pointer; font: inherit; color: inherit;
+  padding: 0 3px 0 7px; border-radius: 999px;
+}
+.kw-open:hover { color: var(--color-accent-700); }
+.kw-x { border: none; background: none; cursor: pointer; color: var(--color-neutral-600); font-size: 16px; line-height: 1; padding: 0 3px; }
+.kw-x:hover { color: var(--color-accent-700); }
+.kw-input { width: 132px; padding: 5px 11px; font-size: 12.5px; }
+
+/* Le thème arrondit les champs en pilule (`.input { border-radius: 999px }`), ce qui convient à
+   une ligne mais pas à une zone de texte : le rayon suit la hauteur et les coins deviennent des
+   arcs de plus en plus gros à mesure qu'on l'agrandit. Rayon fixe pour tout ce qui se déplie. */
+textarea.input { border-radius: var(--radius-md); }
+
+/* ── Rédaction assistée ─────────────────────────────────────────────────── */
+/* Bouton posé contre le champ qu'il remplit, et encadré de la proposition : rien n'est écrit
+   dans les données tant que « Garder » n'a pas été cliqué. */
+.draft-btn {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--color-accent-500); background: transparent; color: var(--color-accent-700);
+  font-family: var(--font-body); font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.draft-btn:hover { background: rgba(198, 113, 57, 0.12); }
+.draft-btn[disabled] { opacity: 0.45; cursor: default; }
+.draft-btn-dark { border-color: rgba(255, 255, 255, 0.3); color: rgba(255, 255, 255, 0.78); }
+.draft-btn-dark:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.draft-star { font-size: 11px; }
+.draft-box {
+  margin: 8px 0 2px; padding: 10px 12px; border-radius: var(--radius-md);
+  border: 1px dashed var(--color-accent-500); background: rgba(198, 113, 57, 0.07);
+}
+.draft-box.draft-failed { border-color: #b23a2e; background: rgba(178, 58, 46, 0.08); }
+.draft-desc { font-size: 12px; font-weight: 600; color: var(--color-accent-700); margin-bottom: 4px; }
+.draft-text { font-size: 13px; line-height: 1.5; white-space: pre-wrap; color: var(--color-text); }
+/* Discussion : ce que l'agent a déjà proposé et ce qu'on lui en a dit, puis le champ de retour.
+   Renvoyer garde le fil — l'agent voit ses versions précédentes et les remarques. */
+/* Une équipe proposée se lit agent par agent ; le rôle se pose à côté du nom. */
+.draft-team { display: flex; flex-direction: column; gap: 7px; }
+.draft-team-row { font-size: 13px; line-height: 1.5; }
+.draft-team-mission { display: block; color: var(--color-neutral-700); }
+.agent-role-tag {
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 10.5px;
+  background: var(--color-neutral-200); color: var(--color-neutral-700);
+}
+/* Le niveau demandé pour un agent : plus discret que son rôle, c'est un réglage, pas un métier. */
+.agent-tune-tag {
+  margin-left: 5px; padding: 0 7px; border-radius: 999px; font-size: 10.5px;
+  border: 1px solid var(--color-neutral-300); color: var(--color-neutral-600);
+}
+.draft-dark .agent-tune-tag { border-color: rgba(255, 255, 255, 0.22); color: rgba(255, 255, 255, 0.7); }
+.draft-dark .draft-team-mission { color: rgba(255, 255, 255, 0.75); }
+.draft-dark .agent-role-tag { background: rgba(255, 255, 255, 0.14); color: rgba(255, 255, 255, 0.8); }
+
+.draft-history { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.draft-turn {
+  display: flex; align-items: baseline; gap: 6px; font-size: 11.5px; line-height: 1.45;
+  color: var(--color-neutral-600); padding-bottom: 4px; border-bottom: 1px dotted var(--color-neutral-300);
+}
+.draft-turn-n { font-family: var(--font-mono); font-size: 10.5px; opacity: 0.7; flex: none; }
+.draft-turn-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-turn-note { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; color: var(--color-accent-700); }
+.draft-reply { display: flex; align-items: flex-end; gap: 8px; margin-top: 10px; }
+/* `textarea.input` impose une hauteur minimale de 90 px : la note de retour tient en deux lignes. */
+textarea.draft-note {
+  flex: 1; min-width: 0; min-height: 0; box-sizing: border-box; resize: vertical;
+  font-size: 12.5px; line-height: 1.45; padding: 7px 11px;
+}
+.draft-send { flex: none; }
+.draft-send[disabled] { opacity: 0.45; cursor: default; }
+.draft-dark .draft-turn { color: rgba(255, 255, 255, 0.5); border-bottom-color: rgba(255, 255, 255, 0.15); }
+.draft-dark .draft-turn-note { color: rgba(255, 255, 255, 0.7); }
+.draft-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.draft-meta { flex: 1; font-size: 11.5px; color: var(--color-neutral-600); }
+.draft-wait { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-neutral-700); }
+.draft-spin {
+  width: 12px; height: 12px; border-radius: 999px; box-sizing: border-box;
+  border: 2px solid var(--color-accent-500); border-top-color: transparent;
+  animation: draft-turn 0.9s linear infinite;
+}
+@keyframes draft-turn { to { transform: rotate(360deg); } }
+/* Dans le panneau de l'agent, le fond est sombre. */
+.draft-box.draft-dark {
+  border-color: rgba(255, 255, 255, 0.25); background: rgba(255, 255, 255, 0.06);
+}
+.draft-dark .draft-text { color: rgba(255, 255, 255, 0.88); }
+.draft-dark .draft-desc { color: rgba(255, 255, 255, 0.72); }
+.draft-dark .draft-meta { color: rgba(255, 255, 255, 0.45); }
+.draft-dark .draft-wait { color: rgba(255, 255, 255, 0.7); }
+.draft-dark .draft-spin { border-color: rgba(255, 255, 255, 0.7); border-top-color: transparent; }
+.kw-field-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.kw-new-spacer { flex: 1; }
+
+/* Éditeur d'un mot-clé, déplié sous sa catégorie. */
+.kw-editor {
+  margin-top: 10px; padding: 12px; border-radius: var(--radius-md);
+  background: var(--color-neutral-100); border: 1px solid var(--color-neutral-200);
+}
+.kw-editor-grid { display: flex; gap: 10px; flex-wrap: wrap; }
+.kw-editor-grid .kw-field { flex: 1; min-width: 190px; }
+.kw-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.kw-field > span { font-size: 12px; font-weight: 600; color: var(--color-neutral-700); }
+.kw-prompt { width: 100%; box-sizing: border-box; resize: vertical; line-height: 1.5; font-size: 13px; }
+.kw-editor-actions { display: flex; align-items: center; gap: 10px; }
+.kw-editor-hint { flex: 1; font-size: 12px; color: var(--color-neutral-600); }
+
+/* Équipe d'agents d'un mot-clé : décochée, elle reste en sommeil (bordure en pointillés) ; armée,
+   elle déplie une ligne par agent — nom, rôle qui le range, et mission. */
+.kw-team { margin: 2px 0 12px; padding: 10px 12px; border-radius: var(--radius-md); border: 1px dashed var(--color-neutral-300); }
+.kw-team.on { border-style: solid; border-color: var(--color-accent-500); background: rgba(198, 113, 57, 0.05); }
+.kw-team-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.kw-team-switch {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  font-size: 12.5px; font-weight: 600; color: var(--color-neutral-700);
+}
+.kw-team-switch input { width: 15px; height: 15px; accent-color: var(--color-accent-500); cursor: pointer; }
+.kw-team-off { margin-top: 6px; font-size: 12px; line-height: 1.5; color: var(--color-neutral-600); }
+.agent-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.agent-row { padding: 8px 10px; border-radius: var(--radius-md); background: var(--color-bg); border: 1px solid var(--color-neutral-200); }
+.agent-row-head { display: flex; align-items: center; gap: 6px; }
+.agent-name { flex: 1; min-width: 90px; padding: 5px 11px; font-size: 12.5px; font-weight: 600; }
+.agent-role { flex: none; width: 118px; padding: 5px 11px; font-size: 12.5px; }
+/* Modèle et effort de l'agent : deux listes sous son nom. « Comme l'agent principal » est le
+   choix ordinaire — on ne descend dans le détail que pour les agents qui le méritent. */
+.agent-tune { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.agent-tune-f {
+  display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
+  font-size: 11.5px; color: var(--color-neutral-600); cursor: pointer;
+}
+.agent-tune-f > span { flex: none; }
+.agent-tune-select { flex: 1; min-width: 0; padding: 3px 8px; font-size: 11.5px; cursor: pointer; }
+.agent-prompt { width: 100%; box-sizing: border-box; margin-top: 6px; resize: vertical; line-height: 1.45; font-size: 12.5px; }
+.kw-team-foot { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
+.kw-team-hint { flex: 1; font-size: 11.5px; color: var(--color-neutral-600); }
+.btn-small { padding: 4px 12px; font-size: 12px; }
+
+/* ── Atelier d'un mot-clé ───────────────────────────────────────────────── */
+/* Une discussion : questions de l'agent à gauche, vos réponses à droite, et les fiches proposées
+   en pleine largeur — la dernière en entier, les précédentes réduites à une ligne. */
+.chat-cat {
+  margin-left: 10px; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  background: var(--color-neutral-200); color: var(--color-neutral-700); vertical-align: middle;
+}
+.chat-fil {
+  display: flex; flex-direction: column; gap: 10px; max-height: 46vh; overflow-y: auto;
+  padding: 4px 2px; margin-bottom: 12px;
+}
+.chat-turn { display: flex; align-items: flex-start; gap: 8px; max-width: 84%; }
+.chat-them { align-self: flex-start; }
+.chat-you { align-self: flex-end; flex-direction: row-reverse; }
+.chat-who { flex: none; margin-top: 6px; font-size: 11px; font-weight: 600; color: var(--color-neutral-600); }
+.chat-bubble {
+  padding: 8px 12px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.5;
+  background: var(--color-neutral-100); border: 1px solid var(--color-neutral-200); white-space: pre-wrap;
+}
+.chat-you .chat-bubble { background: rgba(198, 113, 57, 0.12); border-color: var(--color-accent-500); }
+/* Plusieurs questions d'un coup : une liste se lit mieux qu'un paragraphe. */
+.chat-qs { margin: 0; padding-left: 18px; white-space: normal; }
+.chat-qs li { margin: 2px 0; }
+.chat-wait { display: flex; align-items: center; gap: 8px; color: var(--color-neutral-700); }
+.chat-error {
+  padding: 8px 12px; border-radius: var(--radius-md); font-size: 13px;
+  background: rgba(178, 58, 46, 0.08); border: 1px solid #b23a2e; color: var(--color-text);
+}
+.chat-card {
+  padding: 10px 12px; border-radius: var(--radius-md);
+  background: var(--color-bg); border: 1px solid var(--color-accent-500);
+}
+.chat-card-old {
+  padding: 4px 12px; font-size: 12px; color: var(--color-neutral-600);
+  background: none; border: 1px dashed var(--color-neutral-300);
+}
+.chat-card-head {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  font-size: 12px; font-weight: 600; color: var(--color-accent-700);
+}
+.chat-card-n { font-family: var(--font-mono); font-size: 10.5px; opacity: 0.7; }
+.chat-card-row { display: flex; gap: 10px; font-size: 13px; line-height: 1.5; margin-bottom: 5px; }
+.chat-card-row > span:first-child { flex: none; width: 86px; font-size: 12px; color: var(--color-neutral-600); }
+.chat-card-text { white-space: pre-wrap; }
+.chat-card-agent { margin-bottom: 3px; }
+.chat-card-none { color: var(--color-neutral-600); }
+.chat-reply { display: flex; align-items: flex-end; gap: 8px; }
+textarea.chat-note { flex: 1; resize: vertical; line-height: 1.45; font-size: 13px; font-family: var(--font-body); }
+.chat-send { flex: none; }
+.chat-send[disabled] { opacity: 0.45; cursor: default; }
+.chat-ask { flex: none; white-space: nowrap; }
+.chat-ask[disabled] { opacity: 0.45; cursor: default; }
+.chat-meta { flex: 1; font-size: 11.5px; color: var(--color-neutral-600); }
+
 /* ── Réglages ───────────────────────────────────────────────────────────── */
 .set-row { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-bottom: 2px solid var(--color-neutral-200); }
 .set-row:last-of-type { border-bottom: none; }
@@ -224,6 +550,48 @@ textarea, input, button { font-family: inherit; }
 .set-row.stacked { display: block; }
 .set-row.stacked .set-control { margin-top: 8px; display: flex; }
 .set-cwd { flex: 1; min-width: 0; }
+
+/* Réglages en onglets : rubriques à gauche, une seule affichée. Hauteur fixe, pour que la
+   fenêtre ne saute pas d'un onglet à l'autre ; le panneau défile s'il déborde. */
+.dialog-settings { width: min(780px, 100%); display: flex; flex-direction: column; overflow: hidden; }
+.set-layout { display: flex; gap: 22px; min-height: 0; height: min(470px, calc(88vh - 150px)); }
+.set-nav { flex: none; width: 150px; display: flex; flex-direction: column; gap: 4px; }
+.set-tab {
+  text-align: left; padding: 9px 14px; border-radius: 999px; border: none; cursor: pointer;
+  background: transparent; color: var(--color-neutral-700); font-size: 14px; font-weight: 600;
+}
+.set-tab:hover { background: var(--color-neutral-100); }
+.set-tab.on { background: var(--color-accent-100); color: var(--color-accent-700); }
+.set-panel { flex: 1; min-width: 0; overflow-y: auto; padding-right: 6px; }
+.set-lead { font-size: 13px; line-height: 1.5; color: var(--color-neutral-600); padding-bottom: 6px; }
+.set-note { font-size: 12px; color: var(--color-neutral-600); margin-top: 12px; }
+.set-muted { color: var(--color-neutral-600); }
+.set-warn { color: var(--color-accent-700); font-weight: 600; }
+
+.set-card {
+  margin-top: 14px; padding: 12px 16px; border-radius: var(--radius-lg);
+  background: var(--color-neutral-100); border: 2px solid var(--color-neutral-200);
+}
+.set-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.set-card-title { font-size: 14px; font-weight: 700; }
+.set-badge {
+  font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
+  background: var(--color-accent-100); color: var(--color-accent-700);
+}
+.set-badge.warn { background: var(--color-neutral-200); color: var(--color-neutral-700); }
+.set-field { display: flex; align-items: center; gap: 12px; padding: 5px 0; }
+.set-field-label { flex: none; width: 64px; font-size: 13px; color: var(--color-neutral-700); }
+.set-field-control { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.set-field-control .set-select { flex: 1; width: auto; }
+.set-value { font-size: 13px; overflow-wrap: anywhere; }
+.set-card-foot { font-size: 12px; color: var(--color-neutral-600); margin-top: 6px; line-height: 1.45; }
+.set-refresh { flex: none; }
+
+@media (max-width: 640px) {
+  .set-layout { flex-direction: column; height: auto; gap: 12px; }
+  .set-nav { width: auto; flex-direction: row; flex-wrap: wrap; }
+  .dialog-settings { overflow: auto; }
+}
 
 .stepper { display: flex; align-items: center; gap: 8px; }
 .step-btn {
@@ -293,11 +661,13 @@ textarea, input, button { font-family: inherit; }
 }
 .new-convo-btn:hover { background: rgba(198, 113, 57, 0.22); }
 
+/* L'apparition ne se joue qu'à l'ouverture (classe `enter`) : le formulaire est reconstruit à
+   chaque clic — cocher un mot-clé, changer de modèle — et rejouer le fondu faisait clignoter. */
 .new-form {
   border-radius: var(--radius-md); border: 2px solid var(--color-accent-500);
   background: rgba(198, 113, 57, 0.12); padding: 14px 16px; margin-bottom: 16px;
-  animation: rise 0.18s ease-out;
 }
+.new-form.enter { animation: rise 0.18s ease-out; }
 .new-form-label {
   font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
   color: rgba(255, 255, 255, 0.5); margin-bottom: 8px;
@@ -321,6 +691,67 @@ textarea, input, button { font-family: inherit; }
 
 /* Choix de l'agent et du modèle dans le formulaire de nouvelle conversation. */
 .new-form-block { margin-bottom: 12px; }
+.keyword-block { padding-bottom: 2px; }
+.kw-choices { display: flex; gap: 6px; flex-wrap: wrap; }
+.kw-choice {
+  padding: 5px 12px; border-radius: 999px; font-size: 12.5px; cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.22); background: none; color: rgba(255, 255, 255, 0.72);
+}
+.kw-choice:hover { background: rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.95); }
+.kw-choice.on { background: var(--color-accent-500); border-color: var(--color-accent-500); color: #fff; }
+/* Le point signale un mot-clé qui porte une consigne, et pas seulement un mot. */
+.kw-guided { margin-left: 5px; opacity: 0.65; font-size: 10px; vertical-align: middle; }
+.kw-add { font-size: 14px; line-height: 1; padding: 5px 11px; }
+/* Un mot-clé qui lance une équipe porte le nombre d'agents, comme l'icône des rapports son badge. */
+.kw-team-n {
+  margin-left: 6px; padding: 0 5px; border-radius: 999px; font-size: 10px; font-weight: 700;
+  background: rgba(255, 255, 255, 0.22); vertical-align: middle;
+}
+.kw-choice.on .kw-team-n { background: rgba(0, 0, 0, 0.25); }
+.new-form-note { font-weight: 400; text-transform: none; letter-spacing: 0; opacity: 0.55; margin-left: 6px; }
+/* Création d'un mot-clé sans quitter le lancement. */
+.kw-new { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.kw-new-prompt { resize: vertical; line-height: 1.45; font-family: var(--font-body); }
+/* Premier message : la tâche, relue avant de partir. */
+.new-prompt {
+  display: block; width: 100%; box-sizing: border-box; resize: vertical;
+  line-height: 1.45; font-family: var(--font-body);
+}
+/* Travail déjà fait : le résumé des conversations précédentes, tel qu'il partira dans le contexte. */
+.new-recap {
+  display: block; width: 100%; box-sizing: border-box; resize: vertical;
+  line-height: 1.45; font-family: var(--font-body); font-size: 12.5px;
+}
+.new-recap-busy { font-size: 12.5px; color: rgba(255, 255, 255, 0.5); padding: 6px 2px; }
+.kw-new-actions { display: flex; gap: 8px; justify-content: flex-end; }
+/* Équipe du mot-clé qu'on crée ici : ✦ la compose, l'éditeur des Catégories la retouche. */
+.kw-new-team { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: rgba(255, 255, 255, 0.72); cursor: pointer; }
+.kw-new-team input { width: 14px; height: 14px; accent-color: var(--color-accent-500); cursor: pointer; }
+.kw-new-agents { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.kw-new-agent {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 4px 2px 9px; border-radius: 999px;
+  font-size: 11.5px; background: rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.82);
+}
+.kw-new-agent i { font-style: normal; opacity: 0.55; }
+.kw-new-agent .kw-new-tune { opacity: 0.38; }
+.kw-new-agent .kw-x { color: rgba(255, 255, 255, 0.5); font-size: 14px; }
+.kw-new-agent .kw-x:hover { color: #fff; }
+.kw-new-agents-empty { font-size: 11.5px; color: rgba(255, 255, 255, 0.45); }
+.kw-hint { margin-top: 8px; font-size: 12px; line-height: 1.5; color: rgba(255, 255, 255, 0.6); }
+.kw-hint b { color: rgba(255, 255, 255, 0.85); font-weight: 600; }
+.kw-hint-team { display: block; font-size: 11.5px; color: rgba(255, 255, 255, 0.45); }
+.kw-manage {
+  display: block; margin-top: 8px; padding: 0; border: none; background: none; cursor: pointer;
+  font-size: 12px; color: rgba(255, 255, 255, 0.5); text-decoration: underline;
+}
+.kw-manage:hover { color: rgba(255, 255, 255, 0.8); }
+/* Mots-clés d'une conversation, dans la liste des sessions. */
+.convo-kw { display: flex; gap: 4px; flex-wrap: wrap; margin: 4px 0 2px; }
+.convo-kw-tag {
+  padding: 1px 8px; border-radius: 999px; font-size: 11px;
+  background: rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.65);
+}
+.convo-kw-n { margin-left: 5px; font-weight: 700; opacity: 0.8; }
 .seg-dark { display: inline-flex; border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 999px; overflow: hidden; }
 .seg-dark button {
   padding: 7px 14px; font-size: 13px; font-weight: 600; border: none;
@@ -360,6 +791,11 @@ textarea, input, button { font-family: inherit; }
   border: none; background: none; cursor: pointer; color: rgba(255, 255, 255, 0.9);
 }
 .convo-title { font-size: 13.5px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convo-artifacts {
+  display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; color: var(--color-accent-300);
+  font-family: var(--font-mono); font-size: 10.5px; vertical-align: middle;
+}
+.convo-artifacts svg { width: 13px; height: 13px; vertical-align: -2px; }
 .convo-meta {
   font-family: var(--font-mono); font-size: 11px; color: rgba(255, 255, 255, 0.45);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -370,13 +806,22 @@ textarea, input, button { font-family: inherit; }
 }
 .st-dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; flex: none; }
 .st-working { color: #f0b35b; }
-.st-waiting { color: #c4a6ff; }
+.st-waiting { color: #8ec8ff; }
 .st-ready { color: #7ed49f; }
 .st-error { color: #ff8f7e; }
 .st-open { color: rgba(255, 255, 255, 0.6); }
 .st-closed, .st-idle { color: rgba(255, 255, 255, 0.4); }
 .st-working .st-dot { animation: blink 1.4s ease-in-out infinite; }
 .st-waiting .st-dot { animation: blink 0.7s ease-in-out infinite; }
+/* Ce que l'agent vient de dire, sous l'état : deux lignes au plus, dans la teinte de l'état. */
+.convo-said {
+  font-size: 11.5px; line-height: 1.35; margin-bottom: 5px; opacity: 0.72;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  white-space: normal; text-align: left;
+}
+.convo-said.st-ready, .convo-said.st-closed, .convo-said.st-idle, .convo-said.st-open {
+  color: rgba(255, 255, 255, 0.6);
+}
 .foot-state { font-weight: 600; }
 .log-state { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12.5px; }
 .log-state .log-tool { color: rgba(255, 255, 255, 0.45); }
@@ -387,6 +832,36 @@ textarea, input, button { font-family: inherit; }
 }
 .convo-btn:hover { color: rgba(255, 255, 255, 0.9); background: rgba(255, 255, 255, 0.07); }
 .panel-note { font-size: 13px; color: rgba(255, 255, 255, 0.45); padding: 6px 2px; }
+.artifact-list { display: flex; flex-direction: column; gap: 8px; }
+.artifact-row {
+  display: flex; align-items: flex-start; gap: 10px; padding: 11px 12px; border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.14); background: rgba(255, 255, 255, 0.05);
+}
+.artifact-openable {
+  width: 100%; color: inherit; font: inherit; text-align: left; cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.artifact-openable:hover { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.28); }
+.artifact-deleted { opacity: 0.7; }
+.artifact-row-icon { flex: none; color: var(--color-accent-300); display: flex; padding-top: 1px; }
+.artifact-main { min-width: 0; }
+.artifact-title { color: rgba(255, 255, 255, 0.9); font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.artifact-open-hint { flex: none; align-self: center; color: var(--color-accent-300); font-size: 11px; white-space: nowrap; }
+.artifact-meta {
+  font-family: var(--font-mono); font-size: 10.5px; color: rgba(255, 255, 255, 0.45);
+  margin-top: 3px; overflow-wrap: anywhere;
+}
+.artifact-toggle {
+  display: flex; align-items: center; gap: 7px; width: 100%; box-sizing: border-box; margin-top: 14px;
+  padding: 9px 12px; border: 1px dashed rgba(255, 255, 255, 0.2); border-radius: var(--radius-md);
+  background: none; color: rgba(255, 255, 255, 0.55); font: inherit; font-size: 12.5px;
+  cursor: pointer; text-align: left;
+}
+.artifact-toggle:hover { color: rgba(255, 255, 255, 0.9); border-color: rgba(255, 255, 255, 0.35); }
+.artifact-caret { display: inline-block; transition: transform 0.15s ease; }
+.artifact-toggle.open .artifact-caret { transform: rotate(90deg); }
+.artifact-files { margin-top: 8px; }
+.artifact-back { margin-top: 18px; }
 
 .log { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 18px 20px; font-family: var(--font-mono); font-size: 13px; line-height: 1.65; }
 .msg { margin-bottom: 16px; }
@@ -472,7 +947,9 @@ html { scrollbar-gutter: stable; }
 
 /* ── Remarques sur Organizator ──────────────────────────────────────────── */
 /* Bouton de l'en-tête : nombre de remarques en attente, point d'état des sessions du carnet. */
-.icon-btn { position: relative; }
+/* Contexte d'empilement propre : l'onde d'une pastille (z-index -1) se peint sur le fond du bouton,
+   sous la pastille, au lieu de disparaître sous la carte. */
+.icon-btn { position: relative; isolation: isolate; }
 .icon-btn.on { background: var(--color-neutral-100); border-color: var(--color-accent-500); }
 .btn-badge {
   position: absolute; top: -7px; right: -7px; min-width: 19px; height: 19px; padding: 0 5px;
@@ -484,7 +961,19 @@ html { scrollbar-gutter: stable; }
   border: 2px solid var(--color-bg); box-sizing: border-box; pointer-events: none;
 }
 .btn-dot.st-working { background: #d98b1f; animation: blink 1.4s ease-in-out infinite; }
-.btn-dot.st-waiting { background: #6a48c9; animation: blink 0.7s ease-in-out infinite; }
+/* Question de l'agent : la pastille porte un « ? » et une onde bleue plutôt qu'un clignotement,
+   pour se distinguer d'un coup d'œil du travail en cours. */
+.btn-dot.st-waiting {
+  width: 17px; height: 17px; right: -5px; bottom: -5px;
+  display: flex; align-items: center; justify-content: center;
+  background: #2f6fb5; color: #fff;
+  font-size: 11px; font-weight: 700; line-height: 1;
+}
+.btn-dot.st-waiting::before {
+  content: ''; position: absolute; inset: -2px; border-radius: 999px; z-index: -1;
+  background: rgba(47, 111, 181, 0.5); animation: halo-ask 2s ease-out infinite;
+}
+.btn-dot.st-waiting::after { content: '?'; }
 .btn-dot.st-ready { background: #2b7a4b; }
 .btn-dot.st-error { background: #b23a2e; }
 
@@ -529,3 +1018,43 @@ html { scrollbar-gutter: stable; }
 .remark-old-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .remark-old-meta { font-family: var(--font-mono); font-size: 11px; white-space: nowrap; color: rgba(255, 255, 255, 0.4); }
 .remark-sent-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+
+/* ── Lecteur d'artefacts ────────────────────────────────────────────────── */
+/* Un rapport se lit dans la fenêtre, par-dessus la file et le panneau : chrome sombre comme le
+   panneau, papier clair à l'intérieur (le document lui-même est mis en page par reader.css, dans
+   un cadre isolé). Le fond ne porte pas d'action, comme pour les dialogues : ✕ ou Échap. */
+.reader-backdrop {
+  position: fixed; inset: 0; z-index: 50; background: rgba(46, 43, 37, 0.55);
+  display: flex; align-items: stretch; justify-content: center; padding: 18px clamp(18px, 4vw, 56px);
+}
+.reader {
+  width: min(1040px, 100%); display: flex; flex-direction: column; min-height: 0;
+  background: var(--color-neutral-900); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg); overflow: hidden;
+}
+.reader.enter { animation: rise 0.2s ease-out; }
+.reader-bar {
+  display: flex; align-items: center; gap: 12px; padding: 11px 14px 11px 18px;
+  background: rgba(255, 255, 255, 0.06); flex: none;
+}
+.reader-icon { color: var(--color-accent-300); display: flex; flex: none; }
+.reader-head { min-width: 0; }
+.reader-name {
+  color: rgba(255, 255, 255, 0.92); font-family: var(--font-mono); font-size: 13px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.reader-meta {
+  color: rgba(255, 255, 255, 0.45); font-family: var(--font-mono); font-size: 10.5px; margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.reader-btn { padding: 6px 12px; font-size: 12px; }
+.reader-back { padding: 6px 10px; }
+.reader-body { flex: 1; min-height: 0; position: relative; background: #fffaf1; display: flex; }
+.reader-frame { flex: 1; width: 100%; height: 100%; border: 0; background: transparent; }
+.reader-note {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; padding: 40px; color: var(--color-neutral-700); font-size: 14.5px; line-height: 1.55;
+}
+.reader-note p { margin: 4px 0; max-width: 520px; }
+.reader-note strong { color: var(--color-text); }
+.reader-loading { color: var(--color-neutral-500); font-family: var(--font-mono); font-size: 13px; }

@@ -23,6 +23,9 @@ public sealed class AppSettings
     /// <summary>Dossier des sources d'Organizator, ou l'agent traite les remarques ; vide = detecte autour de l'executable.</summary>
     [JsonPropertyName("repoDir")] public string RepoDir { get; set; } = "";
 
+    /// <summary>Serveur Bitbucket interroge pour les PRs en attente ; vide = celui detecte (serveur MCP de ~/.claude.json, ou BITBUCKET_URL).</summary>
+    [JsonPropertyName("bitbucketUrl")] public string BitbucketUrl { get; set; } = "";
+
     [JsonPropertyName("terminal")] public string Terminal { get; set; } = "powershell";
 
     /// <summary>Agent par defaut, preselectionne dans le formulaire de nouvelle conversation.</summary>
@@ -40,6 +43,15 @@ public sealed class AppSettings
     /// <summary>Effort par defaut pour GitHub Copilot CLI (vide = reglage propre de l'outil).</summary>
     [JsonPropertyName("copilotEffort")] public string CopilotEffort { get; set; } = "";
 
+    /// <summary>Agent charge de la redaction assistee (titre -> contenu), regle a part des conversations.</summary>
+    [JsonPropertyName("draftProvider")] public string DraftProvider { get; set; } = AgentProvider.Claude;
+
+    /// <summary>Modele de la redaction assistee ; un modele rapide suffit pour quelques phrases.</summary>
+    [JsonPropertyName("draftModel")] public string DraftModel { get; set; } = "haiku";
+
+    /// <summary>Effort de la redaction assistee (vide = reglage propre de l'outil).</summary>
+    [JsonPropertyName("draftEffort")] public string DraftEffort { get; set; } = "";
+
     [JsonPropertyName("window")] public WindowPlacement? Window { get; set; }
 
     public AppSettings Clone() => new()
@@ -49,12 +61,16 @@ public sealed class AppSettings
         Compact = Compact,
         DefaultCwd = DefaultCwd,
         RepoDir = RepoDir,
+        BitbucketUrl = BitbucketUrl,
         Terminal = Terminal,
         Provider = Provider,
         ClaudeModel = ClaudeModel,
         CopilotModel = CopilotModel,
         ClaudeEffort = ClaudeEffort,
         CopilotEffort = CopilotEffort,
+        DraftProvider = DraftProvider,
+        DraftModel = DraftModel,
+        DraftEffort = DraftEffort,
         Window = Window is null
             ? null
             : new WindowPlacement
@@ -77,6 +93,7 @@ public sealed class AppSettings
 
         DefaultCwd ??= "";
         RepoDir ??= "";
+        BitbucketUrl = BitbucketPullRequests.NormalizeUrl(BitbucketUrl) ?? "";
 
         if (!string.Equals(Terminal, "wt", StringComparison.OrdinalIgnoreCase))
         {
@@ -92,5 +109,9 @@ public sealed class AppSettings
         CopilotModel = AgentProvider.SanitizeModel(CopilotModel);
         ClaudeEffort = AgentProvider.SanitizeEffort(AgentProvider.Claude, ClaudeEffort);
         CopilotEffort = AgentProvider.SanitizeEffort(AgentProvider.Copilot, CopilotEffort);
+
+        DraftProvider = AgentProvider.Normalize(DraftProvider);
+        DraftModel = AgentProvider.SanitizeModel(DraftModel);
+        DraftEffort = AgentProvider.SanitizeEffort(DraftProvider, DraftEffort);
     }
 }

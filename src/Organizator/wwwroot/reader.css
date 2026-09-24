@@ -1,0 +1,89 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   reader.css — mise en page d'un rapport lu dans le lecteur d'Organizator.
+   Chargée dans le cadre isolé (sandbox + CSP) où l'UI pose le HTML rendu par
+   l'hôte : c'est un document à lire, papier clair, dans les teintes du thème.
+   Les couleurs sont écrites en dur : le cadre ne voit pas organic.css.
+   ═══════════════════════════════════════════════════════════════════════ */
+:root { color-scheme: light; }
+html, body { margin: 0; padding: 0; background: #fffaf1; color: #201e1d; }
+body {
+  font-family: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 15.5px; line-height: 1.6; -webkit-font-smoothing: antialiased;
+}
+::selection { background: #ffc6a5; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #dcd3c4; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #c0b6a5; }
+
+.doc { max-width: 840px; margin: 0 auto; padding: 36px 44px 80px; overflow-wrap: anywhere; }
+.doc > :first-child { margin-top: 0; }
+
+h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.7em 0 0.6em; color: #201e1d; font-weight: 700; }
+h1 { font-family: "Caprasimo", "Figtree", system-ui, sans-serif; font-weight: 400; font-size: 32px; margin-top: 0.3em; }
+h2 { font-size: 23px; padding-bottom: 6px; border-bottom: 2px solid #eee7db; }
+h3 { font-size: 18.5px; }
+h4 { font-size: 16px; }
+h5, h6 { font-size: 15px; color: #645c50; }
+
+p { margin: 0 0 1em; }
+a { color: #8c491a; text-decoration: underline; text-decoration-color: #ffc6a5; text-underline-offset: 2px; }
+a:hover { color: #643312; text-decoration-color: #d67f48; }
+strong { font-weight: 700; }
+mark { background: #ffe1d0; padding: 0 3px; border-radius: 3px; }
+small { font-size: 0.86em; }
+
+ul, ol { padding-left: 1.6em; margin: 0 0 1em; }
+li { margin: 0.25em 0; }
+li > ul, li > ol { margin-bottom: 0; margin-top: 0.2em; }
+li > p { margin-bottom: 0.4em; }
+/* Listes de cases (Markdig : li.task-list-item > input.task-list-item-checkbox). */
+li.task-list-item { list-style: none; margin-left: -1.5em; }
+input.task-list-item-checkbox { margin: 0 0.55em 0 0; vertical-align: -1px; accent-color: #d67f48; }
+
+blockquote {
+  margin: 0 0 1.1em; padding: 8px 18px; border-left: 4px solid #d67f48;
+  background: #f9f4ed; color: #474238; border-radius: 0 8px 8px 0;
+}
+blockquote > :last-child { margin-bottom: 0; }
+
+code, pre, kbd, samp { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+code { font-size: 0.88em; background: #eee7db; padding: 0.15em 0.4em; border-radius: 5px; }
+pre {
+  margin: 0 0 1.1em; padding: 14px 16px; background: #2e2b25; color: #f5ead8;
+  border-radius: 10px; overflow: auto; font-size: 12.8px; line-height: 1.55;
+}
+pre code { background: none; padding: 0; font-size: inherit; color: inherit; }
+/* Fichier texte brut : le contenu entier est un bloc préformaté, sur le papier. */
+pre.text { background: transparent; color: #201e1d; padding: 0; white-space: pre-wrap; font-size: 13px; line-height: 1.6; }
+kbd { font-size: 0.85em; background: #f9f4ed; border: 1px solid #dcd3c4; border-bottom-width: 2px; border-radius: 5px; padding: 0.1em 0.45em; }
+
+hr { border: 0; border-top: 2px solid #eee7db; margin: 2em 0; }
+img { max-width: 100%; height: auto; border-radius: 8px; }
+figure { margin: 0 0 1.2em; }
+figcaption { font-size: 13px; color: #82796a; text-align: center; margin-top: 6px; }
+/* Fichier image ouvert seul : centré sur un damier, pour lire les transparences. */
+figure.image {
+  margin: 0; padding: 24px; min-height: calc(100vh - 48px); box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center;
+  background: repeating-conic-gradient(#f2eadc 0 25%, #fffaf1 0 50%) 0 0 / 24px 24px;
+}
+figure.image img { max-height: calc(100vh - 48px); object-fit: contain; box-shadow: 0 3px 10px rgba(46, 43, 37, 0.16); background: #fff; }
+
+table {
+  border-collapse: collapse; margin: 0 0 1.2em; font-size: 14px;
+  display: block; width: max-content; max-width: 100%; overflow-x: auto;
+}
+th, td { border: 1px solid #dcd3c4; padding: 7px 11px; text-align: left; vertical-align: top; }
+th { background: #eee7db; font-weight: 700; }
+tbody tr:nth-child(even) td { background: #f9f4ed; }
+/* Tableau issu d'un CSV / TSV : données brutes, chasse fixe. */
+table.data { font-family: "JetBrains Mono", ui-monospace, Consolas, monospace; font-size: 12.5px; }
+table.data th { white-space: nowrap; }
+
+dl dt { font-weight: 700; margin-top: 0.6em; }
+dl dd { margin: 0.1em 0 0.6em 1.4em; }
+abbr[title] { text-decoration: underline dotted; cursor: help; }
+sup a, .footnote-back-ref { text-decoration: none; }
+.footnotes { font-size: 13px; color: #645c50; border-top: 2px solid #eee7db; margin-top: 2.5em; padding-top: 1em; }
+.footnotes ol { padding-left: 1.4em; }
+.note { font-size: 13px; color: #82796a; font-style: italic; }

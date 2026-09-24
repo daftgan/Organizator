@@ -126,13 +126,51 @@
     defaultCwd: 'C:\\Users\\moi\\Documents',
     dataDir: '(shim)',
     userProfile: 'C:\\Users\\moi',
-    repoDir: 'D:\\dev\\Organizator'
+    repoDir: 'D:\\dev\\Organizator',
+    bitbucketUrl: 'https://git.exemple.com',
+    bitbucketSource: 'claude.json',
+    bitbucketToken: true,
+    jiraUrl: 'https://jira.exemple.com'
   };
+
+  /* PRs simulées de « Mes PRs Bitbucket » : deux dépôts pour un même ticket, une PR sans ticket,
+     un brouillon. window.__fakePullRequests remplace la réponse entière pour les essais. */
+  function shimPullRequests() {
+    var now = Date.now();
+    function pr(id, key, project, repo, title, branch, author, ago, extra) {
+      return Object.assign({
+        id: id, title: title, project: project, projectName: project, repo: repo, repoName: repo.toUpperCase(),
+        branch: branch, target: 'develop', author: author,
+        url: 'https://git.exemple.com/projects/' + project + '/repos/' + repo + '/pull-requests/' + id,
+        created: now - ago, updated: now - ago / 2, comments: 0, openTasks: 0, draft: false, key: key
+      }, extra || {});
+    }
+    return {
+      status: 'ok', message: null, host: 'git.exemple.com', account: 'moi@exemple.com', jiraUrl: 'https://jira.exemple.com', fetchedAt: now,
+      prs: [
+        pr(455, 'UDM-1449', 'BRDM', 'dm-umisoft', 'Feature/UDM-1449 contact update umisoft preset', 'feature/UDM-1449-contact-update-umisoft-preset', 'Xavier LE MEN', 9 * 86400000, { comments: 5 }),
+        pr(683, 'UDM-1449', 'BRDM', 'dm-standalone', 'Feature/UDM-1449 contact update umisoft preset', 'feature/UDM-1449-contact-update-umisoft-preset', 'Xavier LE MEN', 8 * 86400000),
+        pr(730, 'UDM-1532', 'BRDM', 'dm-standalone', '[UDM-1532] fix tvg all chanel create contact', 'bugfix/UDM-1532-fix-tvg', 'Clément BONET', 3 * 86400000, { openTasks: 1 }),
+        pr(499, '', 'BRDM', 'dm-umisoft', 'Ajout de trois configurations à Aspire', 'feature/aspire-configs', 'Nicolas FAGET', 86400000),
+        pr(740, 'UDM-1600', 'BRDM', 'dm-standalone', '[UDM-1600] Correction THU', 'bugfix/UDM-1600-thu', 'Clément BONET', 3600000, { draft: true })
+      ]
+    };
+  }
 
   var SHIM_TRANSCRIPT = [
     { role: 'user', text: 'Fais le point sur cette tâche.', ts: Date.now() - 720000 },
     { role: 'assistant', text: 'Repéré le module concerné.\nJe propose de commencer par les tests.\nDis-moi si je lance.', ts: Date.now() - 700000 }
   ];
+
+  var SHIM_REPORT_HTML = '<h1 id="rapport-de-demonstration">Rapport de démonstration</h1>'
+    + '<p>Ce document est <strong>rendu par le shim</strong> : dans Organizator, c’est l’hôte qui rend le Markdown (Markdig).</p>'
+    + '<h2 id="constats">Constats</h2><ul><li>Le module <code>AgentArtifacts</code> détecte les fichiers écrits.</li>'
+    + '<li>Un lien relatif : <a href="https://report.organizator/annexe.md">annexe.md</a> ; un lien externe : <a href="https://example.org/">example.org</a>.</li></ul>'
+    + '<h2 id="suivi">Suivi</h2><ul class="contains-task-list"><li class="task-list-item"><input disabled="disabled" type="checkbox" class="task-list-item-checkbox" checked="checked" /> Lire le rapport</li>'
+    + '<li class="task-list-item"><input disabled="disabled" type="checkbox" class="task-list-item-checkbox" /> Publier</li></ul>'
+    + '<table><thead><tr><th>Fichier</th><th style="text-align: right;">Lignes</th></tr></thead><tbody><tr><td><code>app.js</code></td><td style="text-align: right;">4075</td></tr><tr><td><code>app.css</code></td><td style="text-align: right;">876</td></tr></tbody></table>'
+    + '<blockquote><p>Une citation, pour l’allure.</p></blockquote>'
+    + '<pre><code class="language-js">function lire() { return "ici"; }\n</code></pre>';
 
   function shimCall(type, payload) {
     payload = payload || {};
@@ -177,7 +215,8 @@
           topCount: p.topCount, showBands: p.showBands, compact: p.compact,
           defaultCwd: p.defaultCwd, terminal: p.terminal,
           provider: p.provider, claudeModel: p.claudeModel, copilotModel: p.copilotModel,
-          claudeEffort: p.claudeEffort, copilotEffort: p.copilotEffort, repoDir: p.repoDir
+          claudeEffort: p.claudeEffort, copilotEffort: p.copilotEffort, repoDir: p.repoDir, bitbucketUrl: p.bitbucketUrl,
+          draftProvider: p.draftProvider, draftModel: p.draftModel, draftEffort: p.draftEffort
         });
         return {};
 
@@ -214,6 +253,21 @@
         };
       }
 
+      case 'getRecaps': {
+        /* Dernière réponse de chaque session : `answer` d'une session simulée, sinon un texte de démonstration. */
+        var fakes = Array.isArray(window.__fakeSessions) ? window.__fakeSessions : [];
+        return {
+          sessions: (p.sessions || []).map(function (s) {
+            var f = fakes.filter(function (x) { return x.sessionId === s.sessionId; })[0];
+            var exists = !!f && f.exists !== false;
+            return {
+              sessionId: s.sessionId, exists: exists,
+              answer: exists ? (f.answer || 'Réponse de démonstration : le travail est terminé, le rapport est écrit.') : ''
+            };
+          })
+        };
+      }
+
       case 'getTranscript': {
         var fake = Array.isArray(window.__fakeSessions)
           ? window.__fakeSessions.filter(function (s) { return s.sessionId === p.sessionId; })[0]
@@ -228,6 +282,19 @@
 
       case 'refreshModels':
         console.log('[shim] refreshModels', p);
+        if (p.provider === 'claude') {
+          return { claude: { defaultModel: 'claude-fable-5-1[1m]', defaultEffort: 'xhigh', fetchedAt: Date.now(), groups: [
+            { key: 'alias', items: [{ id: 'fable' }, { id: 'opus' }, { id: 'sonnet' }, { id: 'haiku' }] },
+            { key: 'anthropic', items: [
+              { id: 'claude-opus-5-5', name: 'Claude Opus 5.5' },
+              { id: 'claude-fable-5-1', name: 'Claude Fable 5.1' },
+              { id: 'claude-opus-5', name: 'Claude Opus 5' },
+              { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
+              { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5' }
+            ] },
+            { key: 'used', items: [{ id: 'claude-opus-4-6[1m]' }] }
+          ] } };
+        }
         return { copilot: { defaultModel: 'claude-opus-4.6', defaultEffort: 'max', fetchedAt: Date.now(), groups: [
           { key: 'auto', items: [{ id: 'auto', name: 'Auto' }] },
           { key: 'claude', items: [
@@ -260,12 +327,53 @@
           ] }
         };
 
+      case 'getPullRequests':
+        console.log('[shim] getPullRequests');
+        if (window.__fakePullRequests === 'error') throw new Error('réseau simulé indisponible');
+        return window.__fakePullRequests || shimPullRequests();
+
+      case 'draftText': {
+        console.log('[shim] draftText', p);
+        window.__lastDraft = p;
+        /* Texte simulé : window.__fakeDraft le remplace pour les essais. */
+        if (window.__fakeDraft === 'error') throw new Error('Claude Code n’est pas connecté.');
+        return {
+          text: window.__fakeDraft || 'Description: proposition simulée du shim\nConsigne: Vérifie la cause, corrige-la, puis explique en deux lignes ce qui a changé.',
+          ms: 1200, provider: p.provider, model: p.model
+        };
+      }
+
       case 'openPath':
-        console.log('[shim] openPath', p.path);
-        return {};
+        console.log('[shim] openPath', p.path, p.editor || '');
+        return { editor: p.editor === 'vscode' ? 'vscode' : (p.editor === 'default' ? 'default' : 'explorer') };
+
+      case 'openUrl':
+        console.log('[shim] openUrl', p.url);
+        return { opened: true };
+
+      case 'readArtifact': {
+        /* Rapport simulé : window.__fakeArtifact le remplace pour les essais (mêmes champs). */
+        console.log('[shim] readArtifact', p.path, p.stamp || '');
+        if (window.__fakeArtifact) {
+          if (p.stamp && p.stamp === window.__fakeArtifact.stamp) return { changed: false, stamp: p.stamp };
+          return Object.assign({ changed: true }, window.__fakeArtifact);
+        }
+        if (p.stamp === 'shim-1') return { changed: false, stamp: 'shim-1' };
+        var rel = String(p.path || 'rapport.md').replace(/\//g, '\\');
+        return {
+          changed: true, kind: 'markdown',
+          full: 'C:\\Users\\moi\\Documents\\' + rel, root: 'C:\\Users\\moi\\Documents',
+          url: 'https://report.organizator/' + String(p.path || 'rapport.md'),
+          title: 'Rapport de démonstration', stamp: 'shim-1', size: 2480, modified: Date.now() - 90000,
+          html: SHIM_REPORT_HTML
+        };
+      }
 
       case 'log':
         console.log('[shim] log', p.level, p.message);
+        return {};
+
+      case 'perf':
         return {};
 
       default:

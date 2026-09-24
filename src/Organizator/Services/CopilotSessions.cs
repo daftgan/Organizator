@@ -84,9 +84,11 @@ public sealed class CopilotSessions
         lock (scan)
         {
             var parsed = Parse(scan, dir, collectMessages: false);
+            // La CLI Copilot ne laisse pas de trace exploitable de ses sous-agents (leurs evenements
+            // portent un `agentId` et sont ignores) : aucun agent n'est donc rapporte ici.
             return new SessionSummary(
                 sessionId, true, parsed.MessageCount, GetUpdated(dir), parsed.Title,
-                parsed.State, parsed.StateTs, parsed.Detail);
+                parsed.State, parsed.StateTs, parsed.Detail, Array.Empty<AgentRun>(), parsed.Said);
         }
     }
 
@@ -125,6 +127,22 @@ public sealed class CopilotSessions
             var parsed = Parse(_transcriptScan, dir, collectMessages: true);
             return new Transcript(true, parsed.Title, parsed.Messages.ToArray());
         }
+    }
+
+    /// <summary>
+    /// Derniere reponse complete de l'agent, pour le resume transmis a une nouvelle conversation.
+    /// Lecture a part, sans toucher au journal affiche. <c>null</c> sans session ni reponse.
+    /// </summary>
+    public string? GetLastAnswer(string sessionId)
+    {
+        var dir = GetSessionDir(sessionId);
+        if (NormalizeId(sessionId).Length == 0 || !Directory.Exists(dir))
+        {
+            return null;
+        }
+
+        var parsed = Parse(new SessionScan(), dir, collectMessages: true);
+        return TranscriptAccumulator.LastAnswer(parsed.Messages);
     }
 
     /// <summary>
@@ -466,6 +484,7 @@ public sealed class CopilotSessions
         if (content.Length > 0)
         {
             result.MessageCount++;
+            result.NoteSaid(content);
         }
 
         if (collectMessages)
