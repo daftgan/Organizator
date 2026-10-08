@@ -70,7 +70,7 @@ public sealed class AgentDraft
             var sessionId = provider == AgentProvider.Copilot ? Guid.NewGuid().ToString("d") : "";
             var info = Build(command, provider, model, effort, system, prompt, sessionId);
 
-            var (code, output, error) = await RunAsync(info).ConfigureAwait(false);
+            var (code, output, error) = await RunAsync(info, Limit, _log, "de redaction").ConfigureAwait(false);
             started.Stop();
 
             if (sessionId.Length > 0)
@@ -150,8 +150,11 @@ public sealed class AgentDraft
     private static string Join(string system, string prompt)
         => system.Length == 0 ? prompt : system + "\n\n" + prompt;
 
-    /// <summary>Lance l'agent, lit ses deux flux et le tue s'il s'eternise.</summary>
-    private async Task<(int Code, string Output, string Error)> RunAsync(ProcessStartInfo info)
+    /// <summary>
+    /// Lance l'agent, lit ses deux flux et le tue s'il s'eternise. Partage avec l'article du jour
+    /// (<see cref="DailyArticle"/>) : <paramref name="what"/> nomme l'appel dans le journal.
+    /// </summary>
+    internal static async Task<(int Code, string Output, string Error)> RunAsync(ProcessStartInfo info, TimeSpan limit, HostLog log, string what)
     {
         using var process = new Process { StartInfo = info };
         try
@@ -169,21 +172,21 @@ public sealed class AgentDraft
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
 
-        using var cts = new CancellationTokenSource(Limit);
+        using var cts = new CancellationTokenSource(limit);
         try
         {
             await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            Kill(process);
-            throw new InvalidOperationException($"L'agent n'a pas repondu en {Limit.TotalSeconds:0} secondes.");
+            Kill(process, log, what);
+            throw new InvalidOperationException($"L'agent n'a pas repondu en {limit.TotalSeconds:0} secondes.");
         }
 
         return (process.ExitCode, await output.ConfigureAwait(false), await error.ConfigureAwait(false));
     }
 
-    private void Kill(Process process)
+    private static void Kill(Process process, HostLog log, string what)
     {
         try
         {
@@ -191,12 +194,12 @@ public sealed class AgentDraft
         }
         catch (Exception ex)
         {
-            _log.Warn("Arret de l'agent de redaction impossible : " + ex.Message);
+            log.Warn($"Arret de l'agent {what} impossible : " + ex.Message);
         }
     }
 
     /// <summary>Sortie utilisable : sans codes ANSI, sans bloc de code encadrant, sans blancs autour.</summary>
-    private static string Clean(string raw)
+    internal static string Clean(string raw)
     {
         var text = AnsiCodes.Replace(raw ?? "", "").Replace("\r\n", "\n").Trim();
         var fenced = FencedBlock.Match(text);
@@ -204,7 +207,7 @@ public sealed class AgentDraft
     }
 
     /// <summary>Message lisible quand l'agent n'a rien rendu : la cause est presque toujours dans sa sortie d'erreur.</summary>
-    private static string Explain(string provider, int code, string error)
+    internal static string Explain(string provider, int code, string error)
     {
         var label = AgentProvider.Label(provider);
         var first = TranscriptAccumulator.Shorten(error);

@@ -1,7 +1,8 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    bridge.js — pont JS ↔ hôte WPF (WebView2)
    Expose window.bridge :
-     call(type, payload, timeoutMs) -> Promise   requête/réponse corrélées par id, 15 s par défaut
+     call(type, payload, timeoutMs, files) -> Promise   requête/réponse corrélées par id, 15 s par défaut ;
+                                      `files` (File[]) : l'hôte en reçoit les chemins
      on(event, handler)  -> off()     événements poussés par l'hôte
      isShim                           vrai hors WebView2
    Hors WebView2 (navigateur ordinaire), un shim complet prend le relais :
@@ -48,7 +49,9 @@
     else p.reject(new Error(msg.error || 'Erreur inconnue de l’hôte.'));
   }
 
-  function hostCall(type, payload, timeoutMs) {
+  /* `files` : des objets File (dépôt, collage) dont l'hôte lit le chemin — WebView2 les passe par
+     postMessageWithAdditionalObjects, la page n'en connaît que le nom. */
+  function hostCall(type, payload, timeoutMs, files) {
     return new Promise(function (resolve, reject) {
       var id = String(++seq);
       var timer = setTimeout(function () {
@@ -57,10 +60,18 @@
       }, timeoutMs || TIMEOUT);
       pending.set(id, { resolve: resolve, reject: reject, timer: timer });
       try {
-        wv.postMessage({ id: id, type: type, payload: payload || {} });
+        var msg = { id: id, type: type, payload: payload || {} };
+        if (files && files.length) {
+          if (!wv.postMessageWithAdditionalObjects) throw new Error('WebView2 trop ancien pour transmettre des fichiers.');
+          wv.postMessageWithAdditionalObjects(msg, files);
+        } else {
+          wv.postMessage(msg);
+        }
       } catch (e) {
         pending.delete(id);
         clearTimeout(timer);
+        /* Rien n'est parti : l'appelant peut essayer autrement (fichiers envoyés par leur contenu). */
+        try { e.notSent = true; } catch (err) { /* objet figé */ }
         reject(e);
       }
     });
@@ -130,8 +141,22 @@
     bitbucketUrl: 'https://git.exemple.com',
     bitbucketSource: 'claude.json',
     bitbucketToken: true,
-    jiraUrl: 'https://jira.exemple.com'
+    jiraUrl: 'https://jira.exemple.com',
+    /* Pièces jointes : pas de fichiers servis hors WebView2, sauf si un essai fournit une adresse
+       (window.__shimAttachUrl) où poser les vignettes. */
+    attachmentsDir: 'C:\\Users\\moi\\AppData\\Local\\Organizator\\attachments',
+    attachmentsUrl: ''
   };
+
+  /* Pièce jointe simulée : le shim ne copie rien, il rend ce que l'hôte aurait rendu. */
+  function shimAttachment(taskId, name, size) {
+    var clean = String(name || 'fichier').replace(/[\\\/:*?"<>|]/g, '_');
+    return {
+      name: clean, size: size || 0,
+      path: SHIM_ENV.attachmentsDir + '\\' + taskId + '\\' + clean,
+      kind: /\.(png|jpe?g|gif|webp|bmp)$/i.test(clean) ? 'image' : 'file'
+    };
+  }
 
   /* PRs simulées de « Mes PRs Bitbucket » : deux dépôts pour un même ticket, une PR sans ticket,
      un brouillon. window.__fakePullRequests remplace la réponse entière pour les essais. */
@@ -172,6 +197,176 @@
     + '<blockquote><p>Une citation, pour l’allure.</p></blockquote>'
     + '<pre><code class="language-js">function lire() { return "ici"; }\n</code></pre>';
 
+  /* Revue simulée : un fichier nommé review-… s'ouvre sur la vue revue, comme avec l'hôte. */
+  function shimReview() {
+    function finding(id, severity, title, category, where, tags, body) {
+      return { id: id, severity: severity, title: title, category: category, where: where, tags: tags,
+        html: '<p><strong>Le problème en clair</strong></p><p>' + body + '</p><pre><code>var x = lire();\n</code></pre>' };
+    }
+    return {
+      verdict: '🔴 Ne pas merger en l’état', level: 'blocker',
+      findings: [
+        finding('C1', 'blocker', 'L’import lit mal les en-têtes de canal : les `bookmarks` disparaissent', 'correction',
+          '`dm-standalone` · `Cache/XTF/PacketXTFChannel.cs:35`', ['#756'], 'Un champ inséré décale toute la structure.'),
+        finding('C2', 'major', 'Aucun test ajouté', 'tests', '`DM.Cache.Tests/ChannelTests.cs`', [], 'Un test aurait bloqué C1.'),
+        finding('C3', 'minor', 'La détection « ground » diffère selon l’endroit du code', 'correction',
+          '`XTFCache.cs:1129`', [], 'Trois tests différents pour la même question.'),
+        finding('C4', 'info', 'Historique de branche difficile à lire', 'historique', '', [], 'Un commit « s ».')
+      ]
+    };
+  }
+
+  /* Article du jour et veille IA simulés (`kind` : 'daily' par défaut, ou 'ai') : `peek` rend ce qui
+     est gardé, `today` en fabrique un s'il manque celui du jour, `another` en fabrique un autre.
+     window.__fakeArticleStore (veille IA : __fakeArticleStoreAi) impose l'état gardé ;
+     window.__fakeArticle (__fakeArticleAi) impose la fiche fabriquée, ou 'error' fait échouer la recherche. */
+  function shimArticleAi(p) { return !!p && p.kind === 'ai'; }
+
+  function shimArticleStore(p) {
+    var key = shimArticleAi(p) ? '__fakeArticleStoreAi' : '__fakeArticleStore';
+    if (!window[key]) window[key] = { version: 1, current: null, history: [] };
+    return window[key];
+  }
+
+  function shimToday() {
+    var d = new Date();
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+  }
+
+  function shimArticle(p) {
+    var store = shimArticleStore(p);
+    var ai = shimArticleAi(p);
+    var fake = ai ? window.__fakeArticleAi : window.__fakeArticle;
+    (window.__articleCalls = window.__articleCalls || []).push(p);
+    if (p.mode === 'peek' || (p.mode !== 'another' && store.current && store.current.day === shimToday())) {
+      return Object.assign({}, store, { busy: false });
+    }
+    if (fake === 'error') throw new Error('Claude Code n’est pas connecté : ouvrez un terminal, lancez l’agent et connectez-vous.');
+    var n = (store.history.length + (store.current ? 1 : 0)) + 1;
+    var card = Object.assign(ai ? {
+      title: 'What the new coding agents change for code review (' + n + ')',
+      url: 'https://exemple.org/ia/' + n, source: 'exemple.org', author: 'Grace Hopper', published: shimToday(), language: 'en',
+      readingMinutes: 6, topic: 'Agents de code en revue de PR',
+      summary: 'Résumé simulé : un laboratoire publie un agent qui relit les pull requests de bout en bout ; premiers retours et limites.',
+      keyPoints: ['L’agent lit le ticket avant le diff.', 'Les faux positifs baissent de moitié.', 'La décision reste humaine.'],
+      why: 'Vous relisez des PRs avec des agents : voici ce que la nouvelle génération change.'
+    } : {
+      title: 'Migrate from Newtonsoft.Json to System.Text.Json in a large codebase (' + n + ')',
+      url: 'https://exemple.org/articles/' + n, source: 'exemple.org', author: 'Ada Lovelace', published: '2026-05-30', language: 'en',
+      readingMinutes: 8, topic: 'Newtonsoft Licence Risk',
+      summary: 'Résumé simulé : comment sortir de Newtonsoft.Json sans casser le contrat JSON, en six étapes et un déploiement progressif.',
+      keyPoints: ['Capturer des échantillons JSON avant de migrer.', 'Migrer une assembly à la fois.', 'Mutualiser les JsonSerializerOptions.'],
+      why: 'Vous évaluez le risque lié à Newtonsoft.Json : voici un plan de sortie réaliste.'
+    }, fake || {}, { day: shimToday(), fetchedAt: Date.now(), model: 'sonnet', ms: 32000, seenAt: 0 });
+    if (store.current) store.history.unshift(store.current);
+    store.current = card;
+    return Object.assign({}, store, { busy: false });
+  }
+
+  /* Discussions sur les constats, simulées : une par rapport + constat. `askFinding` pousse
+     l'avancement (`findingChat`) puis rend la discussion ; window.__fakeFindingAnswer impose la
+     réponse (ou 'error'), window.__fakeFindingDelay sa durée (1,2 s) ; chaque question est notée
+     dans window.__findingAsks. */
+  var shimChats = {};
+  var shimRuns = {};
+
+  function shimChatKey(report, finding) { return String(report || '').toLowerCase() + '|' + finding; }
+
+  function shimEscape(s) {
+    return String(s || '').replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
+  }
+
+  function shimAskFinding(p) {
+    var f = p.finding || {};
+    var key = shimChatKey(p.report, f.key);
+    (window.__findingAsks = window.__findingAsks || []).push(p);
+    if (shimRuns[key]) throw new Error('L’agent répond déjà sur ce constat.');
+    var startedAt = Date.now();
+    var delay = window.__fakeFindingDelay || 1200;
+    var run = shimRuns[key] = { stopped: false };
+    function progress(phase, text, steps) {
+      emit('findingChat', { report: p.report, finding: f.key, phase: phase, q: p.question, text: text || '',
+        html: text ? '<p>' + shimEscape(text) + '</p>' : '', steps: steps || [], startedAt: startedAt });
+    }
+    progress('thinking');
+    setTimeout(function () { if (!run.stopped) progress('tool', '', ['Lit Calc.cs']); }, delay * 0.25);
+    setTimeout(function () { if (!run.stopped) progress('writing', 'Parce que la division…', ['Lit Calc.cs']); }, delay * 0.5);
+    return new Promise(function (resolve) {
+      var timer = setInterval(function () {
+        if (!run.stopped && Date.now() - startedAt < delay) return;
+        clearInterval(timer);
+        delete shimRuns[key];
+        var chat = shimChats[key] || { report: p.report, finding: f.key, created: Date.now(), turns: [],
+          sessionId: '', source: '', cwd: p.cwd, model: p.model, effort: p.effort };
+        var fail = run.stopped ? 'Arrêtée à votre demande.' : (window.__fakeFindingAnswer === 'error' ? 'Claude Code n’est pas connecté.' : '');
+        var answer = fail ? '' : (window.__fakeFindingAnswer || 'Parce que **la division par zéro** fait planter l’appelant : `Calc.cs:5`.');
+        if (!fail && !chat.sessionId) { chat.sessionId = uuid(); chat.source = p.source || ''; }
+        chat.findingId = f.id; chat.title = f.title; chat.severity = f.severity; chat.updated = Date.now();
+        chat.turns = chat.turns.concat([{ q: p.question, a: answer, html: answer ? '<p>' + shimEscape(answer) + '</p>' : '',
+          at: Date.now(), ms: Date.now() - startedAt, cost: 0, error: fail }]);
+        shimChats[key] = chat;
+        progress('done');
+        resolve(JSON.parse(JSON.stringify(chat)));
+      }, 50);
+    });
+  }
+
+  /* Whisper simulé : modèles, téléchargement et transcription, avec l'avancement (événement `whisper`).
+     window.__fakeWhisper impose l'état des modèles, window.__fakeTranscript le texte rendu ('error' fait
+     échouer), window.__fakeTranscribeDelay la durée (600 ms) ; chaque appel est noté dans window.__transcribes. */
+  var shimWhisperModels = [
+    { id: 'base', label: 'Base', size: 147951465, note: 'Le plus rapide (moins d’une seconde pour une dictée), mais approximatif en français.', downloaded: false },
+    { id: 'small', label: 'Small', size: 487601967, note: 'Le bon compromis : quelques secondes pour une dictée, un enregistrement transcrit environ six fois plus vite que sa durée.', downloaded: true },
+    { id: 'large-v3-turbo-q5_0', label: 'Large v3 Turbo', size: 574041195, note: 'Le plus précis (noms propres, termes techniques), mais cinq à six fois plus lent que Small sur le processeur.', downloaded: false }
+  ];
+  var shimJobs = {};
+
+  function shimWhisperStatus() {
+    if (window.__fakeWhisper) return window.__fakeWhisper;
+    return {
+      dir: 'C:\\Users\\moi\\AppData\\Local\\Organizator\\whisper', loaded: null,
+      models: shimWhisperModels.map(function (m) { return Object.assign({ downloading: false, received: 0, total: 0 }, m); }),
+      extensions: ['mp3', 'wav', 'm4a', 'aac', 'wma', 'ogg', 'oga', 'opus', 'flac', 'webm', 'mp4', 'm4v', 'mov', '3gp', 'amr', 'mkv']
+    };
+  }
+
+  function shimDownloadWhisper(p) {
+    var m = shimWhisperModels.filter(function (x) { return x.id === p.model; })[0];
+    if (!m) return Promise.reject(new Error('Modèle Whisper inconnu : ' + p.model));
+    return new Promise(function (resolve) {
+      [0.25, 0.5, 0.75].forEach(function (f, i) {
+        setTimeout(function () { emit('whisper', { phase: 'download', model: m.id, received: Math.round(m.size * f), total: m.size }); }, 150 * (i + 1));
+      });
+      setTimeout(function () {
+        m.downloaded = true;
+        emit('whisper', { phase: 'downloaded', model: m.id });
+        resolve(shimWhisperStatus());
+      }, 600);
+    });
+  }
+
+  function shimTranscribe(p) {
+    (window.__transcribes = window.__transcribes || []).push({
+      job: p.job, path: p.path || '', data: p.data ? String(p.data).length : 0, model: p.model, language: p.language
+    });
+    var delay = window.__fakeTranscribeDelay == null ? 600 : window.__fakeTranscribeDelay;
+    var run = shimJobs[p.job] = { stopped: false };
+    return new Promise(function (resolve, reject) {
+      var steps = [{ phase: 'decode' }, { phase: 'load' }, { phase: 'transcribe', percent: 0 }, { phase: 'transcribe', percent: 50 }];
+      steps.forEach(function (s, i) {
+        setTimeout(function () { if (!run.stopped) emit('whisper', Object.assign({ job: p.job }, s)); }, delay * i / steps.length);
+      });
+      setTimeout(function () {
+        delete shimJobs[p.job];
+        if (run.stopped) { reject(new Error('Transcription interrompue.')); return; }
+        if (window.__fakeTranscript === 'error') { reject(new Error('Windows ne sait pas lire cet enregistrement.')); return; }
+        var text = window.__fakeTranscript != null ? String(window.__fakeTranscript)
+          : (p.path ? 'Compte rendu de démonstration : le ticket est presque terminé, il reste les tests.' : 'texte dicté de démonstration');
+        resolve({ job: p.job, text: text, language: p.language === 'auto' ? 'fr' : p.language, duration: p.path ? 102.9 : 4.2, ms: delay, model: p.model });
+      }, delay);
+    });
+  }
+
   function shimCall(type, payload) {
     payload = payload || {};
     return new Promise(function (resolve, reject) {
@@ -185,7 +380,7 @@
     var settings, data;
     switch (type) {
       case 'getState':
-        data = lsRead(LS_DATA, { tasks: [], types: [], convos: [], remarks: [], lastType: null });
+        data = lsRead(LS_DATA, { tasks: [], types: [], convos: [], remarks: [], notifications: [], lastType: null });
         settings = lsRead(LS_SETTINGS, {});
         return {
           data: {
@@ -193,10 +388,15 @@
             types: Array.isArray(data.types) ? data.types : [],
             convos: Array.isArray(data.convos) ? data.convos : [],
             remarks: Array.isArray(data.remarks) ? data.remarks : [],
+            notifications: Array.isArray(data.notifications) ? data.notifications : [],
             lastType: data.lastType || null
           },
           settings: settings,
-          env: Object.assign({}, SHIM_ENV, { defaultCwd: settings.defaultCwd || SHIM_ENV.defaultCwd })
+          env: Object.assign({}, SHIM_ENV, {
+            defaultCwd: settings.defaultCwd || SHIM_ENV.defaultCwd,
+            attachmentsUrl: window.__shimAttachUrl || '',
+            whisper: shimWhisperStatus()
+          })
         };
 
       case 'saveData':
@@ -206,6 +406,7 @@
           types: p.types || [],
           convos: p.convos || [],
           remarks: p.remarks || [],
+          notifications: p.notifications || [],
           lastType: p.lastType || null
         });
         return {};
@@ -213,10 +414,14 @@
       case 'saveSettings':
         lsWrite(LS_SETTINGS, {
           topCount: p.topCount, showBands: p.showBands, compact: p.compact,
-          defaultCwd: p.defaultCwd, terminal: p.terminal,
+          defaultCwd: p.defaultCwd, terminal: p.terminal, termClick: p.termClick,
           provider: p.provider, claudeModel: p.claudeModel, copilotModel: p.copilotModel,
           claudeEffort: p.claudeEffort, copilotEffort: p.copilotEffort, repoDir: p.repoDir, bitbucketUrl: p.bitbucketUrl,
-          draftProvider: p.draftProvider, draftModel: p.draftModel, draftEffort: p.draftEffort
+          draftProvider: p.draftProvider, draftModel: p.draftModel, draftEffort: p.draftEffort,
+          articleEnabled: p.articleEnabled, articleTopics: p.articleTopics, articleAiEnabled: p.articleAiEnabled,
+          articleModel: p.articleModel, articleEffort: p.articleEffort,
+          windowsNotifications: p.windowsNotifications,
+          whisperEnabled: p.whisperEnabled, whisperAuto: p.whisperAuto, whisperModel: p.whisperModel, whisperLanguage: p.whisperLanguage
         });
         return {};
 
@@ -225,10 +430,16 @@
         return { path: v && v.trim() ? v.trim() : null };
       }
 
-      case 'startSession':
+      case 'startSession': {
+        /* Chaque lancement est noté dans window.__sessions ; window.__fakeStartError(payload), s'il
+           rend un message, fait échouer celui-là (lancements groupés, échec partiel). */
         console.log('[shim] startSession', p);
         window.__lastSession = { type: type, payload: p };
+        (window.__sessions = window.__sessions || []).push({ payload: p, at: Date.now() });
+        var failure = typeof window.__fakeStartError === 'function' ? window.__fakeStartError(p) : '';
+        if (failure) throw new Error(String(failure));
         return { sessionId: uuid(), cwd: p.cwd, created: Date.now() };
+      }
 
       case 'resumeSession':
         console.log('[shim] resumeSession', p);
@@ -310,8 +521,14 @@
         ] } };
 
       case 'notify':
+        /* Chaque appel est noté dans window.__notifies (notifications Windows demandées). */
         console.log('[shim] notify', p);
-        return { flashed: false };
+        (window.__notifies = window.__notifies || []).push(p);
+        return { flashed: false, shown: 0 };
+
+      case 'badge':
+        window.__badge = p.count;
+        return {};
 
       case 'getUsage':
         if (window.__fakeUsage) return window.__fakeUsage;
@@ -343,6 +560,15 @@
         };
       }
 
+      case 'getArticle':
+        return shimArticle(p);
+
+      case 'articleSeen': {
+        var seen = shimArticleStore(p);
+        if (seen.current && seen.current.url === p.url && !seen.current.seenAt) seen.current.seenAt = Date.now();
+        return Object.assign({}, seen, { busy: false });
+      }
+
       case 'openPath':
         console.log('[shim] openPath', p.path, p.editor || '');
         return { editor: p.editor === 'vscode' ? 'vscode' : (p.editor === 'default' ? 'default' : 'explorer') };
@@ -352,21 +578,101 @@
         return { opened: true };
 
       case 'readArtifact': {
-        /* Rapport simulé : window.__fakeArtifact le remplace pour les essais (mêmes champs). */
+        /* Rapport simulé : window.__fakeArtifacts[chemin], puis window.__fakeArtifact, le remplacent
+           pour les essais (mêmes champs) ; chaque lecture est notée dans window.__reads. */
         console.log('[shim] readArtifact', p.path, p.stamp || '');
-        if (window.__fakeArtifact) {
-          if (p.stamp && p.stamp === window.__fakeArtifact.stamp) return { changed: false, stamp: p.stamp };
-          return Object.assign({ changed: true }, window.__fakeArtifact);
+        (window.__reads = window.__reads || []).push({ path: p.path, stamp: p.stamp || '' });
+        var fakeArt = (window.__fakeArtifacts && window.__fakeArtifacts[p.path]) || window.__fakeArtifact;
+        if (fakeArt) {
+          if (p.stamp && p.stamp === fakeArt.stamp) return { changed: false, stamp: p.stamp };
+          return Object.assign({ changed: true }, fakeArt);
         }
         if (p.stamp === 'shim-1') return { changed: false, stamp: 'shim-1' };
         var rel = String(p.path || 'rapport.md').replace(/\//g, '\\');
+        var isReview = /(^|[\\\/])(review|revue)[-_ .][^\\\/]*$/i.test(rel);
         return {
           changed: true, kind: 'markdown',
           full: 'C:\\Users\\moi\\Documents\\' + rel, root: 'C:\\Users\\moi\\Documents',
           url: 'https://report.organizator/' + String(p.path || 'rapport.md'),
-          title: 'Rapport de démonstration', stamp: 'shim-1', size: 2480, modified: Date.now() - 90000,
-          html: SHIM_REPORT_HTML
+          title: isReview ? 'Revue UDM-1673 — démonstration' : 'Rapport de démonstration',
+          stamp: 'shim-1', size: 2480, modified: Date.now() - 90000,
+          html: SHIM_REPORT_HTML, review: isReview ? shimReview() : null
         };
+      }
+
+      case 'getFindingChats': {
+        var rep = String(p.report || '').toLowerCase() + '|';
+        return {
+          report: p.report,
+          chats: Object.keys(shimChats).filter(function (k) { return k.indexOf(rep) === 0; })
+            .map(function (k) { return JSON.parse(JSON.stringify(shimChats[k])); }),
+          running: []
+        };
+      }
+
+      case 'askFinding':
+        return shimAskFinding(p);
+
+      case 'stopFinding': {
+        var run = shimRuns[shimChatKey(p.report, p.finding)];
+        if (run) run.stopped = true;
+        return { stopped: !!run };
+      }
+
+      case 'forgetFinding': {
+        var k = shimChatKey(p.report, p.finding);
+        var had = !!shimChats[k];
+        delete shimChats[k];
+        return { removed: had };
+      }
+
+      case 'addAttachments': {
+        /* Sélecteur : un fichier de démonstration ; dépôt : les noms que la page a joints (`names`). */
+        console.log('[shim] addAttachments', p.taskId, p.pick ? 'sélecteur' : (p.names || []).join(', '));
+        window.__lastAttach = p;
+        var names = p.pick ? ['cahier-des-charges.pdf'] : (p.names || []);
+        return {
+          attachments: names.map(function (n) { return shimAttachment(p.taskId, n, 48213); }),
+          skipped: [], unresolved: []
+        };
+      }
+
+      case 'pasteAttachment':
+        console.log('[shim] pasteAttachment', p.taskId, p.name, String(p.data || '').length);
+        return { attachments: [shimAttachment(p.taskId, p.name, Math.round(String(p.data || '').length * 0.75))], skipped: [] };
+
+      case 'writeAttachmentText':
+        return shimAttachment(p.taskId, 'texte-' + p.id + '.txt', String(p.text || '').length);
+
+      case 'removeAttachment':
+      case 'removeAttachments':
+        console.log('[shim] ' + type, p.path || p.taskId);
+        return { removed: true };
+
+      case 'whisperStatus':
+        return shimWhisperStatus();
+
+      case 'whisperWarm':
+        window.__whisperWarm = (window.__whisperWarm || 0) + 1;
+        return {};
+
+      case 'whisperDownload':
+        return shimDownloadWhisper(p);
+
+      case 'whisperRemove': {
+        var wm = shimWhisperModels.filter(function (x) { return x.id === p.model; })[0];
+        var present = !!(wm && wm.downloaded);
+        if (wm) wm.downloaded = false;
+        return { removed: present };
+      }
+
+      case 'transcribe':
+        return shimTranscribe(p);
+
+      case 'cancelTranscribe': {
+        var tj = shimJobs[p.job];
+        if (tj) tj.stopped = true;
+        return { cancelled: !!tj };
       }
 
       case 'log':

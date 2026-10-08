@@ -32,6 +32,24 @@
     <PackageReference Include="System.Management" Version="8.0.0" />
     <!-- Rendu HTML des rapports Markdown produits par les agents, lus dans la fenetre (ArtifactReader). -->
     <PackageReference Include="Markdig" Version="1.3.2" />
+    <!-- Dictee et transcription des enregistrements joints : Whisper (whisper.cpp) en local, sur le CPU.
+         1.8.1 plutot que 1.9 : celle-ci tire Microsoft.Extensions.AI et System.Text.Json 10 dans l'appli. -->
+    <PackageReference Include="Whisper.net" Version="1.8.1" />
+    <!-- Les DLL natives du paquet sont copiees par ses cibles a cote de l'exe (runtimes\<rid>\), ce que la
+         publication en fichier unique laisserait hors de l'exe : on les embarque (win-x64 seulement) et
+         WhisperTranscriber les extrait dans le dossier de donnees. -->
+    <PackageReference Include="Whisper.net.Runtime" Version="1.8.1" ExcludeAssets="build;buildTransitive" GeneratePathProperty="true" />
+    <!-- Decodage des enregistrements (mp3, m4a, wav, wma, ogg...) par Media Foundation, reechantillonnage a 16 kHz. -->
+    <PackageReference Include="NAudio.Core" Version="2.2.1" />
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="$(PkgWhisper_net_Runtime)\build\win-x64\*.dll">
+      <LogicalName>whisper/win-x64/%(Filename)%(Extension)</LogicalName>
+      <WithCulture>false</WithCulture>
+      <Type>Non-Resx</Type>
+    </EmbeddedResource>
   </ItemGroup>
 
   <!-- Les fichiers de wwwroot/ sont embarques avec un LogicalName qui conserve

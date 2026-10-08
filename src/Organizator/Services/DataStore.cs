@@ -79,6 +79,7 @@ public sealed class DataStore
             ["types"] = CloneArray(source, "types"),
             ["convos"] = CloneArray(source, "convos"),
             ["remarks"] = CloneArray(source, "remarks"),
+            ["notifications"] = CloneArray(source, "notifications"),
         };
 
         var lastType = source?["lastType"];

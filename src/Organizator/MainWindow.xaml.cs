@@ -169,6 +169,7 @@ public partial class MainWindow : Window
             core.NavigationStarting += OnNavigationStarting;
             core.FrameNavigationStarting += OnFrameNavigationStarting;
             core.ProcessFailed += OnProcessFailed;
+            core.PermissionRequested += OnPermissionRequested;
 
             core.SetVirtualHostNameToFolderMapping(
                 VirtualHost,
@@ -178,6 +179,12 @@ public partial class MainWindow : Window
             _scanner = new AgentProcessScanner(_log, Dispatcher);
             _perf = new PerfMonitor(_log, Dispatcher);
             _bridge = new BridgeHost(core, this, _log, _store, _sessions, _copilot, _launcher, _scanner, _perf);
+
+            // Pieces jointes des taches : la page en affiche les images en vignette.
+            core.SetVirtualHostNameToFolderMapping(
+                TaskAttachments.Host,
+                _bridge.AttachmentsRoot,
+                CoreWebView2HostResourceAccessKind.Allow);
 
             _claudeWatcher = new SessionsWatcher(_sessions.ProjectsRoot, "*.jsonl", "Claude Code", Dispatcher, _log);
             _claudeWatcher.Changed += (_, _) => _bridge?.PostEvent("sessionsChanged");
@@ -252,6 +259,21 @@ public partial class MainWindow : Window
     {
         e.Handled = true;
         OpenExternally(e.Uri);
+    }
+
+    /// <summary>
+    /// La dictee enregistre le micro depuis la page : accorde d'office a la page de l'application, et
+    /// a elle seule (un rapport affiche dans un cadre n'y a pas droit). Le reste suit le comportement
+    /// par defaut de WebView2.
+    /// </summary>
+    private void OnPermissionRequested(object? sender, CoreWebView2PermissionRequestedEventArgs e)
+    {
+        if (e.PermissionKind == CoreWebView2PermissionKind.Microphone
+            && Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri)
+            && string.Equals(uri.Host, VirtualHost, StringComparison.OrdinalIgnoreCase))
+        {
+            e.State = CoreWebView2PermissionState.Allow;
+        }
     }
 
     private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs e)

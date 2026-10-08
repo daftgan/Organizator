@@ -5,7 +5,8 @@ using System.Text.RegularExpressions;
 
 namespace Organizator.Services;
 
-public sealed record StartedSession(string SessionId, string Cwd, long Created);
+/// <param name="TerminalProcessId">PID du <c>powershell.exe</c> ouvert ; null sous <c>wt.exe</c>.</param>
+public sealed record StartedSession(string SessionId, string Cwd, long Created, int? TerminalProcessId = null);
 
 /// <summary>Executable et arguments fixes d'une CLI, par exemple <c>gh.exe copilot --</c>.</summary>
 public sealed record CommandLine(string FileName, IReadOnlyList<string> Arguments);
@@ -102,9 +103,9 @@ public sealed class AgentLauncher
         var directory = RequireDirectory(cwd);
         var sessionId = Guid.NewGuid().ToString("D");
         var script = WriteScript(provider, sessionId, directory, title, context, prompt, model, effort, resume: false);
-        Launch(script, directory, terminal);
+        var processId = Launch(script, directory, terminal);
         _log.Info($"Session {provider} demarree : {sessionId} dans {directory}{Describe(model, effort, prompt)}");
-        return new StartedSession(sessionId, directory, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        return new StartedSession(sessionId, directory, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), processId);
     }
 
     /// <returns>PID du <c>powershell.exe</c> ouvert, pour retrouver sa fenetre ; null sous <c>wt.exe</c>, qui ne fait que relayer.</returns>

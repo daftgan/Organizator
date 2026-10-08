@@ -18,7 +18,7 @@ public sealed class AgentProcessScanner : IDisposable
 
     // Les installations npm lancent node.exe (ou bun.exe) avec le script de la CLI en premier argument.
     private const string Query =
-        "SELECT ProcessId, Name, CommandLine FROM Win32_Process "
+        "SELECT ProcessId, Name, CommandLine, CreationDate FROM Win32_Process "
         + "WHERE Name = 'claude.exe' OR Name = 'copilot.exe' OR Name = 'node.exe' OR Name = 'bun.exe'";
 
     private static readonly Regex SessionArg = new(
@@ -28,7 +28,7 @@ public sealed class AgentProcessScanner : IDisposable
     private readonly HostLog _log;
     private readonly Dispatcher? _dispatcher;
     private readonly Timer _timer;
-    private Dictionary<string, int> _alive = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, int[]> _alive = new(StringComparer.OrdinalIgnoreCase);
     private volatile bool _ready;
     private int _failures;
     private int _scanning;
@@ -61,26 +61,27 @@ public sealed class AgentProcessScanner : IDisposable
     }
 
     /// <summary>
-    /// Processus d'agent qui porte cette session, <c>null</c> tant qu'aucun balayage ne l'a vu.
-    /// Sert a retrouver la fenetre de console deja ouverte au lieu d'en ouvrir une seconde.
+    /// Processus d'agent qui portent cette session, le plus recent d'abord ; vide tant qu'aucun
+    /// balayage ne l'a vue. Sert a retrouver la fenetre de console deja ouverte au lieu d'en ouvrir
+    /// une seconde. Il y en a plusieurs quand la session a ete reprise alors qu'elle tournait.
     /// </summary>
-    public int? PidFor(string sessionId)
+    public IReadOnlyList<int> PidsFor(string sessionId)
     {
         if (!_ready || !Guid.TryParse(sessionId, out var guid))
         {
-            return null;
+            return Array.Empty<int>();
         }
 
-        return Volatile.Read(ref _alive).TryGetValue(guid.ToString("D"), out var pid) && pid > 0 ? pid : null;
+        return Volatile.Read(ref _alive).TryGetValue(guid.ToString("D"), out var pids) ? pids : Array.Empty<int>();
     }
 
     /// <summary>
-    /// Sessions portees par les processus d'agent vivants, chacune avec le processus qui la porte.
-    /// Peut lever si WMI est indisponible.
+    /// Sessions portees par les processus d'agent vivants, chacune avec les processus qui la portent,
+    /// le plus recent d'abord. Peut lever si WMI est indisponible.
     /// </summary>
-    public static Dictionary<string, int> ScanNow()
+    public static Dictionary<string, int[]> ScanNow()
     {
-        var found = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var found = new Dictionary<string, List<(int Pid, string Created)>>(StringComparer.OrdinalIgnoreCase);
         using var searcher = new ManagementObjectSearcher(Query);
         using var results = searcher.Get();
         foreach (var item in results)
@@ -93,17 +94,44 @@ public sealed class AgentProcessScanner : IDisposable
                 }
 
                 var pid = item["ProcessId"] is { } value ? Convert.ToInt32(value) : 0;
+                if (pid <= 0)
+                {
+                    continue;
+                }
+
+                // Date WMI (aaaammjjhhmmss.ffffff+fuseau) : son ordre alphabetique est l'ordre de creation.
+                var created = item["CreationDate"] as string ?? "";
+                // `--resume <id> --fork-session` travaille sur une copie (discussion sur un constat) :
+                // la session <id> n'est pas rouverte, seule compte celle de --session-id.
+                var forked = commandLine.Contains("--fork-session", StringComparison.Ordinal);
                 foreach (Match match in SessionArg.Matches(commandLine))
                 {
+                    if (forked && match.Value.StartsWith("--resume", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
                     if (Guid.TryParse(match.Groups[1].Value, out var guid))
                     {
-                        found[guid.ToString("D")] = pid;
+                        var key = guid.ToString("D");
+                        if (!found.TryGetValue(key, out var pids))
+                        {
+                            found[key] = pids = new List<(int, string)>();
+                        }
+
+                        if (!pids.Exists(p => p.Pid == pid))
+                        {
+                            pids.Add((pid, created));
+                        }
                     }
                 }
             }
         }
 
-        return found;
+        return found.ToDictionary(
+            p => p.Key,
+            p => p.Value.OrderByDescending(x => x.Created, StringComparer.Ordinal).Select(x => x.Pid).ToArray(),
+            StringComparer.OrdinalIgnoreCase);
     }
 
     private void Scan()

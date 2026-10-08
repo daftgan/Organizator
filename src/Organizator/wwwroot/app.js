@@ -23,12 +23,25 @@
 
   var DEFAULTS = {
     topCount: 3, showBands: true, compact: false, defaultCwd: '', terminal: 'powershell',
+    /* Clic sur l'icône de console d'une carte : 'panel' ouvre le panneau, 'terminal' ramène la
+       fenêtre de la conversation quand la tâche n'en a qu'une (voir clickTerm). */
+    termClick: 'panel',
     provider: 'claude', claudeModel: '', copilotModel: '', claudeEffort: '', copilotEffort: '',
     repoDir: '',
     /* Serveur Bitbucket de « Mes PRs Bitbucket » ; vide = celui que l'hôte détecte. */
     bitbucketUrl: '',
     /* Rédaction assistée : un modèle rapide suffit pour quelques phrases. */
-    draftProvider: 'claude', draftModel: 'haiku', draftEffort: ''
+    draftProvider: 'claude', draftModel: 'haiku', draftEffort: '',
+    /* Article du jour : un article du web pour les sujets du moment, cherché et résumé par Claude Code.
+       Chercher, lire et résumer demande mieux qu'un modèle rapide. */
+    articleEnabled: true, articleTopics: '', articleModel: 'sonnet', articleEffort: 'medium',
+    /* Veille IA : un second article par jour, sur l'actualité récente de l'IA, même modèle et même effort. */
+    articleAiEnabled: true,
+    /* Notifications Windows quand une réponse arrive alors qu'Organizator est en arrière-plan. */
+    windowsNotifications: true,
+    /* Dictée et transcription des enregistrements joints, par Whisper sur le poste. Small : quelques
+       secondes pour une dictée sur un processeur récent ; voir « Dictée et transcription ». */
+    whisperEnabled: true, whisperAuto: true, whisperModel: 'small', whisperLanguage: 'fr'
   };
 
   /* Agents disponibles. `short` sert dans les listes, `example` dans le champ de modèle libre. */
@@ -69,6 +82,11 @@
      avec ce contexte en prompt système et les remarques numérotées comme premier message. */
   var FEEDBACK_ID = '__feedback__';
   var FEEDBACK_TASK = { id: FEEDBACK_ID, type: '', text: 'Remarques sur Organizator', done: false, doing: false, created: 0 };
+  /* Article du jour et veille IA : leur panneau s'ouvre à la place de celui d'une tâche
+     (S.ui.termTaskId), sans tâche ni conversation derrière — renderPanel les reconnaît à ces
+     identifiants (ARTICLE_FEEDS). */
+  var ARTICLE_ID = '__article__';
+  var ARTICLE_AI_ID = '__article_ai__';
   var FEEDBACK_CONTEXT = "Tu travailles sur le code source d'Organizator, l'application depuis laquelle l'utilisateur t'envoie ses remarques ; le dossier courant est son dépôt.\n"
     + 'Avant de modifier quoi que ce soit, lis README.md et docs/ARCHITECTURE.md : structure, contrat JS ↔ hôte, construction (MSBuild 18 via Organizator.sln, jamais un .csproj seul) et publication (publish.ps1).\n'
     + "L'application tourne probablement pendant ton travail (publish\\Organizator.exe) : ne la ferme pas sans prévenir l'utilisateur, et préserve ses données dans %LOCALAPPDATA%\\Organizator.\n"
@@ -85,11 +103,22 @@
     toBottom: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v10M7.5 9.5L12 14l4.5-4.5M5 19h14"></path></svg>',
     terminal: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l3 3-3 3M12.5 15h5"></path><rect x="2.5" y="4" width="19" height="16" rx="4"></rect></svg>',
     artifacts: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h8l4 4V20.5H6z"></path><path d="M14 3.5v4h4M9 12h6M9 16h6"></path></svg>',
+    /* Résultat d'une revue de code : une planchette cochée. */
+    review: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4.5H7a2 2 0 0 0-2 2V19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6.5a2 2 0 0 0-2-2h-2"></path><rect x="9" y="3" width="6" height="3.5" rx="1"></rect><path d="M8.5 12.5l1.6 1.6 2.9-2.9M8.5 17.5h7"></path></svg>',
     eye: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"></path><circle cx="12" cy="12" r="3"></circle></svg>',
     pullRequest: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2.4"></circle><circle cx="6" cy="19" r="2.4"></circle><circle cx="18" cy="19" r="2.4"></circle><path d="M6 7.5v9M18 16.5V11a3 3 0 0 0-3-3h-4.5M13 5.5L10.5 8 13 10.5"></path></svg>',
     /* Sous-tâches : le crochet « ↳ » de l'avancement, et le même avec un plus pour en ajouter une. */
     subtask: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4v9a3 3 0 0 0 3 3h11"></path><path d="M15 12l4 4-4 4"></path></svg>',
-    subtaskAdd: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v8a3 3 0 0 0 3 3h5"></path><path d="M17 11v9M12.5 15.5h9"></path></svg>'
+    subtaskAdd: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v8a3 3 0 0 0 3 3h5"></path><path d="M17 11v9M12.5 15.5h9"></path></svg>',
+    /* Chevron des groupes repliables : pointe vers le bas déplié, vers la droite replié (CSS). */
+    caret: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>',
+    /* Pièces jointes : trombone (fichier), image, et bloc de texte. */
+    clip: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"></path></svg>',
+    image: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"></rect><circle cx="9" cy="10" r="1.8"></circle><path d="M21 16l-5-5-8 8"></path></svg>',
+    note: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6h14M5 11h14M5 16h9"></path></svg>',
+    talk: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M8 9h8M8 13h5"></path></svg>',
+    /* Dictée et transcription des enregistrements (Whisper). */
+    mic: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5"></path></svg>'
   };
 
   /* Un artefact « rapport » est un livrable qui se lit tel quel : c'est lui qu'on met en avant.
@@ -106,10 +135,12 @@
   /* ══ État ═════════════════════════════════════════════════════════════ */
 
   var S = {
-    data: { tasks: [], types: [], convos: [], remarks: [], lastType: null },
+    data: { tasks: [], types: [], convos: [], remarks: [], notifications: [], lastType: null },
     settings: Object.assign({}, DEFAULTS),
     env: { version: '?', hasClaude: true, hasCopilot: false, hasWt: false, defaultCwd: '', dataDir: '', userProfile: '', repoDir: '',
-      bitbucketUrl: '', bitbucketSource: '', bitbucketToken: false, jiraUrl: '', models: null, efforts: null },
+      bitbucketUrl: '', bitbucketSource: '', bitbucketToken: false, jiraUrl: '', attachmentsDir: '', attachmentsUrl: '', models: null, efforts: null,
+      /* Modèles Whisper : { dir, models: [{ id, label, size, note, downloaded, downloading, received, total }], loaded, extensions } */
+      whisper: null },
     ui: {
       search: '',
       hidden: [], filtersOpen: false,
@@ -118,6 +149,14 @@
       composerOpen: false, composerText: '', composerType: null, insertAt: 'top',
       /* Sous-tâche en cours de création : identifiant de la tâche parente, null pour une tâche de premier niveau. */
       composerParent: null,
+      /* Tâche en cours de création : son identifiant est tiré à l'ouverture, pour que ses pièces
+         jointes soient copiées là où elles resteront ; abandonnée, son dossier est supprimé. */
+      composerId: null, composerAttachments: [],
+      /* Copies de pièces jointes en cours, par tâche (ou tâche en création). */
+      attachBusy: {},
+      /* Transcriptions en cours, par pièce jointe audio : { owner, job, phase, percent, received, total } ;
+         modèles Whisper en téléchargement depuis les Réglages : { received, total }. */
+      transcribing: {}, whisperDl: {},
       catFormOpen: false, catName: '', catPalette: 'terracotta',
       catsOpen: false, catKeywordDraft: {}, catKeywordEdit: '',
       settingsOpen: false, settingsTab: 'display',
@@ -127,6 +166,10 @@
       newConvoOpen: false, newConvoCwd: '', newConvoPrompt: '', newConvoProvider: 'claude', newConvoModel: '', newConvoEffort: '', newConvoKeywords: [], newConvoCustom: false,
       /* Travail déjà fait, proposé au lancement : le texte (modifiable), sa lecture en cours, et ce qu'il couvre { convos, reports }. */
       newConvoRecap: '', newConvoRecapBusy: false, newConvoRecapMeta: null,
+      /* Lancement depuis une tâche parente : sur elle ('self') ou une conversation par sous-tâche
+         cochée ('subs', `newConvoSubs` : id → coché), avec une précision ajoutée à chaque premier
+         message ; avancement du lot en cours : { parentId, done, total, phase: 'recap' | 'launch' }. */
+      newConvoTarget: 'self', newConvoSubs: {}, newConvoNote: '', batchProgress: null,
       newKeywordOpen: false, newKeywordName: '', newKeywordPrompt: '', newKeywordTeam: false, newKeywordAgents: [],
       modelsBusy: { claude: false, copilot: false }, settingsCustom: { claude: false, copilot: false }, draftCustom: false,
       /* Rédaction en cours ou proposée : { key, kind, target, prompt, busy, text, desc, team, error, ms } */
@@ -140,7 +183,21 @@
       activity: {},
       usage: { reports: null, busy: false, fetchedAt: 0, error: '' },
       remarkText: '', sentOpen: false, launchBusy: false,
-      toast: ''
+      /* Menu de la cloche (historique des notifications) ouvert ; carte qui s'éclaire un instant
+         après l'ouverture d'une notification : { id, at }. */
+      notifsOpen: false, flash: null,
+      /* Article du jour et veille IA, un état par fil (ARTICLE_FEEDS) : ce que l'hôte garde
+         ({ current, history }), recherche en cours, dernier échec, article précédent affiché dans le
+         panneau (son adresse). `loaded` : l'état gardé par l'hôte a été lu — rien n'est cherché avant
+         (les centres d'intérêt viennent des données, absentes tant que getState n'a pas répondu).
+         `articleCustom` : modèle libre dans les Réglages, commun aux deux fils. */
+      articles: {
+        daily: { loaded: false, store: null, busy: false, error: '', failedAt: 0, shown: '' },
+        ai: { loaded: false, store: null, busy: false, error: '', failedAt: 0, shown: '' }
+      },
+      articleCustom: false,
+      /* `toastAction` : { label, run } — le bouton que porte le toast affiché, ou null. */
+      toast: '', toastAction: null
     }
   };
 
@@ -226,7 +283,8 @@
     dataDirty = false;
     if (S.ui.composerType) S.data.lastType = S.ui.composerType;
     dataInFlight = bridge.call('saveData', {
-      tasks: S.data.tasks, types: S.data.types, convos: S.data.convos, remarks: S.data.remarks, lastType: S.data.lastType
+      tasks: S.data.tasks, types: S.data.types, convos: S.data.convos, remarks: S.data.remarks,
+      notifications: S.data.notifications, lastType: S.data.lastType
     })['catch'](function (e) { toast('Sauvegarde impossible : ' + e.message); });
     return dataInFlight;
   }
@@ -254,11 +312,16 @@
     setDirty = false;
     setInFlight = bridge.call('saveSettings', {
       topCount: S.settings.topCount, showBands: S.settings.showBands, compact: S.settings.compact,
-      defaultCwd: S.settings.defaultCwd, terminal: S.settings.terminal,
+      defaultCwd: S.settings.defaultCwd, terminal: S.settings.terminal, termClick: S.settings.termClick,
       provider: S.settings.provider, claudeModel: S.settings.claudeModel, copilotModel: S.settings.copilotModel,
       claudeEffort: S.settings.claudeEffort, copilotEffort: S.settings.copilotEffort,
       repoDir: S.settings.repoDir, bitbucketUrl: S.settings.bitbucketUrl,
-      draftProvider: S.settings.draftProvider, draftModel: S.settings.draftModel, draftEffort: S.settings.draftEffort
+      draftProvider: S.settings.draftProvider, draftModel: S.settings.draftModel, draftEffort: S.settings.draftEffort,
+      articleEnabled: S.settings.articleEnabled, articleTopics: S.settings.articleTopics, articleAiEnabled: S.settings.articleAiEnabled,
+      articleModel: S.settings.articleModel, articleEffort: S.settings.articleEffort,
+      windowsNotifications: S.settings.windowsNotifications,
+      whisperEnabled: S.settings.whisperEnabled, whisperAuto: S.settings.whisperAuto,
+      whisperModel: S.settings.whisperModel, whisperLanguage: S.settings.whisperLanguage
     })['catch'](function (e) { toast('Réglages non sauvegardés : ' + e.message); });
     return setInFlight;
   }
@@ -274,6 +337,7 @@
     var jobs = [];
     jobs.push(dataDirty ? saveDataNow() : (dataInFlight || Promise.resolve()));
     jobs.push(setDirty ? saveSettingsNow() : (setInFlight || Promise.resolve()));
+    jobs.push(flushTextWrites());
     return Promise.all(jobs).then(function () { return true; });
   };
 
@@ -499,6 +563,12 @@
     return { total: kids.length, done: kids.filter(function (k) { return k.done; }).length };
   }
 
+  /* Sous-tâches repliées sous leur parent (`task.collapsed`, conservé dans data.json). Une
+     recherche passe outre : ce qu'elle trouve dans un groupe replié doit se voir. */
+  function subsFolded(t) {
+    return !!(t && t.collapsed) && !S.ui.search.trim() && childrenOf(t.id).length > 0;
+  }
+
   /* Remet chaque sous-tâche derrière son parent, dans leur ordre relatif ; un parent disparu, ou
      lui-même sous-tâche, rend la tâche à la file de premier niveau, là où elle était. */
   function regroupTasks() {
@@ -552,7 +622,9 @@
     var groupHit = {};
     if (q) {
       S.data.tasks.forEach(function (t) {
-        if (String(t.text || '').toLowerCase().indexOf(q) >= 0) groupHit[(parentOf(t) || t).id] = true;
+        /* Les pièces jointes comptent : nom d'un fichier, titre ou contenu d'un bloc de texte. */
+        var hay = String(t.text || '') + attachmentsOf(t).map(function (a) { return '\n' + a.name + '\n' + (a.text || ''); }).join('');
+        if (hay.toLowerCase().indexOf(q) >= 0) groupHit[(parentOf(t) || t).id] = true;
       });
     }
     return S.data.tasks
@@ -561,6 +633,7 @@
         var root = parentOf(t) || t;
         /* Une sous-tâche ne s'affiche jamais sans son parent : filtré, il l'emporte avec lui. */
         if (root !== t && S.ui.hidden.indexOf(root.type) >= 0) return false;
+        if (root !== t && subsFolded(root)) return false;
         return !q || !!groupHit[root.id];
       });
   }
@@ -594,18 +667,899 @@
       lines.push('', 'Travail déjà fait — ce qu’ont rendu les conversations précédentes liées à cette tâche. Lis-le avant de commencer, '
         + 'lis sur le disque les rapports qu’il cite s’ils te servent, et ne refais pas ce qui est fait.', recap, '');
     }
-    if (withTask) lines.push('Tâche :', String(t.text || ''));
+    if (withTask) lines.push('Tâche :', String(t.text || '') + attachmentsPrompt(t));
     lines.push('Réponds en français.');
     return lines.join('\n');
   }
 
   /* Premier message proposé au lancement : la tâche elle-même, pour que l'agent s'y mette dès
-     l'ouverture plutôt que d'attendre une saisie. Le formulaire le donne à relire, et le vider
-     rend l'ancien comportement : l'agent ouvre son invite, la tâche repart alors dans le contexte.
-     Le carnet de remarques a son propre premier message (feedbackPrompt). */
+     l'ouverture plutôt que d'attendre une saisie — ses pièces jointes comprises. Le formulaire le
+     donne à relire, et le vider rend l'ancien comportement : l'agent ouvre son invite, la tâche
+     repart alors dans le contexte. Le carnet de remarques a son propre premier message (feedbackPrompt). */
   function buildPrompt(t) {
     if (!t || t.id === FEEDBACK_ID) return '';
-    return String(t.text || '').trim();
+    return (String(t.text || '').trim() + attachmentsPrompt(t)).trim();
+  }
+
+  /* ── Pièces jointes ────────────────────────────────────────────────────
+     Fichiers, images et blocs de texte joints à une tâche. L'hôte copie les fichiers sous
+     <données>\attachments\<tâche>\ (TaskAttachments) ; la tâche n'en garde que la description,
+     { id, kind: image | file | text, name, path, size, added, text? }. Un bloc de texte vit dans
+     data.json, et l'hôte en tient une copie sur le disque (texte-<id>.txt) pour l'agent.
+     Tout part avec la tâche dans le premier message : le chemin de chaque fichier, à ouvrir, et le
+     texte des blocs recopié tant qu'il tient (ATTACH_INLINE_MAX, la ligne de commande est bornée),
+     sinon le chemin de sa copie. Une sous-tâche reçoit aussi celles de sa tâche parente. */
+  var ATTACH_INLINE_MAX = 6000;
+  var ATTACH_DATA_MAX = 40 * 1024 * 1024;
+  var ATTACH_KINDS = { image: 1, file: 1, text: 1 };
+  var ATTACH_SKIP = {
+    folder: 'un dossier ne se joint pas, joignez ses fichiers', missing: 'introuvable',
+    'too-large': 'trop volumineux', error: 'copie impossible'
+  };
+
+  function attachmentsOf(t) { return t && Array.isArray(t.attachments) ? t.attachments : []; }
+
+  function attachmentsPrompt(t) {
+    if (!t || t.id === FEEDBACK_ID) return '';
+    var groups = [];
+    var parent = parentOf(t);
+    if (parent && attachmentsOf(parent).length) {
+      groups.push({ label: 'Pièces jointes de la tâche parente (« ' + firstLine(parent.text, 60).trim() + ' ») :', list: attachmentsOf(parent) });
+    }
+    if (attachmentsOf(t).length) groups.push({ label: 'Pièces jointes :', list: attachmentsOf(t) });
+    var budget = ATTACH_INLINE_MAX, files = 0, out = [];
+    groups.forEach(function (g) {
+      var lines = [];
+      g.list.forEach(function (a) {
+        if (a.kind !== 'text') {
+          if (!a.path) return;
+          /* Un enregistrement ne se lit pas : l'agent a sa transcription, jointe en texte (voir transcribeAttachment). */
+          var media = mediaKind(a);
+          if (media) {
+            lines.push('- ' + attachLabel(a) + ' (enregistrement ' + (media === 'audio' ? 'audio' : 'vidéo')
+              + (transcriptOf(g.list, a.id) ? ', sa transcription est jointe ci-dessous' : ', non transcrit') + ') : ' + a.path);
+            return;
+          }
+          lines.push('- ' + attachLabel(a) + (a.kind === 'image' ? ' (image)' : '') + ' : ' + a.path);
+          files++;
+          return;
+        }
+        var text = String(a.text || '').replace(/^(\s*\n)+/, '').replace(/\s+$/, '');
+        if (!text) return;
+        var label = 'Texte' + (a.name.trim() ? ' « ' + a.name.trim() + ' »' : '');
+        if (text.length > budget && a.path) {
+          lines.push('- ' + label + ', ' + fmtCount(text.length) + ' caractères, à lire sur le disque : ' + a.path);
+          files++;
+          return;
+        }
+        /* Sans copie sur le disque (pas encore écrite), le texte part quand même, raccourci. */
+        if (text.length > budget) text = text.slice(0, Math.max(budget, 500)) + '\n[… texte tronqué]';
+        budget = Math.max(0, budget - text.length);
+        lines.push('- ' + label + ' :');
+        text.split(/\r?\n/).forEach(function (l) { lines.push('    ' + l); });
+      });
+      if (lines.length) out = out.concat([''], [g.label], lines);
+    });
+    if (!out.length) return '';
+    if (files) out.push('Ouvre ces fichiers avant de commencer : ils font partie de la demande (ton outil de lecture ouvre aussi les images et les PDF).');
+    return '\n' + out.join('\n');
+  }
+
+  function normalizeAttachments(list) {
+    if (!Array.isArray(list)) return [];
+    var seen = {};
+    return list.filter(function (a) { return a && typeof a === 'object'; }).map(function (a) {
+      var kind = ATTACH_KINDS[a.kind] ? a.kind : 'file';
+      var out = {
+        id: String(a.id || uid('pj')), kind: kind, name: String(a.name == null ? '' : a.name),
+        path: String(a.path == null ? '' : a.path), size: Number(a.size) || 0, added: toMs(a.added) || Date.now()
+      };
+      if (kind === 'text') out.text = String(a.text == null ? '' : a.text);
+      /* Transcription d'un enregistrement joint : l'identifiant de la pièce audio. */
+      if (kind === 'text' && a.source) out.source = String(a.source);
+      return out;
+    }).filter(function (a) {
+      if (seen[a.id]) return false;
+      seen[a.id] = true;
+      return a.kind === 'text' || !!a.path;
+    });
+  }
+
+  /* Liste d'un « propriétaire » : une tâche, ou celle qu'on est en train de créer (Nouvelle tâche).
+     null quand il n'existe plus (tâche supprimée, création abandonnée entre-temps). */
+  function attachListFor(ownerId, create) {
+    if (ownerId && ownerId === S.ui.composerId) return S.ui.composerAttachments;
+    var t = taskById(ownerId);
+    if (!t || t.id === FEEDBACK_ID) return null;
+    if (!Array.isArray(t.attachments)) {
+      if (!create) return [];
+      t.attachments = [];
+    }
+    return t.attachments;
+  }
+
+  function attachmentById(ownerId, attId) {
+    return (attachListFor(ownerId, false) || []).filter(function (a) { return a.id === attId; })[0] || null;
+  }
+
+  /* Une tâche réelle s'enregistre ; celle du dialogue attend d'être créée. */
+  function attachChanged(ownerId, now) {
+    if (ownerId === S.ui.composerId || !taskById(ownerId)) return;
+    if (now) saveDataNow(); else saveDataSoon();
+  }
+
+  /* Le formulaire de lancement ouvert propose un premier message ; s'il n'a pas été retouché, il
+     suit les pièces jointes qu'on ajoute ou retire pendant ce temps. */
+  function editAttachments(fn) {
+    var open = S.ui.newConvoOpen ? taskById(S.ui.termTaskId) : null;
+    if (open && open.id === FEEDBACK_ID) open = null;
+    var before = open ? buildPrompt(open) : null;
+    fn();
+    if (open && S.ui.newConvoPrompt === before) S.ui.newConvoPrompt = buildPrompt(open);
+  }
+
+  function attachLabel(a) {
+    if (a.kind === 'text') return a.name.trim() || firstLine(String(a.text || '').trim(), 60) || 'Texte vide';
+    return a.name || lastSegment(a.path);
+  }
+
+  function attachTip(a) {
+    if (a.kind !== 'text') return attachLabel(a) + (a.size ? ' · ' + fmtSize(a.size) : '');
+    var n = String(a.text || '').length;
+    return attachLabel(a) + ' · ' + fmtCount(n) + (n > 1 ? ' caractères' : ' caractère');
+  }
+
+  /* Vignette d'une image : le dossier des pièces jointes est servi par l'hôte (attach.organizator). */
+  function attachUrl(a) {
+    var base = String(S.env.attachmentsUrl || ''), dir = String(S.env.attachmentsDir || '').replace(/[\\\/]+$/, '');
+    var p = String(a.path || '');
+    if (!base || !dir || p.toLowerCase().indexOf(dir.toLowerCase() + '\\') !== 0) return '';
+    return base + p.slice(dir.length + 1).split(/[\\\/]/).map(encodeURIComponent).join('/');
+  }
+
+  function attachBusy(ownerId, delta) {
+    S.ui.attachBusy[ownerId] = Math.max(0, (S.ui.attachBusy[ownerId] || 0) + delta);
+    if (!S.ui.attachBusy[ownerId]) delete S.ui.attachBusy[ownerId];
+  }
+
+  /* Range ce que l'hôte a copié ; ce qu'il a laissé de côté est dit, avec pourquoi. Si la tâche
+     a disparu entre-temps, les copies n'ont plus de raison d'être. */
+  function receiveAttachments(ownerId, r) {
+    var added = (r && r.attachments) || [];
+    var list = attachListFor(ownerId, true);
+    if (!list) {
+      added.forEach(function (a) { bridge.call('removeAttachment', { path: a.path })['catch'](function () { /* sans importance */ }); });
+      return 0;
+    }
+    var fresh = [];
+    editAttachments(function () {
+      added.forEach(function (a) {
+        var item = {
+          id: uid('pj'), kind: a.kind === 'image' ? 'image' : 'file', name: String(a.name || lastSegment(a.path)),
+          path: String(a.path || ''), size: Number(a.size) || 0, added: Date.now()
+        };
+        list.push(item);
+        fresh.push(item);
+      });
+    });
+    var skipped = (r && r.skipped) || [];
+    if (skipped.length) {
+      toast(skipped.map(function (s) { return '« ' + s.name + ' » : ' + (ATTACH_SKIP[s.reason] || s.reason); }).join(' · '));
+    }
+    /* Un enregistrement audio se transcrit aussitôt (Réglages › Dictée) : c'est son texte que l'agent lira. */
+    if (S.settings.whisperAuto !== false) {
+      fresh.forEach(function (a) { if (mediaKind(a) === 'audio') transcribeAttachment(ownerId, a.id); });
+    }
+    return added.length;
+  }
+
+  function attachDone(ownerId, n, quiet) {
+    if (n) attachChanged(ownerId, true);
+    render();
+    if (n && !quiet) toast(n > 1 ? n + ' pièces jointes ajoutées' : 'Pièce jointe ajoutée');
+  }
+
+  function attachFailed(ownerId, e) {
+    attachBusy(ownerId, -1);
+    render();
+    toast('Pièce jointe impossible : ' + e.message);
+  }
+
+  /* Bouton « Joindre des fichiers » : le sélecteur de Windows, plusieurs fichiers à la fois. */
+  function pickAttachments(ownerId) {
+    if (!attachListFor(ownerId, false)) return;
+    attachBusy(ownerId, 1);
+    render();
+    bridge.call('addAttachments', { taskId: ownerId, pick: true }, 600000)
+      .then(function (r) {
+        attachBusy(ownerId, -1);
+        attachDone(ownerId, r && r.cancelled ? 0 : receiveAttachments(ownerId, r));
+      })['catch'](function (e) { attachFailed(ownerId, e); });
+  }
+
+  /* Fichiers déposés ou collés : WebView2 en donne le chemin à l'hôte, qui les copie. Ce qui n'a
+     pas de chemin — une capture dans le presse-papiers — repart par son contenu. */
+  function attachFiles(ownerId, fileList) {
+    var files = Array.prototype.slice.call(fileList || []);
+    if (!files.length || !attachListFor(ownerId, false)) return;
+    attachBusy(ownerId, 1);
+    render();
+    bridge.call('addAttachments', { taskId: ownerId, names: files.map(function (f) { return f.name; }) }, 300000, files)
+      .then(function (r) {
+        var n = receiveAttachments(ownerId, r);
+        var rest = ((r && r.unresolved) || []).map(function (i) { return files[i]; }).filter(Boolean);
+        return rest.length ? pasteFiles(ownerId, rest).then(function (m) { return n + m; }) : n;
+      }, function (e) {
+        /* Message non parti (WebView2 sans transport de fichiers) : le contenu fait l'affaire. */
+        if (!e || !e.notSent) throw e;
+        return pasteFiles(ownerId, files);
+      })
+      .then(function (n) { attachBusy(ownerId, -1); attachDone(ownerId, n); })
+      ['catch'](function (e) { attachFailed(ownerId, e); });
+  }
+
+  function readBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { var s = String(fr.result || ''); resolve(s.slice(s.indexOf(',') + 1)); };
+      fr.onerror = function () { reject(fr.error || new Error('lecture impossible')); };
+      fr.readAsDataURL(file);
+    });
+  }
+
+  function pasteFiles(ownerId, files) {
+    var n = 0;
+    return files.reduce(function (p, f) {
+      return p.then(function () {
+        if (f.size > ATTACH_DATA_MAX) { toast('« ' + f.name + ' » : trop volumineux pour être collé'); return null; }
+        return readBase64(f)
+          .then(function (data) { return bridge.call('pasteAttachment', { taskId: ownerId, name: pastedName(f), data: data }, 60000); })
+          .then(function (r) { n += receiveAttachments(ownerId, r); });
+      });
+    }, Promise.resolve()).then(function () { return n; });
+  }
+
+  /* Une capture collée s'appelle « image.png » : elle prend la date et l'heure. */
+  function pastedName(f) {
+    var name = String(f.name || '');
+    if (name && !/^image\.(png|jpe?g|gif|bmp|webp)$/i.test(name)) return name;
+    var d = new Date();
+    function p2(x) { return (x < 10 ? '0' : '') + x; }
+    var m = /^image\/(png|jpeg|gif|webp|bmp)$/.exec(f.type || '');
+    return 'capture-' + d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate())
+      + '-' + p2(d.getHours()) + 'h' + p2(d.getMinutes()) + '.' + (m ? m[1].replace('jpeg', 'jpg') : 'png');
+  }
+
+  /* Blocs de texte : la copie sur le disque suit la frappe (700 ms), et tout ce qui attend est
+     écrit avant un lancement, pour que l'agent lise la dernière version. */
+  var textPending = {}, textInFlight = {};
+
+  function addTextAttachment(ownerId) {
+    var list = attachListFor(ownerId, true);
+    if (!list) return;
+    var a = { id: uid('pj'), kind: 'text', name: '', text: '', path: '', size: 0, added: Date.now() };
+    list.push(a);
+    attachChanged(ownerId, true);
+    writeTextSoon(ownerId, a);
+    writeTextNow(a.id);
+    render();
+    var ta = document.querySelector('[data-focus-key="att-text-' + a.id + '"]');
+    if (ta) ta.focus();
+  }
+
+  function writeTextSoon(ownerId, a) {
+    var p = textPending[a.id];
+    if (p) clearTimeout(p.timer);
+    textPending[a.id] = { owner: ownerId, att: a, timer: setTimeout(function () { writeTextNow(a.id); }, 700) };
+  }
+
+  function writeTextNow(id) {
+    var p = textPending[id];
+    if (!p) return textInFlight[id] || Promise.resolve();
+    clearTimeout(p.timer);
+    delete textPending[id];
+    var a = p.att;
+    var job = (textInFlight[id] || Promise.resolve())
+      .then(function () { return bridge.call('writeAttachmentText', { taskId: p.owner, id: a.id, text: a.text || '' }); })
+      .then(function (r) {
+        var fresh = !a.path;
+        a.path = String((r && r.path) || a.path);
+        a.size = Number(r && r.size) || 0;
+        if (fresh && a.path) attachChanged(p.owner, false);
+      })['catch'](function (e) { toast('Texte joint non enregistré : ' + e.message); });
+    textInFlight[id] = job;
+    job.then(function () { if (textInFlight[id] === job) delete textInFlight[id]; });
+    return job;
+  }
+
+  function flushTextWrites() {
+    var jobs = Object.keys(textPending).map(writeTextNow);
+    Object.keys(textInFlight).forEach(function (k) { jobs.push(textInFlight[k]); });
+    return Promise.all(jobs);
+  }
+
+  /* Retirer une pièce jointe supprime sa copie — l'original, s'il y en avait un, n'est pas touché. */
+  function removeAttachment(ownerId, attId) {
+    var list = attachListFor(ownerId, false) || [];
+    var i = list.findIndex(function (a) { return a.id === attId; });
+    if (i < 0) return;
+    var a = list[i];
+    editAttachments(function () { list.splice(i, 1); });
+    cancelTranscription(attId, true);
+    var p = textPending[attId];
+    if (p) { clearTimeout(p.timer); delete textPending[attId]; }
+    /* Un bloc en cours d'écriture reçoit son chemin à la fin de l'écriture : on l'attend. */
+    (textInFlight[attId] || Promise.resolve()).then(function () {
+      if (a.path) bridge.call('removeAttachment', { path: a.path })['catch'](function () { /* sans importance */ });
+    });
+    attachChanged(ownerId, true);
+    render();
+  }
+
+  /* Ouvrir : dans le lecteur de la fenêtre (image, PDF, texte, Markdown…), comme un rapport ; depuis
+     le dialogue Nouvelle tâche, qui couvrirait le lecteur, avec l'application de Windows. */
+  function openAttachment(ownerId, attId) {
+    var a = attachmentById(ownerId, attId);
+    if (!a) return;
+    var ready = Promise.resolve();
+    if (a.kind === 'text') { writeTextSoon(ownerId, a); ready = writeTextNow(a.id); }
+    ready.then(function () {
+      if (!a.path) { toast('Pièce jointe introuvable sur le disque.'); return; }
+      if (ownerId === S.ui.composerId) {
+        bridge.call('openPath', { path: a.path, editor: 'default' })['catch'](function (e) { toast('Ouverture impossible : ' + e.message); });
+      } else {
+        openReader(a.path, '');
+      }
+    });
+  }
+
+  /* La tâche en création abandonnée emporte ses copies. */
+  function dropComposerAttachments() {
+    var id = S.ui.composerId;
+    var had = S.ui.composerAttachments.length || S.ui.attachBusy[id];
+    if (id) cancelOwnerTranscriptions(id);
+    S.ui.composerAttachments.forEach(function (a) {
+      var p = textPending[a.id];
+      if (p) { clearTimeout(p.timer); delete textPending[a.id]; }
+    });
+    S.ui.composerAttachments = [];
+    S.ui.composerId = null;
+    if (id && had) bridge.call('removeAttachments', { taskId: id })['catch'](function () { /* sans importance */ });
+  }
+
+  /* Rendu : en lecture, une rangée de vignettes et de pastilles qui s'ouvrent d'un clic ; en édition
+     (carte ou dialogue), les mêmes avec une croix, les blocs de texte dépliés, et de quoi en ajouter. */
+  function attachChipHtml(ownerId, a, editing) {
+    var url = a.kind === 'image' ? attachUrl(a) : '';
+    var icon = a.kind === 'text' ? ICON.note : (a.kind === 'image' ? ICON.image : ICON.clip);
+    var ids = ' data-owner="' + esc(ownerId) + '" data-att="' + esc(a.id) + '"';
+    var open = '<button type="button" class="att att-' + esc(a.kind) + (url ? ' att-thumb' : '') + '" data-act="open-attachment"'
+      + ids + ' draggable="false" title="' + esc(attachTip(a)) + '">'
+      + (url
+        ? '<img src="' + esc(url) + '" alt="' + esc(attachLabel(a)) + '" loading="lazy" draggable="false">'
+        : icon + '<span class="att-name">' + esc(attachLabel(a)) + '</span>')
+      + '</button>';
+    if (!editing) return open;
+    return '<span class="att-wrap">' + open + '<button type="button" class="att-x" data-act="remove-attachment"' + ids
+      + ' title="Retirer cette pièce jointe" aria-label="Retirer ' + esc(attachLabel(a)) + '">×</button></span>';
+  }
+
+  function attachTextEditorHtml(ownerId, a) {
+    var ids = ' data-owner="' + esc(ownerId) + '" data-att="' + esc(a.id) + '"';
+    var rows = Math.min(10, Math.max(3, String(a.text || '').split('\n').length + 1));
+    return '<div class="att-note">'
+      + '<div class="att-note-head">' + ICON.note
+      + '<input class="input att-note-title" type="text" data-role="att-title"' + ids + ' data-focus-key="att-title-' + esc(a.id)
+      + '" spellcheck="false" placeholder="Titre du texte (facultatif)" value="' + esc(a.name) + '">'
+      + '<button type="button" class="att-x" data-act="remove-attachment"' + ids + ' title="Retirer ce texte" aria-label="Retirer ce texte">×</button>'
+      + '</div>'
+      + '<textarea class="input att-note-text" rows="' + rows + '" data-role="att-text"' + ids + ' data-focus-key="att-text-' + esc(a.id)
+      + '" spellcheck="false" placeholder="Collez ou écrivez le texte : un log, un mail, une consigne…">' + esc(a.text) + '</textarea>'
+      + '</div>';
+  }
+
+  function attachmentsHtml(ownerId, list, editing) {
+    list = list || [];
+    var busy = !!S.ui.attachBusy[ownerId];
+    if (!editing && !list.length && !busy) return '';
+    var chips = list.filter(function (a) { return !(editing && a.kind === 'text'); })
+      .map(function (a) { return attachChipHtml(ownerId, a, editing) + attachMediaHtml(ownerId, a, list); });
+    var h = ['<div class="attach' + (editing ? ' is-editing' : '') + '">'];
+    if (chips.length || busy) {
+      h.push('<div class="attach-strip">' + chips.join('')
+        + (busy ? '<span class="att-busy"><span class="draft-spin"></span>Copie…</span>' : '') + '</div>');
+    }
+    if (editing) {
+      list.filter(function (a) { return a.kind === 'text'; }).forEach(function (a) { h.push(attachTextEditorHtml(ownerId, a)); });
+      var ids = ' data-owner="' + esc(ownerId) + '"';
+      h.push('<div class="attach-tools">'
+        + '<button type="button" class="draft-btn" data-act="attach-pick"' + ids + (busy ? ' disabled' : '')
+        + ' title="Copier des fichiers dans la tâche : l’agent les recevra">' + ICON.clip + 'Joindre des fichiers</button>'
+        + '<button type="button" class="draft-btn" data-act="attach-text"' + ids
+        + ' title="Un log, un mail, un extrait : gardé à part, envoyé en entier à l’agent">' + ICON.note + 'Ajouter un texte</button>'
+        + '<span class="attach-hint">ou glissez des fichiers ici, collez une capture (Ctrl + V)</span>'
+        + '</div>');
+    }
+    h.push('</div>');
+    return h.join('');
+  }
+
+  /* ── Dictée et transcription (Whisper) ─────────────────────────────────
+     Un même moteur pour deux usages : Whisper, sur le poste (hôte : WhisperTranscriber).
+     - Dictée : un micro se pose dans le coin de la zone de saisie active (#dictate, hors des zones
+       de rendu) ; Ctrl + Maj + Espace démarre et termine, Échap annule. La page enregistre
+       (MediaRecorder), ramène le son à 16 kHz mono (OfflineAudioContext) et l'envoie en WAV à l'hôte
+       (`transcribe` avec `data`), puis insère le texte au curseur par insertText : Ctrl + Z le défait,
+       et le gestionnaire `input` du champ enregistre la saisie comme une frappe.
+     - Enregistrements joints : un fichier audio joint à une tâche est transcrit (`transcribe` avec
+       `path`), et sa transcription jointe en bloc de texte (`source` = la pièce audio) : c'est elle que
+       l'agent lit. Une vidéo — souvent une capture d'écran muette — ne se transcrit qu'à la demande. */
+  var AUDIO_EXT = { mp3: 1, wav: 1, m4a: 1, aac: 1, wma: 1, ogg: 1, oga: 1, opus: 1, flac: 1, amr: 1 };
+  var VIDEO_EXT = { mp4: 1, m4v: 1, mov: 1, webm: 1, mkv: 1, '3gp': 1 };
+  var DICTATE_MAX_MS = 10 * 60 * 1000;
+  var WHISPER_LANGS = [
+    { id: 'fr', label: 'Français' }, { id: 'en', label: 'Anglais' }, { id: 'auto', label: 'Détection automatique' }
+  ];
+  var WHISPER_PHASES = { queue: 'En attente…', decode: 'Lecture…', load: 'Chargement du modèle…' };
+
+  function whisperOn() { return S.settings.whisperEnabled !== false; }
+  function whisperModels() { return (S.env.whisper && S.env.whisper.models) || []; }
+
+  function mediaKind(a) {
+    if (!a || a.kind !== 'file') return '';
+    var ext = extOf(a.path || a.name);
+    return AUDIO_EXT[ext] ? 'audio' : (VIDEO_EXT[ext] ? 'video' : '');
+  }
+
+  function transcriptOf(list, attId) {
+    return (list || []).filter(function (x) { return x.kind === 'text' && x.source === attId; })[0] || null;
+  }
+
+  /* L'avancement tel qu'on le lit : le modèle qui se télécharge (premier usage), puis les étapes de l'hôte. */
+  function whisperPhaseLabel(p) {
+    if (!p || !p.phase) return 'Transcription…';
+    if (p.phase === 'download') {
+      return 'Téléchargement du modèle' + (p.total ? ' · ' + Math.floor(100 * (p.received || 0) / p.total) + ' %' : '…');
+    }
+    if (p.phase === 'transcribe') return 'Transcription' + (p.percent ? ' · ' + p.percent + ' %' : '…');
+    return WHISPER_PHASES[p.phase] || 'Transcription…';
+  }
+
+  /* Dans la carte des modèles, à côté du nom : plus court. */
+  function whisperDlLabel(p) {
+    return 'Téléchargement' + (p && p.total ? ' · ' + Math.floor(100 * (p.received || 0) / p.total) + ' %' : '…');
+  }
+
+  /* ·· Enregistrements joints ·· */
+
+  function transcribeAttachment(ownerId, attId) {
+    var a = attachmentById(ownerId, attId);
+    if (!a || !a.path || S.ui.transcribing[attId]) return;
+    var run = S.ui.transcribing[attId] = { owner: ownerId, job: uid('tj'), phase: 'queue' };
+    render();
+    bridge.call('transcribe', {
+      job: run.job, path: a.path, model: S.settings.whisperModel, language: S.settings.whisperLanguage
+    }, 4 * 3600000).then(function (r) {
+      if (S.ui.transcribing[attId] !== run) return;
+      delete S.ui.transcribing[attId];
+      var list = attachListFor(ownerId, true);
+      var text = String((r && r.text) || '').trim();
+      /* Tâche supprimée, création abandonnée ou enregistrement retiré entre-temps : rien à joindre. */
+      if (!list || !attachmentById(ownerId, attId)) { render(); return; }
+      if (!text) { render(); toast('Aucune parole reconnue dans « ' + attachLabel(a) + ' »'); return; }
+      var t = { id: uid('pj'), kind: 'text', name: 'Transcription — ' + attachLabel(a), text: text, path: '', size: 0, added: Date.now(), source: attId };
+      editAttachments(function () { list.push(t); });
+      attachChanged(ownerId, true);
+      writeTextSoon(ownerId, t);
+      writeTextNow(t.id);
+      render();
+      toast('« ' + attachLabel(a) + ' » transcrit : ' + fmtCount(text.length) + ' caractères, joints en texte');
+    }, function (e) {
+      if (S.ui.transcribing[attId] !== run) return;
+      delete S.ui.transcribing[attId];
+      render();
+      toast('Transcription impossible : ' + e.message);
+    });
+  }
+
+  function cancelTranscription(attId, quiet) {
+    var run = S.ui.transcribing[attId];
+    if (!run) return;
+    delete S.ui.transcribing[attId];
+    bridge.call('cancelTranscribe', { job: run.job })['catch'](function () { /* déjà finie */ });
+    if (!quiet) render();
+  }
+
+  /* Tâche supprimée, création abandonnée : ses transcriptions n'ont plus où aller. */
+  function cancelOwnerTranscriptions(ownerId) {
+    Object.keys(S.ui.transcribing).forEach(function (id) {
+      if (S.ui.transcribing[id].owner === ownerId) cancelTranscription(id, true);
+    });
+  }
+
+  /* À côté d'un enregistrement : l'avancement de sa transcription, ou de quoi la lancer s'il n'en a pas. */
+  function attachMediaHtml(ownerId, a, list) {
+    var kind = mediaKind(a);
+    if (!kind) return '';
+    var ids = ' data-owner="' + esc(ownerId) + '" data-att="' + esc(a.id) + '"';
+    var run = S.ui.transcribing[a.id];
+    if (run) {
+      return '<span class="att-tr"><span class="draft-spin"></span><span data-tr="' + esc(a.id) + '">' + esc(whisperPhaseLabel(run)) + '</span>'
+        + '<button type="button" class="att-x" data-act="cancel-transcribe"' + ids + ' title="Arrêter la transcription" aria-label="Arrêter la transcription">×</button></span>';
+    }
+    if (transcriptOf(list, a.id)) return '';
+    return '<button type="button" class="att-tr-btn" data-act="transcribe-attachment"' + ids
+      + ' title="Transcrire ' + (kind === 'audio' ? 'l’enregistrement' : 'le son de la vidéo') + ' avec Whisper, sur ce poste : le texte est joint à la tâche, et c’est lui que l’agent lit">'
+      + ICON.mic + 'Transcrire</button>';
+  }
+
+  /* Avancement : le libellé seul est réécrit, sans redessiner la file à chaque pour-cent. */
+  function patchTranscribing(attId) {
+    var run = S.ui.transcribing[attId];
+    if (!run) return;
+    var label = whisperPhaseLabel(run);
+    Array.prototype.forEach.call(document.querySelectorAll('[data-tr="' + attId + '"]'), function (el) { el.textContent = label; });
+  }
+
+  /* Événement `whisper` de l'hôte : l'étape d'une transcription (`job`), ou un téléchargement de modèle
+     (`model` seul) — que suivent alors les Réglages et tout ce qui attend ce modèle. */
+  function onWhisperEvent(p) {
+    p = p || {};
+    if (p.job) {
+      if (dict && dict.job === p.job) { dict.progress = p; renderDictate(); return; }
+      Object.keys(S.ui.transcribing).forEach(function (id) {
+        var run = S.ui.transcribing[id];
+        if (run.job !== p.job) return;
+        run.phase = p.phase; run.percent = p.percent; run.received = p.received; run.total = p.total;
+        patchTranscribing(id);
+      });
+      return;
+    }
+    if (!p.model) return;
+    if (p.phase === 'download') {
+      S.ui.whisperDl[p.model] = { received: p.received || 0, total: p.total || 0 };
+      if (dict && dict.progress && dict.progress.phase === 'download') { dict.progress = p; renderDictate(); }
+      Object.keys(S.ui.transcribing).forEach(function (id) {
+        var run = S.ui.transcribing[id];
+        if (run.phase !== 'download') return;
+        run.received = p.received; run.total = p.total;
+        patchTranscribing(id);
+      });
+      var dl = document.querySelector('[data-whisper-dl="' + p.model + '"]');
+      if (dl) dl.textContent = whisperDlLabel(p);
+      return;
+    }
+    /* Téléchargement fini ou en échec : les Réglages relisent l'état des modèles. */
+    delete S.ui.whisperDl[p.model];
+    refreshWhisper();
+  }
+
+  function refreshWhisper() {
+    return bridge.call('whisperStatus', {}).then(function (st) {
+      S.env.whisper = st;
+      if (S.ui.settingsOpen && settingsTab() === 'voice') renderDialogs();
+    })['catch'](function () { /* l'état affiché reste celui du démarrage */ });
+  }
+
+  function downloadWhisper(id) {
+    if (S.ui.whisperDl[id]) return;
+    S.ui.whisperDl[id] = { received: 0, total: 0 };
+    renderDialogs();
+    bridge.call('whisperDownload', { model: id }, 3600000).then(function (st) {
+      delete S.ui.whisperDl[id];
+      if (st && st.models) S.env.whisper = st;
+      renderDialogs();
+    }, function (e) {
+      delete S.ui.whisperDl[id];
+      renderDialogs();
+      toast(e.message);
+    });
+  }
+
+  function removeWhisper(id) {
+    bridge.call('whisperRemove', { model: id }, 60000).then(function () {
+      delete S.ui.whisperDl[id];
+      return refreshWhisper();
+    }, function (e) { toast('Suppression impossible : ' + e.message); });
+  }
+
+  /* ·· Dictée ·· */
+
+  /* Dictée en cours : { key, el, phase: starting | recording | transcribing, job, selStart, selEnd,
+     startedAt, chunks, recorder, stream, ctx, analyser, wave, level, timer, progress, cancelled }. */
+  var dict = null, dictFocus = null, dictBox = null;
+
+  /* Un champ qui se dicte : une zone de texte du rendu (data-focus-key la retrouve après un rendu). */
+  function dictTarget(el) {
+    if (!el || el.tagName !== 'TEXTAREA' || el.disabled || el.readOnly) return null;
+    return el.getAttribute('data-focus-key') ? el : null;
+  }
+
+  /* Le rendu a pu reconstruire le champ : on le retrouve par sa clé. */
+  function dictField(d) {
+    if (d.el && document.contains(d.el)) return d.el;
+    d.el = document.querySelector('textarea[data-focus-key="' + d.key + '"]');
+    return d.el;
+  }
+
+  function fmtClock(ms) {
+    var s = Math.floor(ms / 1000);
+    return Math.floor(s / 60) + ':' + (s % 60 < 10 ? '0' : '') + (s % 60);
+  }
+
+  function renderDictate() {
+    if (!dictBox) return;
+    /* Champ reconstruit par un rendu, ou focus donné sans événement (fenêtre inactive) : l'élément actif fait foi. */
+    if (!dictFocus || !document.contains(dictFocus)) dictFocus = dictTarget(document.activeElement);
+    var field = dict ? dictField(dict) : (whisperOn() ? dictFocus : null);
+    if (!dict && !field) {
+      if (!dictBox.hidden) { dictBox.hidden = true; dictBox.innerHTML = ''; dictBox.removeAttribute('data-mode'); }
+      return;
+    }
+    var mode = !dict ? 'idle' : (dict.phase === 'transcribing' ? 'busy' : 'rec');
+    if (dictBox.getAttribute('data-mode') !== mode || mode === 'busy') {
+      var h;
+      if (mode === 'idle') {
+        h = '<button type="button" class="dictate-mic" data-dictate="start" title="Dicter — Whisper, sur ce poste (Ctrl + Maj + Espace)" aria-label="Dicter">' + ICON.mic + '</button>';
+      } else if (mode === 'rec') {
+        h = '<span class="dictate-dot"></span><span class="dictate-time">0:00</span><span class="dictate-level"><i></i></span>'
+          + '<button type="button" class="dictate-btn dictate-ok" data-dictate="stop" title="Terminer et transcrire (Ctrl + Maj + Espace)" aria-label="Terminer et transcrire">' + ICON.check + '</button>'
+          + '<button type="button" class="dictate-btn" data-dictate="cancel" title="Annuler (Échap)" aria-label="Annuler la dictée">×</button>';
+      } else {
+        h = '<span class="draft-spin"></span><span class="dictate-label">' + esc(whisperPhaseLabel(dict.progress)) + '</span>'
+          + '<button type="button" class="dictate-btn" data-dictate="cancel" title="Abandonner (Échap)" aria-label="Abandonner la dictée">×</button>';
+      }
+      dictBox.innerHTML = h;
+      dictBox.setAttribute('data-mode', mode);
+      dictBox.className = 'dictate is-' + mode;
+    }
+    dictBox.hidden = false;
+    placeDictate(field);
+  }
+
+  /* Dans le coin bas droit du champ, à l'intérieur ; le champ refermé pendant une dictée, en bas à droite de la fenêtre. */
+  function placeDictate(field) {
+    if (!dictBox || dictBox.hidden) return;
+    var w = dictBox.offsetWidth, h = dictBox.offsetHeight;
+    var r = field ? field.getBoundingClientRect() : null;
+    if (!r || !r.width || r.bottom < 0 || r.top > window.innerHeight) {
+      if (!dict) { dictBox.hidden = true; return; }
+      r = { right: window.innerWidth - 10, bottom: window.innerHeight - 10 };
+    }
+    var bar = field ? Math.max(0, field.offsetWidth - field.clientWidth - 4) : 0;
+    dictBox.style.left = Math.max(4, Math.min(window.innerWidth - w - 4, r.right - bar - w - 6)) + 'px';
+    dictBox.style.top = Math.max(4, Math.min(window.innerHeight - h - 4, r.bottom - h - 6)) + 'px';
+  }
+
+  function micError(e) {
+    var n = e && e.name;
+    if (n === 'NotAllowedError' || n === 'SecurityError') return 'accès refusé (Paramètres Windows › Confidentialité › Microphone).';
+    if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'aucun micro trouvé.';
+    if (n === 'NotReadableError') return 'le micro est déjà pris par une autre application.';
+    return (e && e.message) || String(e);
+  }
+
+  function startDictation(field) {
+    field = dictTarget(field);
+    if (dict || !field || !whisperOn()) return;
+    var md = navigator.mediaDevices;
+    if (!md || !md.getUserMedia || typeof MediaRecorder === 'undefined') {
+      toast('Dictée impossible : pas d’accès au micro dans cette fenêtre.');
+      return;
+    }
+    var d = dict = {
+      key: field.getAttribute('data-focus-key'), el: field, phase: 'starting', job: uid('dj'),
+      selStart: field.selectionStart, selEnd: field.selectionEnd, chunks: [], startedAt: Date.now(), level: 0
+    };
+    /* Le modèle se télécharge (premier usage) ou se charge pendant qu'on parle. */
+    bridge.call('whisperWarm', { model: S.settings.whisperModel })['catch'](function () { /* redit à la transcription */ });
+    renderDictate();
+    md.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+      .then(function (stream) {
+        if (dict !== d) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+        d.stream = stream;
+        d.recorder = new MediaRecorder(stream);
+        d.recorder.ondataavailable = function (ev) { if (ev.data && ev.data.size) d.chunks.push(ev.data); };
+        d.recorder.onstop = function () { recordingStopped(d); };
+        d.recorder.start(1000);
+        try {
+          d.ctx = new (window.AudioContext || window.webkitAudioContext)();
+          d.analyser = d.ctx.createAnalyser();
+          d.analyser.fftSize = 1024;
+          d.ctx.createMediaStreamSource(stream).connect(d.analyser);
+          d.wave = new Float32Array(d.analyser.fftSize);
+        } catch (err) { d.analyser = null; }
+        d.phase = 'recording';
+        d.startedAt = Date.now();
+        d.timer = setInterval(function () { tickDictate(d); }, 100);
+        renderDictate();
+      })['catch'](function (e) {
+        if (dict !== d) return;
+        endDictation(d);
+        toast('Micro indisponible : ' + micError(e));
+      });
+  }
+
+  /* Chrono et niveau du micro, réécrits sur place : on voit que le son passe. */
+  function tickDictate(d) {
+    if (dict !== d || d.phase !== 'recording' || !dictBox) return;
+    var ms = Date.now() - d.startedAt;
+    if (ms >= DICTATE_MAX_MS) { stopDictation(); toast('Dictée arrêtée au bout de dix minutes : pour plus long, joignez un enregistrement.'); return; }
+    if (d.analyser) {
+      d.analyser.getFloatTimeDomainData(d.wave);
+      var sum = 0;
+      for (var i = 0; i < d.wave.length; i++) sum += d.wave[i] * d.wave[i];
+      d.level = Math.max(Math.min(1, Math.sqrt(sum / d.wave.length) * 5), d.level * 0.8);
+    }
+    var t = dictBox.querySelector('.dictate-time');
+    if (t) t.textContent = fmtClock(ms);
+    var bar = dictBox.querySelector('.dictate-level i');
+    if (bar) bar.style.transform = 'scaleX(' + Math.max(0.04, d.level).toFixed(3) + ')';
+  }
+
+  function releaseMic(d) {
+    if (d.timer) { clearInterval(d.timer); d.timer = null; }
+    if (d.stream) { d.stream.getTracks().forEach(function (t) { t.stop(); }); d.stream = null; }
+    if (d.ctx) { try { d.ctx.close(); } catch (e) { /* déjà fermé */ } d.ctx = null; }
+  }
+
+  function stopDictation() {
+    var d = dict;
+    if (!d) return;
+    if (d.phase === 'starting') { cancelDictation(); return; }
+    if (d.phase !== 'recording') return;
+    d.phase = 'transcribing';
+    d.progress = null;
+    renderDictate();
+    /* stop() rend les derniers morceaux puis appelle onstop : la suite est dans recordingStopped. */
+    try { d.recorder.stop(); } catch (e) { recordingStopped(d); }
+    releaseMic(d);
+  }
+
+  function cancelDictation() {
+    var d = dict;
+    if (!d) return;
+    d.cancelled = true;
+    if (d.phase === 'transcribing') bridge.call('cancelTranscribe', { job: d.job })['catch'](function () { /* déjà finie */ });
+    if (d.recorder && d.recorder.state !== 'inactive') { try { d.recorder.stop(); } catch (e) { /* déjà arrêté */ } }
+    endDictation(d);
+  }
+
+  function endDictation(d) {
+    releaseMic(d);
+    if (dict === d) dict = null;
+    renderDictate();
+  }
+
+  function recordingStopped(d) {
+    if (d.cancelled || dict !== d) return;
+    var blob = new Blob(d.chunks, { type: (d.recorder && d.recorder.mimeType) || 'audio/webm' });
+    d.chunks = [];
+    if (!blob.size || Date.now() - d.startedAt < 400) { endDictation(d); toast('Rien d’enregistré.'); return; }
+    wav16k(blob).then(readBase64).then(function (data) {
+      if (d.cancelled) return null;
+      return bridge.call('transcribe', { job: d.job, data: data, model: S.settings.whisperModel, language: S.settings.whisperLanguage }, 3600000);
+    }).then(function (r) {
+      if (r && !d.cancelled) insertDictation(d, r.text);
+    }, function (e) {
+      if (!d.cancelled) toast('Dictée impossible : ' + e.message);
+    }).then(function () { endDictation(d); });
+  }
+
+  /* Ce que MediaRecorder rend (webm/opus) devient ce que Whisper lit : WAV 16 kHz mono 16 bits. */
+  function wav16k(blob) {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    var OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (!AC || !OAC) return Promise.reject(new Error('décodage audio indisponible dans cette fenêtre'));
+    return blob.arrayBuffer().then(function (buf) {
+      var ctx = new AC();
+      return ctx.decodeAudioData(buf).then(function (audio) { ctx.close(); return audio; },
+        function () { ctx.close(); throw new Error('enregistrement illisible'); });
+    }).then(function (audio) {
+      var off = new OAC(1, Math.max(1, Math.ceil(audio.duration * 16000)), 16000);
+      var src = off.createBufferSource();
+      src.buffer = audio;
+      src.connect(off.destination);
+      src.start();
+      return off.startRendering();
+    }).then(function (rendered) { return wavBlob(rendered.getChannelData(0), 16000); });
+  }
+
+  function wavBlob(samples, rate) {
+    var n = samples.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+    function str(o, s) { for (var i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); }
+    str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true);
+    v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    str(36, 'data'); v.setUint32(40, n * 2, true);
+    for (var i = 0, o = 44; i < n; i++, o += 2) {
+      var s = Math.max(-1, Math.min(1, samples[i]));
+      v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return new Blob([buf], { type: 'audio/wav' });
+  }
+
+  /* Au curseur — ou là où il était au départ si l'on a cliqué ailleurs —, avec les espaces qu'il faut
+     de part et d'autre, et une majuscule en début de phrase. */
+  function insertDictation(d, text) {
+    text = String(text || '').trim();
+    if (!text) { toast('Aucune parole reconnue.'); return; }
+    var el = dictField(d);
+    if (!el || el.disabled || el.readOnly) {
+      try { navigator.clipboard.writeText(text); } catch (e) { /* presse-papiers refusé */ }
+      toast('Le champ s’est refermé : la dictée est copiée dans le presse-papiers.');
+      return;
+    }
+    var v = el.value;
+    var focused = document.activeElement === el;
+    var s = Math.min(focused ? el.selectionStart : (d.selStart == null ? v.length : d.selStart), v.length);
+    var e = Math.max(s, Math.min(focused ? el.selectionEnd : (d.selEnd == null ? s : d.selEnd), v.length));
+    var before = v.slice(0, s), after = v.slice(e);
+    if (!before.trim() || /[.!?…:]\s*$|\n\s*$/.test(before)) text = text.charAt(0).toUpperCase() + text.slice(1);
+    if (before && !/\s$/.test(before)) text = ' ' + text;
+    if (after && !/^\s/.test(after)) text += ' ';
+    el.focus();
+    try { el.setSelectionRange(s, e); } catch (x) { /* champ non textuel */ }
+    var done = false;
+    try { done = document.execCommand('insertText', false, text); } catch (x) { done = false; }
+    if (!done || el.value === v) {
+      el.value = before + text + after;
+      try { el.setSelectionRange(s + text.length, s + text.length); } catch (x) { /* champ non textuel */ }
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+
+  /* Après un rendu, le champ a pu être reconstruit ou disparaître : le micro le suit. */
+  function syncDictate() {
+    if (dictBox && (dict || dictFocus || !dictBox.hidden)) renderDictate();
+  }
+
+  function bindDictate() {
+    dictBox = document.createElement('div');
+    dictBox.id = 'dictate';
+    dictBox.className = 'dictate';
+    dictBox.hidden = true;
+    document.body.appendChild(dictBox);
+    /* Cliquer le micro ne doit pas ôter le focus au champ : le texte ira là où était le curseur. */
+    dictBox.addEventListener('mousedown', function (e) { e.preventDefault(); });
+    dictBox.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-dictate]') : null;
+      if (!b) return;
+      var act = b.getAttribute('data-dictate');
+      if (act === 'start') startDictation(dictFocus);
+      else if (act === 'stop') stopDictation();
+      else if (act === 'cancel') cancelDictation();
+    });
+    document.addEventListener('focusin', function (e) {
+      dictFocus = dictTarget(e.target);
+      renderDictate();
+    }, true);
+    document.addEventListener('focusout', function (e) {
+      if (e.target !== dictFocus) return;
+      setTimeout(function () {
+        if (document.activeElement === dictFocus) return;
+        dictFocus = dictTarget(document.activeElement);
+        renderDictate();
+      }, 0);
+    }, true);
+    /* Le champ grandit à la frappe, la page défile : le micro reste dans son coin. */
+    document.addEventListener('input', function (e) { if (e.target === dictFocus) placeDictate(dictFocus); }, true);
+    window.addEventListener('scroll', function () { if (!dictBox.hidden) placeDictate(dict ? dictField(dict) : dictFocus); }, { capture: true, passive: true });
+    window.addEventListener('resize', function () { if (!dictBox.hidden) placeDictate(dict ? dictField(dict) : dictFocus); });
+    /* Ctrl + Maj + Espace démarre et termine ; Échap annule, sans refermer le dialogue qui est dessous. */
+    window.addEventListener('keydown', function (e) {
+      if ((e.code === 'Space' || e.key === ' ') && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
+        if (dict) {
+          e.preventDefault(); e.stopPropagation();
+          if (dict.phase !== 'transcribing') stopDictation();
+          return;
+        }
+        var t = dictTarget(document.activeElement);
+        if (t && whisperOn()) { e.preventDefault(); e.stopPropagation(); startDictation(t); }
+        return;
+      }
+      if (e.key === 'Escape' && dict) { e.preventDefault(); e.stopPropagation(); cancelDictation(); }
+    }, true);
   }
 
   /* ── Travail déjà fait ────────────────────────────────────────────────
@@ -676,6 +1630,34 @@
       S.ui.newConvoRecap = '';
       render();
       toast('Résumé des conversations précédentes indisponible : ' + e.message);
+    });
+  }
+
+  /* Lot lancé depuis une tâche parente : chaque sous-tâche reçoit le travail de sa parente et le
+     sien, pas celui de ses sœurs — elles tournent en même temps, et la revue d'un autre ticket
+     userait le budget du contexte sans rien apprendre à l'agent. */
+  function batchRecapEntries(sub) {
+    return priorTasksOf(sub).filter(function (e) { return e.kind !== 'sibling'; });
+  }
+
+  /* Une seule lecture pour tout le lot. Rend { recaps: { id de sous-tâche → texte }, failed } :
+     un échec n'empêche pas le lancement, les conversations partent sans « Travail déjà fait ». */
+  function loadBatchRecaps(subs) {
+    var plan = subs.map(function (sub) { return { sub: sub, entries: batchRecapEntries(sub) }; });
+    var convs = [], seen = {};
+    plan.forEach(function (p) {
+      recapConvos(p.entries).forEach(function (c) { if (!seen[c.id]) { seen[c.id] = true; convs.push(c); } });
+    });
+    if (!convs.length) return Promise.resolve({ recaps: {}, failed: false });
+    return bridge.call('getRecaps', {
+      sessions: convs.map(function (c) { return { sessionId: c.id, cwd: c.cwd, provider: providerOf(c) }; })
+    }, 60000).then(function (res) {
+      var answers = {}, recaps = {};
+      ((res && res.sessions) || []).forEach(function (s) { if (s && s.sessionId) answers[s.sessionId] = s; });
+      plan.forEach(function (p) { if (p.entries.length) recaps[p.sub.id] = buildRecap(p.entries, answers).text; });
+      return { recaps: recaps, failed: false };
+    }, function () {
+      return { recaps: {}, failed: true };
     });
   }
 
@@ -1721,7 +2703,11 @@
     var c = bestConvo(convs);
     var st = c ? displayState(c) : null;
     var busy = crewCount(convs);
-    var tip = 'Ouvrir le terminal de l’agent';
+    /* L'infobulle dit ce que fera le clic (clickTerm), et Maj + clic quand il fait autre chose. */
+    var toTerm = wantsTerminal(convs, false);
+    var tip = toTerm ? (displayState(convs[0]) === 'closed' ? 'Rouvrir son terminal' : 'Aller à son terminal') + ' · Maj + clic : le panneau'
+      : convs.length > 1 && S.settings.termClick === 'terminal' ? 'Choisir la conversation'
+      : 'Ouvrir le terminal de l’agent' + (convs.length === 1 ? ' · Maj + clic : aller à sa fenêtre' : '');
     if (c) {
       var line = stateText(c) || TASK_STATE_LABELS[st] || '';
       tip = (convs.length > 1 ? (c.title || 'Nouvelle session') + ' · ' : '') + line + ' · ' + tip;
@@ -1793,6 +2779,54 @@
     return '<button type="button" class="icon-btn artifact-btn has" data-act="open-artifacts" data-id="' + esc(t.id)
       + '" title="' + esc(count + (count > 1 ? ' rapports produits' : ' rapport produit')) + '">'
       + ICON.artifacts + '<span class="artifact-count">' + esc(count) + '</span></button>';
+  }
+
+  /* Rapports de revue de la tâche, le plus probable en tête : un Markdown nommé review-… ou revue-…
+     (les notes de mémoire « project_review_… » n'en sont pas), écrit sous le dossier de travail plutôt
+     qu'ailleurs (brouillons du scratchpad), puis celui de la conversation la plus récente. C'est le
+     nom qui décide ici, sans lire le fichier : la vue revue ne s'ouvre que si l'hôte y trouve des constats. */
+  var REVIEW_NAME = /^(review|revue)[-_ .]/i;
+
+  function reviewReportsOf(convs) {
+    var seen = {};
+    var list = artifactEntries(convs, 'report').filter(function (a) {
+      var name = lastSegment(a.path);
+      if (a.action === 'deleted' || !REVIEW_NAME.test(name) || !/^(md|markdown)$/.test(extOf(name))) return false;
+      var full = artifactFullPath(a.path, a.cwd).toLowerCase();
+      if (seen[full]) return false;
+      seen[full] = true;
+      return true;
+    });
+    function outside(a) { return /^([a-zA-Z]:|\\\\|\/)/.test(a.path) ? 1 : 0; }
+    function updated(a) { var c = convoById(a.convoId); return c ? toMs(c.updated) || toMs(c.created) : 0; }
+    return list.sort(function (a, b) {
+      return outside(a) - outside(b) || updated(b) - updated(a)
+        || (lastSegment(b.path).toLowerCase() < lastSegment(a.path).toLowerCase() ? -1 : 1);
+    });
+  }
+
+  /* Rapports de revue d'une tâche. Le temps d'un rendu (renderPass), chacune n'est calculée qu'une
+     fois : sa carte, celle de sa parente, le bouton « Revues » et les onglets la redemandent. */
+  var reviewMemo = null;
+
+  function taskReviews(id) {
+    if (!reviewMemo) return reviewReportsOf(convosOf(id));
+    return reviewMemo[id] || (reviewMemo[id] = reviewReportsOf(convosOf(id)));
+  }
+
+  /* Accès direct au résultat de la revue, à côté des rapports : la vue plein écran des constats.
+     Une tâche dont des sous-tâches ont un rapport ouvre le panneau à onglets, un par sous-tâche. */
+  function reviewBtnHtml(t) {
+    var subs = childrenOf(t.id).filter(function (k) { return taskReviews(k.id).length > 0; }).length;
+    if (subs) {
+      return '<button type="button" class="icon-btn review-btn has" data-act="open-review-group" data-id="' + esc(t.id)
+        + '" title="' + esc('Résultats des revues — ' + subs + (subs > 1 ? ' rapports de sous-tâches' : ' rapport de sous-tâche')) + '">'
+        + ICON.review + '<span class="artifact-count review-count">' + esc(subs) + '</span></button>';
+    }
+    var list = taskReviews(t.id);
+    if (!list.length) return '';
+    return '<button type="button" class="icon-btn review-btn has" data-act="open-review" data-id="' + esc(t.id)
+      + '" title="' + esc('Résultat de la revue — ' + lastSegment(list[0].path)) + '">' + ICON.review + '</button>';
   }
 
   /* Sous le dernier message du journal : ce que fait l'agent en ce moment. */
@@ -1915,9 +2949,15 @@
     }
   }
 
+  /* Un passage de rendu : le focus est gardé, et les rapports de revue ne sont lus qu'une fois par tâche. */
+  function renderPass(fn) {
+    reviewMemo = Object.create(null);
+    try { preserveFocus(fn); } finally { reviewMemo = null; }
+  }
+
   function render() {
     var t0 = perfNow();
-    preserveFocus(function () {
+    renderPass(function () {
       $('#app').classList.toggle('compact', !!S.settings.compact);
       $('#shell').classList.toggle('with-panel', !!S.ui.termTaskId);
       renderFilters();
@@ -1927,7 +2967,11 @@
       renderDialogs();
       renderUsage();
       renderRemarksBtn();
+      renderReviewsBtn();
+      renderNotifsBtn();
+      renderNotifs();
     });
+    syncDictate();
     perfRender(t0);
   }
 
@@ -1956,11 +3000,15 @@
     }
     if (activityTimer) { clearTimeout(activityTimer); activityTimer = null; }
     var t0 = perfNow();
-    preserveFocus(function () {
+    renderPass(function () {
       renderList();
       renderPanel();
       renderRemarksBtn();
+      renderReviewsBtn();
+      /* Revues groupées : un rapport qui paraît ouvre son onglet « en cours ». */
+      if (S.ui.reader && S.ui.reader.group) renderReader();
     });
+    syncDictate();
     perfRender(t0);
   }
 
@@ -2054,6 +3102,19 @@
     btn.title = 'Remarques sur Organizator' + (n ? ' · ' + n + ' à envoyer' : '') + (st ? ' · ' + TASK_STATE_LABELS[st] : '');
   }
 
+  /* Bouton « Revues » de l'en-tête : les rapports de revue des tâches en file, un onglet chacun.
+     Masqué tant qu'aucune n'en a ; son badge compte les onglets qu'il ouvrira. */
+  function renderReviewsBtn() {
+    var btn = $('#reviews-btn');
+    if (!btn) return;
+    var n = S.data.tasks.filter(function (t) { return !t.done && taskReviews(t.id).length > 0; }).length;
+    var badge = btn.querySelector('.btn-badge');
+    badge.textContent = n ? String(n) : '';
+    badge.hidden = !n;
+    btn.hidden = !n;
+    btn.title = 'Revues de code' + (n ? ' · ' + n + (n > 1 ? ' rapports' : ' rapport') + ' (tâches en file)' : '');
+  }
+
   /* ── Barre de filtres ─────────────────────────────────────────────────
      Les pastilles de catégorie encombraient la vue en permanence : elles ne se déplient
      plus que sur demande, sous le bouton entonnoir, et repartent repliées au lancement.
@@ -2116,9 +3177,15 @@
     var editing = S.ui.editingId === t.id;
     var doing = !!t.doing && !t.done;
     var convs = S.data.convos.filter(function (c) { return c.taskId === t.id; });
-    var asking = hasQuestion(convs);
     var sub = isSub(t);
     var progress = sub ? null : subtaskProgress(t);
+    /* Sous-tâches repliées : leurs sessions se lisent sur le parent — l'avancement prend leur état
+       le plus pressant, et une question posée cerne encore la carte de bleu. */
+    var folded = !sub && subsFolded(t);
+    var kidIds = {};
+    if (folded) childrenOf(t.id).forEach(function (k) { kidIds[k.id] = true; });
+    var kidConvs = folded ? S.data.convos.filter(function (c) { return kidIds[c.taskId]; }) : [];
+    var asking = hasQuestion(convs) || hasQuestion(kidConvs);
     var h = [];
 
     h.push('<div class="item' + (sub ? ' is-sub' : '') + '" data-item="' + esc(t.id) + '">');
@@ -2132,8 +3199,8 @@
     h.push('<div class="drop drop-before"><div class="drop-line"></div><div class="drop-knob"></div></div>');
 
     h.push('<div class="task' + (doing ? ' is-doing' : '') + (t.done ? ' is-done' : '')
-      + (asking ? ' is-asking' : '') + (editing ? ' is-editing' : '') + (sub ? ' is-sub' : '')
-      + '" data-card="' + esc(t.id) + '" draggable="' + (editing ? 'false' : 'true') + '">');
+      + (asking ? ' is-asking' : '') + (editing ? ' is-editing' : '') + (sub ? ' is-sub' : '') + (flashStyle(t.id) ? ' is-flash' : '')
+      + '" data-card="' + esc(t.id) + '" draggable="' + (editing ? 'false' : 'true') + '"' + flashStyle(t.id) + '>');
     h.push('<div class="task-row">');
 
     h.push('<div class="rank-col">'
@@ -2150,11 +3217,19 @@
     if (doing) {
       h.push('<span class="doing-chip"><span class="doing-dot"></span><span>En cours</span></span>');
     }
-    /* Le parent dit où en sont ses sous-tâches : terminées / total. */
+    /* Le parent dit où en sont ses sous-tâches — terminées / total — et la pastille les replie ou
+       les déplie d'un clic. */
     if (progress && progress.total) {
-      h.push('<span class="sub-chip' + (progress.done === progress.total ? ' all' : '') + '" title="'
-        + esc(progress.done + ' sur ' + progress.total + (progress.total > 1 ? ' sous-tâches terminées' : ' sous-tâche terminée')) + '">'
-        + ICON.subtask + '<span>' + esc(progress.done + '/' + progress.total) + '</span></span>');
+      var kidSt = folded ? bestState(kidConvs) : null;
+      var subTip = progress.done + ' sur ' + progress.total + (progress.total > 1 ? ' sous-tâches terminées' : ' sous-tâche terminée')
+        + (kidSt ? ' · ' + TASK_STATE_LABELS[kidSt] : '')
+        + ' · ' + (folded ? 'cliquer pour les déplier' : 'cliquer pour les replier');
+      h.push('<button type="button" class="sub-chip' + (progress.done === progress.total ? ' all' : '') + (folded ? ' is-folded' : '')
+        + '" data-act="toggle-subs" data-id="' + esc(t.id) + '" draggable="false" aria-expanded="' + (folded ? 'false' : 'true')
+        + '" title="' + esc(subTip) + '">'
+        + ICON.subtask + '<span>' + esc(progress.done + '/' + progress.total) + '</span>'
+        + (kidSt ? '<span class="sub-st st-' + esc(kidSt) + '"></span>' : '')
+        + '<span class="sub-caret">' + ICON.caret + '</span></button>');
     }
     h.push('</div>');
 
@@ -2162,6 +3237,7 @@
       var rows = Math.min(12, Math.max(2, String(t.text || '').split('\n').length + 1));
       h.push('<textarea class="input edit-area" rows="' + rows + '" data-role="edit-text" data-focus-key="edit-text" data-id="'
         + esc(t.id) + '">' + esc(t.text) + '</textarea>');
+      h.push(attachmentsHtml(t.id, attachmentsOf(t), true));
       h.push('<div class="edit-row"><span class="edit-label">Catégorie</span>');
       h.push(S.data.types.map(function (ct) {
         var on = ct.id === t.type;
@@ -2176,7 +3252,8 @@
       h.push(draftBoxHtml('task:' + t.id, false));
     } else {
       h.push('<div class="task-text" data-act="edit" data-id="' + esc(t.id) + '" title="Cliquer pour modifier">'
-        + taskTextHtml(t.text) + '</div>');
+        + taskTitleBodyHtml(t.text) + '</div>');
+      h.push(attachmentsHtml(t.id, attachmentsOf(t), false));
     }
     h.push('</div>');
 
@@ -2198,6 +3275,7 @@
           + '" title="Supprimer">' + ICON.trash + '</button>'
         : '')
       + '</div>'
+      + reviewBtnHtml(t)
       + artifactBtnHtml(t, convs)
       + termBtnHtml(t, convs)
       + '</div>');
@@ -2402,6 +3480,88 @@
       + '</div>';
   }
 
+  /* ── Lancement sur les sous-tâches ──────────────────────────────────────
+     Une tâche de premier niveau dont des sous-tâches restent à faire se lance sur elle-même, ou sur
+     chacune d'elles : une conversation par sous-tâche cochée, toutes avec le même agent, le même
+     modèle, le même effort et les mêmes mots-clés (voir launchBatch). Jamais le carnet de remarques. */
+  function batchSubsOf(task) {
+    if (!task || task.id === FEEDBACK_ID || isSub(task)) return [];
+    return childrenOf(task.id).filter(function (k) { return !k.done; });
+  }
+
+  function batchTargetOn(task) {
+    return S.ui.newConvoTarget === 'subs' && batchSubsOf(task).length > 0;
+  }
+
+  function batchChosen(task) {
+    return batchSubsOf(task).filter(function (k) { return !!S.ui.newConvoSubs[k.id]; });
+  }
+
+  function batchSubBusy(sub) {
+    return convosOf(sub.id).some(function (c) {
+      var st = displayState(c);
+      return st === 'working' || st === 'waiting' || st === 'open';
+    });
+  }
+
+  /* Ce qui fait partir une sous-tâche décochée, ou ce qui lui manquera. */
+  function batchSubNote(task, sub) {
+    var notes = [];
+    if (taskReviews(sub.id).length) notes.push('rapport de revue déjà écrit');
+    if (batchSubBusy(sub)) notes.push('conversation en cours');
+    var missing = keywordsByIds(task, keywordIdsFor(task, S.ui.newConvoKeywords)).filter(function (kw) {
+      return !keywordIdsFor(sub, [kw.name]).length;
+    }).map(function (kw) { return kw.name; });
+    if (missing.length) notes.push('sans « ' + missing.join(' », « ') + ' » : autre catégorie');
+    return notes.join(' · ');
+  }
+
+  function newFormTargetHtml(task) {
+    var subs = batchSubsOf(task);
+    if (!subs.length) return '';
+    var on = batchTargetOn(task);
+    var off = S.ui.launchBusy ? ' disabled' : '';
+    return '<div class="new-form-block"><div class="new-form-label">Lancer sur</div><div class="seg-dark">'
+      + '<button type="button" class="' + (on ? '' : 'on') + '" data-act="pick-target" data-id="self"' + off + '>Cette tâche</button>'
+      + '<button type="button" class="' + (on ? 'on' : '') + '" data-act="pick-target" data-id="subs"' + off + '>Chaque sous-tâche · '
+      + subs.length + '</button>'
+      + '</div></div>';
+  }
+
+  /* À la place du premier message et du « Travail déjà fait » : chaque sous-tâche a les siens. */
+  function newFormSubsHtml(task) {
+    var h = ['<div class="new-form-block">'];
+    h.push('<div class="new-form-label">Sous-tâches <span class="new-form-note">une conversation chacune, en parallèle</span></div>');
+    h.push('<div class="batch-subs">');
+    batchSubsOf(task).forEach(function (sub) {
+      var on = !!S.ui.newConvoSubs[sub.id];
+      var note = batchSubNote(task, sub);
+      h.push('<label class="batch-sub' + (on ? ' on' : '') + '"><input type="checkbox" data-role="batch-sub" data-id="' + esc(sub.id) + '"'
+        + (on ? ' checked' : '') + (S.ui.launchBusy ? ' disabled' : '') + '>'
+        + '<span class="batch-sub-main"><span class="batch-sub-title">' + esc(firstLine(sub.text, 90).trim() || 'Sans titre') + '</span>'
+        + (note ? '<span class="batch-sub-note">' + esc(note) + '</span>' : '') + '</span></label>');
+    });
+    h.push('</div>');
+    h.push('<div class="kw-hint">Chaque conversation reçoit le texte de sa sous-tâche et ses pièces jointes comme premier message, '
+      + 'et son propre « Travail déjà fait ».</div>');
+    h.push('</div>');
+    h.push('<div class="new-form-block">'
+      + '<div class="new-form-label">Précision pour chaque sous-tâche <span class="new-form-note">facultatif, ajoutée à la fin de chaque premier message</span></div>'
+      + '<textarea class="dark-input new-prompt" rows="2" data-role="batch-note" data-focus-key="batch-note" spellcheck="false" '
+      + 'placeholder="ex. « concentre-toi sur les régressions »">' + esc(S.ui.newConvoNote) + '</textarea></div>');
+    return h.join('');
+  }
+
+  function batchLaunchLabel(task) {
+    var p = S.ui.batchProgress;
+    if (p && p.parentId === task.id) {
+      return p.phase === 'recap' ? 'Préparation…' : 'Lancement ' + Math.min(p.done + 1, p.total) + ' / ' + p.total + '…';
+    }
+    if (S.ui.launchBusy) return 'Lancement…';
+    var n = batchChosen(task).length;
+    return n ? 'Lancer ' + n + (n > 1 ? ' conversations' : ' conversation') + ' dans PowerShell' : 'Aucune sous-tâche cochée';
+  }
+
   /* Formulaire de lancement : agent, modèle, effort, dossier ; `launchLabel` nomme le bouton. */
   /* Le formulaire est reconstruit à chaque clic (mot-clé coché, modèle changé) : son apparition
      ne se joue qu'au premier rendu, sans quoi le fondu repartirait à chaque fois — ça clignotait. */
@@ -2411,10 +3571,10 @@
     var task = taskById(S.ui.termTaskId);
     var enter = newFormEntered ? '' : ' enter';
     newFormEntered = true;
-    return '<div class="new-form' + enter + '">' + newFormAgentHtml()
+    var batch = batchTargetOn(task);
+    return '<div class="new-form' + enter + '">' + newFormTargetHtml(task) + newFormAgentHtml()
       + newFormKeywordHtml(task)
-      + newFormPromptHtml(task)
-      + newFormRecapHtml(task)
+      + (batch ? newFormSubsHtml(task) : newFormPromptHtml(task) + newFormRecapHtml(task))
       + '<div class="new-form-label">Dossier de travail</div>'
       + '<div class="new-form-field">'
       + '<input class="dark-input" type="text" data-role="new-cwd" data-focus-key="new-cwd" spellcheck="false" placeholder="C:\\…" value="'
@@ -2423,8 +3583,11 @@
       + '</div>'
       + '<div class="new-form-actions">'
       + '<button type="button" class="dark-btn" data-act="cancel-new-convo">Annuler</button>'
-      + '<button type="button" class="dark-btn dark-btn-primary" data-act="launch-convo"' + (S.ui.launchBusy ? ' disabled' : '') + '>'
-      + esc(S.ui.launchBusy ? 'Lancement…' : launchLabel) + '</button>'
+      + (batch
+        ? '<button type="button" class="dark-btn dark-btn-primary" data-act="launch-convo"'
+          + (S.ui.launchBusy || !batchChosen(task).length ? ' disabled' : '') + '>' + esc(batchLaunchLabel(task)) + '</button>'
+        : '<button type="button" class="dark-btn dark-btn-primary" data-act="launch-convo"' + (S.ui.launchBusy ? ' disabled' : '') + '>'
+          + esc(S.ui.launchBusy ? 'Lancement…' : launchLabel) + '</button>')
       + '</div></div>';
   }
 
@@ -2440,8 +3603,32 @@
     }).join('') + '</div>';
   }
 
+  function convoRemarks(c) {
+    return c && Array.isArray(c.remarks) ? c.remarks : [];
+  }
+
+  /* Carnet de remarques : ce qui a donné lieu à la conversation — son titre (« Remarques Organizator
+     · 2 · 9 sept. ») ne le dit pas —, numéroté comme l'agent l'a reçu, puis ce qu'on lui a renvoyé
+     ensuite (↪, avec la date). Chaque remarque tient en trois lignes ; l'infobulle la donne en entier. */
+  function convoRemarksHtml(c) {
+    var groups = [];
+    convoRemarks(c).forEach(function (r) {
+      var g = groups[groups.length - 1];
+      if (!g || g.at !== r.sentAt) groups.push(g = { at: r.sentAt, items: [] });
+      g.items.push(r);
+    });
+    if (!groups.length) return '';
+    return '<div class="convo-remarks">' + groups.map(function (g, gi) {
+      return (gi ? '<div class="convo-remarks-again">↪ envoyée' + (g.items.length > 1 ? 's' : '') + ' le ' + esc(fmtDate(g.at)) + '</div>' : '')
+        + g.items.map(function (r, i) {
+          return '<div class="convo-remark" title="' + esc(r.text) + '"><span class="convo-remark-num">' + (i + 1) + '</span>'
+            + '<span class="convo-remark-text">' + esc(String(r.text).trim()) + '</span></div>';
+        }).join('');
+    }).join('') + '</div>';
+  }
+
   /* Liste des sessions. Dans le carnet de remarques, chaque session propose d'y envoyer
-     les remarques en attente (reprise avec un nouveau message). */
+     les remarques en attente (reprise avec un nouveau message), et montre celles qu'elle a reçues. */
   function convoListHtml(convs, feedback) {
     var pending = feedback ? pendingRemarks().length : 0;
     return '<div class="convo-list">' + convs.map(function (c) {
@@ -2454,6 +3641,7 @@
         + (reportCount ? '<span class="convo-artifacts" title="' + esc(reportCount + (reportCount > 1 ? ' rapports produits' : ' rapport produit')) + '">'
           + ICON.artifacts + ' ' + esc(reportCount) + '</span>' : '')
         + '</div>'
+        + (feedback ? convoRemarksHtml(c) : '')
         + convoKeywordsHtml(c)
         + stateHtml(c)
         + saidHtml(c)
@@ -2648,8 +3836,9 @@
       panelKey = null;
       return;
     }
-    var task = taskById(S.ui.termTaskId);
-    if (!task) { host.innerHTML = ''; panelKey = null; S.ui.termTaskId = null; return; }
+    var feed = feedOfPanel(S.ui.termTaskId);
+    var task = feed ? null : taskById(S.ui.termTaskId);
+    if (!task && !feed) { host.innerHTML = ''; panelKey = null; S.ui.termTaskId = null; return; }
 
     var oldLog = host.querySelector('.log');
     var oldBody = host.querySelector('.panel-body');
@@ -2665,13 +3854,14 @@
     h.push('<div class="panel' + (isNew ? ' enter' : '') + '">');
     h.push('<div class="panel-bar">'
       + '<span class="dots"><span class="dot-1"></span><span class="dot-2"></span><span class="dot-3"></span></span>'
-      + '<span class="panel-title">' + esc(task.id === FEEDBACK_ID ? 'remarques — Organizator' : 'agent — ' + firstLine(task.text, 40)) + '</span>'
+      + '<span class="panel-title">' + esc(feed ? feed.title
+        : (task.id === FEEDBACK_ID ? 'remarques — Organizator' : 'agent — ' + firstLine(task.text, 40))) + '</span>'
       + '<span class="panel-spacer"></span>'
       + (conv ? '<button type="button" class="panel-link" data-act="back-to-list">‹ historique</button>' : '')
       + '<button type="button" class="panel-x" data-act="close-term" title="Fermer">✕</button>'
       + '</div>');
-    h.push(conv
-      ? panelTranscriptHtml(conv)
+    h.push(feed ? articlePanelHtml(feed)
+      : conv ? panelTranscriptHtml(conv)
       : (S.ui.artifactView ? artifactsPanelHtml(S.ui.termTaskId)
         : (task.id === FEEDBACK_ID ? feedbackHtml() : panelListHtml(S.ui.termTaskId))));
     h.push('</div>');
@@ -2694,7 +3884,7 @@
     var parent = S.ui.composerParent ? taskById(S.ui.composerParent) : null;
     var h = [];
     h.push('<div class="dialog-backdrop">');
-    h.push('<div class="dialog' + (enter ? ' enter' : '') + '" data-act="noop" role="dialog" aria-label="'
+    h.push('<div class="dialog composer-dialog' + (enter ? ' enter' : '') + '" data-act="noop" role="dialog" aria-label="'
       + (parent ? 'Nouvelle sous-tâche' : 'Nouvelle tâche') + '">');
     h.push('<div class="dialog-title">' + (parent ? 'Nouvelle sous-tâche' : 'Nouvelle tâche') + '</div>');
     /* Sous-tâche : on dit de quoi, et la catégorie du parent est proposée d'office. */
@@ -2741,6 +3931,7 @@
       + 'placeholder="' + (parent ? 'Décrivez la sous-tâche…' : 'Décrivez la tâche…') + ' (plusieurs lignes possibles, Cmd/Ctrl + Entrée pour ajouter)">'
       + esc(S.ui.composerText) + '</textarea>');
     h.push(draftBoxHtml('composer', false));
+    if (S.ui.composerId) h.push(attachmentsHtml(S.ui.composerId, S.ui.composerAttachments, true));
 
     h.push('<div class="dialog-actions">'
       + draftBtnHtml('draft-composer', '', false, 'Rédiger à partir du titre')
@@ -2785,11 +3976,15 @@
     } else {
       h.push('<div class="pr-import-lead">' + esc(prImportLead(im)) + '</div>');
       h.push('<div class="pr-groups">' + im.groups.map(prGroupHtml).join('') + '</div>');
+      h.push(prGroupToggleHtml(im));
     }
     h.push('</div>');
 
     var n = prImportCounts();
-    var label = !n.create && !n.update ? 'Créer les tâches'
+    var label = prImportGrouped(im)
+      ? 'Créer la revue générale · ' + n.create + (n.create > 1 ? ' sous-tâches' : ' sous-tâche')
+        + (n.update ? ', compléter ' + n.update + (n.update > 1 ? ' tâches' : ' tâche') : '')
+      : !n.create && !n.update ? 'Créer les tâches'
       : (n.create ? 'Créer ' + (n.create > 1 ? n.create + ' tâches' : 'une tâche') : '')
         + (n.create && n.update ? ', ' : '')
         + (n.update ? (n.create ? 'compléter ' : 'Compléter ') + (n.update > 1 ? n.update + ' tâches' : 'une tâche') : '');
@@ -2802,6 +3997,26 @@
       + ((n.create || n.update) && S.ui.composerType && !im.busy ? '' : ' disabled') + '>' + esc(label) + '</button>'
       + '</div>');
     return h.join('');
+  }
+
+  /* Revue générale : une tâche datée porte les tickets créés en sous-tâches — lancée sur ses
+     sous-tâches, elle ouvre une conversation par ticket. Les tâches déjà en file qu'on complète
+     restent où elles sont. Sans ticket à créer, il n'y a rien à regrouper. */
+  function prGroupTitle() {
+    return 'Revue générale · ' + new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+  }
+
+  function prImportGrouped(im) {
+    return !!(im && im.group && !im.busy && !im.error && prImportCounts().create > 0);
+  }
+
+  function prGroupToggleHtml(im) {
+    var off = !prImportCounts().create;
+    return '<label class="pr-import-group' + (off ? ' is-off' : '') + '">'
+      + '<input type="checkbox" class="pr-check" data-role="pr-group-toggle"' + (im.group && !off ? ' checked' : '') + (off ? ' disabled' : '') + '>'
+      + '<span class="pr-import-group-main"><span class="pr-import-group-title">Regrouper sous une revue générale</span>'
+      + '<span class="pr-import-group-note">une tâche « ' + esc(prGroupTitle()) + ' », les tickets en sous-tâches</span></span>'
+      + '</label>';
   }
 
   function prImportLead(im) {
@@ -3038,7 +4253,8 @@
   }
 
   function openPrImport() {
-    var im = S.ui.prImport = { busy: true, error: '', host: '', account: '', jiraUrl: S.env.jiraUrl || '', groups: [], checked: {} };
+    /* `group` : les tickets créés vont en sous-tâches d'une revue générale (case décochée d'office). */
+    var im = S.ui.prImport = { busy: true, error: '', host: '', account: '', jiraUrl: S.env.jiraUrl || '', groups: [], checked: {}, group: false };
     render();
     bridge.call('getPullRequests', {}, 60000).then(function (r) {
       if (S.ui.prImport !== im) return;
@@ -3074,7 +4290,7 @@
       var j = S.data.tasks.findIndex(function (x) { return x.id === at; });
       idx = j < 0 ? 0 : j + 1;
     }
-    var created = 0, updated = 0;
+    var created = 0, updated = 0, parentId = null;
     chosen.forEach(function (g) {
       var urls = g.prs.map(function (p) { return p.url; });
       var t = g.status === 'update' ? taskById(g.taskId) : null;
@@ -3086,17 +4302,33 @@
         updated++;
         return;
       }
-      S.data.tasks.splice(idx + created, 0, {
+      /* Regroupé : la revue générale prend la place prévue, ses sous-tâches la suivent. */
+      if (im.group && !parentId) {
+        parentId = uid('n');
+        S.data.tasks.splice(idx, 0, {
+          id: parentId, type: S.ui.composerType, text: prGroupTitle(), done: false, doing: false, created: Date.now(), reviewGroup: true
+        });
+      }
+      var nt = {
         id: uid('n'), type: S.ui.composerType, text: prTaskText(g, im.jiraUrl), done: false, doing: false, created: Date.now(),
         jira: g.key, prs: urls
-      });
+      };
+      if (parentId) nt.parent = parentId;
+      S.data.tasks.splice(idx + (parentId ? 1 : 0) + created, 0, nt);
       created++;
     });
+    dropComposerAttachments();
     S.ui.prImport = null;
     S.ui.composerOpen = false;
     S.ui.composerText = '';
     S.ui.catFormOpen = false;
     commit();
+    if (parentId) {
+      toast('Revue générale créée avec ' + created + (created > 1 ? ' sous-tâches' : ' sous-tâche')
+        + (updated ? ' · ' + (updated > 1 ? updated + ' tâches déjà en file complétées, laissées à leur place'
+          : '1 tâche déjà en file complétée, laissée à sa place') : '') + '.');
+      return;
+    }
     toast((created ? created + (created > 1 ? ' tâches créées' : ' tâche créée') : '')
       + (created && updated ? ', ' : '')
       + (updated ? updated + (updated > 1 ? ' tâches complétées' : ' tâche complétée') : '') + '.');
@@ -3117,6 +4349,17 @@
     }
     out.push(esc(s.slice(last)));
     return out.join('');
+  }
+
+  /* La première ligne est le titre de la tâche, le reste son contexte : même saisie qu'avant,
+     deux tons à l'affichage. */
+  function taskTitleBodyHtml(text) {
+    var s = String(text || '').replace(/^(\s*\n)+/, '');
+    var i = s.indexOf('\n');
+    var title = i < 0 ? s : s.slice(0, i);
+    var body = i < 0 ? '' : s.slice(i + 1).replace(/^(\s*\n)+/, '').replace(/\s+$/, '');
+    return '<div class="task-title">' + taskTextHtml(title) + '</div>'
+      + (body ? '<div class="task-body">' + taskTextHtml(body) + '</div>' : '');
   }
 
   /* Éditeur d'un mot-clé, déplié sous sa catégorie : son nom, ce qu'il veut dire, et la consigne
@@ -3298,6 +4541,8 @@
     { id: 'display', label: 'Affichage', lead: 'L’allure de la file.' },
     { id: 'agents', label: 'Agents', lead: 'Ce qui est proposé au lancement d’une conversation.' },
     { id: 'draft', label: 'Rédaction', lead: 'L’agent qui écrit le contenu d’une tâche ou la consigne d’un mot-clé à partir de son titre, sans ouvrir de terminal.' },
+    { id: 'article', label: 'Articles du jour', lead: 'Chaque jour, un article trouvé sur le web pour vos sujets du moment et un autre sur l’actualité récente de l’IA, lus et résumés par Claude Code. Chacun a sa carte en tête de fenêtre, à côté des quotas.' },
+    { id: 'voice', label: 'Dictée', lead: 'Dicter dans les zones de saisie, et transcrire les enregistrements joints aux tâches, avec Whisper. Tout se passe sur ce poste : seul le modèle se télécharge, une fois.' },
     { id: 'folders', label: 'Dossiers', lead: 'Où les agents travaillent.' },
     { id: 'bitbucket', label: 'Bitbucket', lead: 'Serveur interrogé par « Mes PRs Bitbucket », dans le dialogue Nouvelle tâche.' }
   ];
@@ -3357,6 +4602,8 @@
     if (tab === 'display') h.push(displaySettingsHtml(s));
     else if (tab === 'agents') h.push(agentSettingsHtml(s));
     else if (tab === 'draft') h.push(draftSettingsHtml(s));
+    else if (tab === 'article') h.push(articleSettingsHtml(s));
+    else if (tab === 'voice') h.push(voiceSettingsHtml(s));
     else if (tab === 'folders') h.push(folderSettingsHtml(s));
     else h.push(bitbucketSettingsHtml(s));
     h.push('</div></div>');
@@ -3373,7 +4620,9 @@
         + '<button type="button" class="step-btn" data-act="top-plus"' + (s.topCount >= 8 ? ' disabled' : '') + ' aria-label="Plus">+</button>'
         + '</div>')
       + setRowHtml('Bandes de priorité', 'Maintenant, Ensuite, Plus tard.', switchHtml(s.showBands, 'toggle-bands', 'Bandes de priorité'))
-      + setRowHtml('Mode compact', 'Cartes plus resserrées.', switchHtml(s.compact, 'toggle-compact', 'Mode compact'));
+      + setRowHtml('Mode compact', 'Cartes plus resserrées.', switchHtml(s.compact, 'toggle-compact', 'Mode compact'))
+      + setRowHtml('Notifications Windows', 'Quand une réponse est prête ou qu’un agent pose une question alors qu’Organizator est derrière une autre fenêtre ou réduit : une notification en bas de l’écran, gardée dans le centre de notifications. La cloche, en tête, en garde l’historique dans tous les cas.',
+        switchHtml(s.windowsNotifications !== false, 'toggle-win-notifs', 'Notifications Windows'));
   }
 
   /* Agent par défaut et terminal, puis une carte par agent : son modèle et son effort par défaut. */
@@ -3390,6 +4639,13 @@
       + '<button type="button" class="' + (s.terminal !== 'wt' ? 'on' : '') + '" data-act="term-ps">PowerShell</button>'
       + '<button type="button" class="' + (s.terminal === 'wt' ? 'on' : '') + '" data-act="term-wt"'
       + (S.env.hasWt ? '' : ' disabled') + '>Windows Terminal</button>'
+      + '</div>'));
+    h.push(setRowHtml('Clic sur l’icône de console', 'Sur une carte. « Aller au terminal » : quand la tâche n’a qu’une conversation, '
+      + 'sa fenêtre revient au premier plan — reprise si elle a été fermée ; avec plusieurs, ou aucune, le panneau s’ouvre pour choisir. '
+      + 'Maj&nbsp;+&nbsp;clic fait l’autre.',
+      '<div class="seg2">'
+      + '<button type="button" class="' + (s.termClick !== 'terminal' ? 'on' : '') + '" data-act="term-click-panel">Ouvrir le panneau</button>'
+      + '<button type="button" class="' + (s.termClick === 'terminal' ? 'on' : '') + '" data-act="term-click-terminal">Aller au terminal</button>'
       + '</div>'));
 
     PROVIDERS.forEach(function (pr) {
@@ -3439,6 +4695,84 @@
     }
     h.push(setFieldHtml('Effort', effortSelectHtml(provider, String(s.draftEffort || ''), 'draft-effort', 'draft-effort', false)));
     h.push('<div class="set-card-foot">Quelques phrases suffisent : un modèle rapide répond en une poignée de secondes.</div>');
+    h.push('</div>');
+    return h.join('');
+  }
+
+  /* Article du jour et veille IA : les activer, dire ce qui intéresse (l'article du jour seulement),
+     et l'agent qui cherche, commun aux deux (Claude seulement : la recherche web passe par ses
+     outils WebSearch et WebFetch). */
+  function articleSettingsHtml(s) {
+    var model = String(s.articleModel || '');
+    var custom = S.ui.articleCustom || (model && !catalogHas(catalogFor('claude'), model));
+    var claude = hasProvider('claude');
+    var h = [];
+    h.push(setRowHtml('Proposer un article chaque jour', esc(claude ? 'Pour vos sujets du moment. Cherché au premier lancement de la journée, ou au changement de date.'
+      : 'Claude Code est introuvable sur ce poste : l’article du jour a besoin de sa recherche web.'),
+      switchHtml(s.articleEnabled !== false, 'toggle-article', 'Proposer un article chaque jour')));
+    h.push(setRowHtml('Vos sujets', 'Un par ligne, ou séparés par des virgules. Ils passent avant ce que l’agent devine de votre file de tâches et de vos dernières conversations, qu’il lit aussi.',
+      '<textarea class="input set-topics" rows="4" data-role="article-topics" data-focus-key="article-topics" spellcheck="false" '
+      + 'placeholder="ex. .NET et performances, revue de code, agents IA, migration Git">' + esc(s.articleTopics || '') + '</textarea>', true));
+    h.push(setRowHtml('Veille IA', esc(claude ? 'Un second article chaque jour, dans sa propre carte : ce qui vient de se passer dans l’IA — modèles, agents de code, outils, recherche —, publié dans les deux dernières semaines et vu par un développeur. Il ne tient compte ni de vos sujets ni de votre file.'
+      : 'Claude Code est introuvable sur ce poste : la veille IA a besoin de sa recherche web.'),
+      switchHtml(s.articleAiEnabled !== false, 'toggle-article-ai', 'Veille IA')));
+    h.push('<div class="set-card">');
+    h.push('<div class="set-card-head"><span class="set-card-title">Claude Code</span></div>');
+    h.push(setFieldHtml('Modèle', modelSelectHtml('claude', model, S.ui.articleCustom, 'article-model-select', 'article-model-select', false)));
+    if (custom) {
+      h.push(setFieldHtml('', '<input class="input set-cwd" type="text" data-role="article-model" data-focus-key="article-model" '
+        + 'spellcheck="false" placeholder="Identifiant de modèle, ex. sonnet" value="' + esc(model) + '">'));
+    }
+    h.push(setFieldHtml('Effort', effortSelectHtml('claude', String(s.articleEffort || ''), 'article-effort', 'article-effort', false)));
+    h.push('<div class="set-card-foot">Le même agent cherche les deux articles. Chercher, lire et résumer prend une minute environ ; sonnet avec un effort moyen y suffit. Chaque recherche compte dans votre quota Claude Code.</div>');
+    h.push('</div>');
+    return h.join('');
+  }
+
+  /* Dictée et transcription : les activer, la langue parlée, et le modèle Whisper — chacun avec sa
+     taille, ce qu'il vaut, et de quoi le télécharger ou le supprimer. */
+  function voiceSettingsHtml(s) {
+    var h = [];
+    h.push(setRowHtml('Dictée', 'Un micro se pose dans le coin de la zone de saisie où vous écrivez. '
+      + '<b>Ctrl + Maj + Espace</b> démarre et termine, Échap annule ; le texte s’insère au curseur.',
+      switchHtml(s.whisperEnabled !== false, 'toggle-whisper', 'Dictée')));
+    h.push(setRowHtml('Transcrire les enregistrements joints', 'Un fichier audio joint à une tâche (mp3, m4a, wav, ogg…) est transcrit aussitôt, '
+      + 'et sa transcription jointe en texte : c’est elle que l’agent lit. Sinon, et pour le son d’une vidéo, le bouton Transcrire de la pièce jointe.',
+      switchHtml(s.whisperAuto !== false, 'toggle-whisper-auto', 'Transcrire les enregistrements joints')));
+    h.push(setRowHtml('Langue parlée', 'La fixer évite les contresens sur une dictée de quelques mots ; la détection automatique convient à un enregistrement dans une autre langue.',
+      '<select class="input set-select" data-role="whisper-language" data-focus-key="whisper-language">'
+      + WHISPER_LANGS.map(function (l) {
+        return '<option value="' + l.id + '"' + (s.whisperLanguage === l.id ? ' selected' : '') + '>' + esc(l.label) + '</option>';
+      }).join('') + '</select>'));
+
+    var models = whisperModels();
+    h.push('<div class="set-card">');
+    h.push('<div class="set-card-head"><span class="set-card-title">Modèle Whisper</span></div>');
+    if (!models.length) h.push('<div class="set-card-foot">Moteur de transcription indisponible dans cette fenêtre.</div>');
+    models.forEach(function (m) {
+      var on = s.whisperModel === m.id;
+      var dl = S.ui.whisperDl[m.id] || (m.downloading ? { received: m.received, total: m.total } : null);
+      var state = dl
+        ? '<span class="wm-state" data-whisper-dl="' + esc(m.id) + '">' + esc(whisperDlLabel(dl)) + '</span>'
+          + '<button type="button" class="btn btn-ghost wm-btn" data-act="whisper-remove" data-id="' + esc(m.id) + '">Interrompre</button>'
+        : (m.downloaded
+          ? '<span class="wm-state is-ok">' + ICON.check + 'Téléchargé</span>'
+            + '<button type="button" class="btn btn-ghost wm-btn" data-act="whisper-remove" data-id="' + esc(m.id) + '" title="Libérer ' + esc(fmtSize(m.size)) + ' sur le disque">Supprimer</button>'
+          : '<button type="button" class="btn btn-secondary wm-btn" data-act="whisper-download" data-id="' + esc(m.id) + '">Télécharger</button>');
+      h.push('<div class="wm-row' + (on ? ' on' : '') + '">'
+        + '<button type="button" class="wm-pick" data-act="whisper-model" data-id="' + esc(m.id) + '" role="radio" aria-checked="' + (on ? 'true' : 'false') + '">'
+        + '<span class="wm-radio"></span><span class="wm-text"><span class="wm-name">' + esc(m.label)
+        + ' <span class="wm-size">' + esc(fmtSize(m.size)) + '</span>' + (m.id === DEFAULTS.whisperModel ? '<span class="set-badge">recommandé</span>' : '') + '</span>'
+        + '<span class="wm-note">' + esc(m.note) + '</span></span></button>'
+        + '<span class="wm-side">' + state + '</span></div>');
+    });
+    if (models.length) {
+      var chosen = models.filter(function (m) { return m.id === s.whisperModel; })[0];
+      h.push('<div class="set-card-foot">' + (chosen && !chosen.downloaded
+        ? 'Le modèle choisi se téléchargera de lui-même à la première dictée (' + esc(fmtSize(chosen.size)) + ').'
+        : 'Le modèle reste en mémoire dix minutes après une transcription, puis il est libéré.')
+        + ' Rangés dans ' + esc((S.env.whisper && S.env.whisper.dir) || 'le dossier de données') + '.</div>');
+    }
     h.push('</div>');
     return h.join('');
   }
@@ -3530,18 +4864,27 @@
      l'application ne peut pas charger elle-même une ressource de l'hôte des rapports). */
   var READER_FRAMED = { markdown: 1, text: 1, table: 1, image: 1 };
 
-  /* Script d'amorçage du cadre : reçoit le HTML (message `html`), remonte les clics sur les
-     liens (`link`) et Échap (`close`), et signale qu'il est prêt (`ready`). */
+  /* Script d'amorçage du cadre : reçoit le HTML (message `html`, `variant` pour la mise en page,
+     `y` pour reprendre un défilement), remonte les clics sur les liens (`link`), Échap (`close`),
+     ← → (`key`, pour passer d'un constat à l'autre dans la vue revue), Ctrl + Pg↑ / Pg↓ / Tab
+     (`key` TabPrev / TabNext, d'un ticket à l'autre dans les revues groupées), son défilement
+     (`scroll`, au plus toutes les 250 ms), et signale qu'il est prêt (`ready`). */
   var READER_SCRIPT = [
     '(function () {',
     'var doc = document.getElementById("doc");',
     'function post(m) { parent.postMessage(m, "*"); }',
     'addEventListener("message", function (e) {',
     '  var m = e.data || {}; if (m.type !== "html") return;',
+    '  document.body.className = m.variant ? String(m.variant) : "";',
     '  var root = document.documentElement;',
     '  var atBottom = innerHeight + scrollY >= root.scrollHeight - 40; var y = scrollY;',
     '  doc.innerHTML = String(m.html || "");',
-    '  if (m.follow && atBottom) scrollTo(0, root.scrollHeight); else scrollTo(0, m.follow ? y : 0);',
+    '  if (m.follow && atBottom) scrollTo(0, root.scrollHeight); else scrollTo(0, m.follow ? y : (+m.y || 0));',
+    '});',
+    'var scrollTimer = 0, sentY = -1;',
+    'addEventListener("scroll", function () {',
+    '  if (scrollTimer) return;',
+    '  scrollTimer = setTimeout(function () { scrollTimer = 0; if (scrollY !== sentY) { sentY = scrollY; post({ type: "scroll", y: scrollY }); } }, 250);',
     '});',
     'document.addEventListener("click", function (e) {',
     '  var a = e.target && e.target.closest ? e.target.closest("a[href]") : null; if (!a) return;',
@@ -3552,7 +4895,13 @@
     '  }',
     '  post({ type: "link", href: a.href });',
     '});',
-    'document.addEventListener("keydown", function (e) { if (e.key === "Escape") post({ type: "close" }); });',
+    'document.addEventListener("keydown", function (e) {',
+    '  if (e.key === "Escape") { post({ type: "close" }); return; }',
+    '  if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === "PageDown" || e.key === "PageUp" || e.key === "Tab")) {',
+    '    e.preventDefault(); post({ type: "key", key: e.key === "PageUp" || (e.key === "Tab" && e.shiftKey) ? "TabPrev" : "TabNext" }); return;',
+    '  }',
+    '  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) post({ type: "key", key: e.key });',
+    '});',
     'post({ type: "ready" });',
     '})();'
   ].join('\n');
@@ -3590,17 +4939,23 @@
     var v = r.view;
     var name = lastSegment(v ? v.full : r.path);
     var busting = v ? '?t=' + encodeURIComponent(v.stamp) : '';
-    var h = ['<div class="reader-backdrop"><div class="reader enter" role="dialog" aria-label="Lecture d’un rapport">'];
+    var G = r.group;
+    /* Revues groupées : le lecteur prend toute la fenêtre, comme la vue revue, sous la barre d'onglets. */
+    var h = [G
+      ? '<div class="reader-backdrop rv-backdrop is-group"><div class="reader is-wide' + (G.entered ? '' : ' enter') + '" role="dialog" aria-label="Lecture d’un rapport">'
+      : '<div class="reader-backdrop"><div class="reader enter" role="dialog" aria-label="Lecture d’un rapport">'];
     h.push('<div class="reader-bar">'
       + (r.back ? '<button type="button" class="dark-btn reader-btn reader-back" data-act="reader-back" title="Revenir au rapport précédent">‹</button>' : '')
       + '<span class="reader-icon">' + ICON.artifacts + '</span>'
       + '<div class="reader-head"><div class="reader-name" title="' + esc(v ? v.full : r.path) + '">' + esc(name) + '</div>'
       + '<div class="reader-meta">' + esc(v ? readerMeta(v) : (kind === 'error' ? 'Lecture impossible' : 'Lecture…')) + '</div></div>'
       + '<span class="panel-spacer"></span>'
+      + (v && reviewModel(v) ? '<button type="button" class="dark-btn reader-btn" data-act="rv-review" title="Revenir à l’inventaire des constats">Vue revue</button>' : '')
       + (v ? '<button type="button" class="dark-btn reader-btn" data-act="reader-vscode" title="Ouvrir dans Visual Studio Code">VS Code</button>'
         + '<button type="button" class="dark-btn reader-btn" data-act="reader-folder" title="Afficher dans l’Explorateur">Dossier</button>' : '')
       + '<button type="button" class="panel-x" data-act="close-reader" title="Fermer (Échap)">✕</button>'
       + '</div>');
+    if (G) h.push('<div class="rv-tabs-host" data-role="rv-tabs"></div>');
     h.push('<div class="reader-body">');
     if (READER_FRAMED[kind]) {
       h.push('<iframe class="reader-frame" title="Contenu du rapport" sandbox="allow-scripts" srcdoc="' + esc(readerFrameDoc()) + '"></iframe>');
@@ -3628,19 +4983,27 @@
     var host = $('#reader');
     if (!host) return;
     var r = S.ui.reader;
+    /* Revues groupées : les onglets suivent les rapports qui paraissent (l'onglet actif peut changer). */
+    if (r && r.group) { syncReviewGroup(r.group); r = S.ui.reader; }
     if (!r) {
       if (host.innerHTML) host.innerHTML = '';
       readerKey = null; readerStamp = null; readerFrame = null; readerReady = false;
+      chatFrame = null; chatReady = false;
       return;
     }
+    if (r.pending) { renderReviewPending(host, r); return; }
+    if (reviewShown(r)) { renderReview(host, r); return; }
     var v = r.view;
     var kind = v ? v.kind : (r.error ? 'error' : 'loading');
-    var key = r.path + '|' + r.cwd + '|' + kind + '|' + (r.back ? 'b' : '');
+    var key = r.path + '|' + r.cwd + '|' + kind + '|' + (r.back ? 'b' : '') + (r.group ? '|g' + r.taskId : '');
     if (readerKey !== key) {
       host.innerHTML = readerShellHtml(r, kind);
       readerKey = key; readerStamp = null; readerReady = false;
       readerFrame = host.querySelector('.reader-frame');
+      chatFrame = null; chatReady = false;
+      if (r.group) r.group.entered = true;
     }
+    if (r.group) renderReviewTabs(host, r.group);
     if (!v || readerStamp === v.stamp) return;
     var first = readerStamp === null;
     readerStamp = v.stamp;
@@ -3656,26 +5019,813 @@
   }
 
   /* `follow` : relecture d'un fichier déjà affiché — le cadre garde son défilement, ou suit la
-     fin si on y était (un rapport qui s'écrit se lit au fil de l'eau). */
+     fin si on y était (un rapport qui s'écrit se lit au fil de l'eau). Dans la vue revue, le cadre
+     montre le corps du constat ouvert. */
   function pushReaderHtml(follow) {
     var r = S.ui.reader;
-    if (!r || !r.view || !readerFrame || !readerReady || !READER_FRAMED[r.view.kind]) return;
+    if (!r || !r.view || !readerFrame || !readerReady) return;
+    var msg;
+    if (reviewShown(r)) {
+      var f = reviewCurrent(r);
+      reviewPushed = (f ? f.key : '') + '|' + r.view.stamp;
+      msg = { type: 'html', html: f ? f.html : '', follow: !!follow, variant: 'finding' };
+    } else {
+      if (!READER_FRAMED[r.view.kind]) return;
+      /* `y` : le défilement retenu par l'onglet, quand on revient à son rapport complet. */
+      msg = { type: 'html', html: r.view.html || '', follow: !!follow, y: follow ? 0 : r.docY || 0 };
+    }
     try {
-      readerFrame.contentWindow.postMessage({ type: 'html', html: r.view.html || '', follow: !!follow }, '*');
+      readerFrame.contentWindow.postMessage(msg, '*');
     } catch (e) { /* cadre en cours de remplacement */ }
+  }
+
+  /* ── Vue revue ─────────────────────────────────────────────────────────
+     Un rapport de revue de code (l'hôte y a trouvé des constats : readArtifact → `review`) ne se
+     lit pas d'un bloc : il s'ouvre en plein écran sur l'inventaire de ses constats, en colonnes
+     par criticité, comme l'écran Résultats de ReviewTool. Un clic ouvre un constat : son en-tête
+     dans l'application, son corps dans le même cadre isolé que le lecteur (le Markdown de l'agent
+     n'atteint toujours pas la page), la liste à côté, ↑ ↓ pour passer au suivant. « Rapport
+     complet » rend le Markdown entier, dans le lecteur ordinaire. Rien n'est enregistré. */
+
+  var REVIEW_SEV = {
+    blocker: { label: 'Bloquant', many: 'Bloquants', color: '#c0392b', ink: '#9d2f24', weight: 30 },
+    major: { label: 'Majeur', many: 'Majeurs', color: '#e08a1e', ink: '#9a5a0b', weight: 12 },
+    minor: { label: 'Mineur', many: 'Mineurs', color: '#d9b21f', ink: '#7d6300', weight: 4 },
+    info: { label: 'Suggestion', many: 'Suggestions', color: '#2f6fb5', ink: '#245a93', weight: 1 }
+  };
+  var REVIEW_ORDER = ['blocker', 'major', 'minor', 'info'];
+  /* Pastille de tête d'un verdict (« 🔴 Ne pas merger ») : la couleur la dit déjà. */
+  var REVIEW_MARK = /^\s*(?:🔴|🟠|🟡|🔵|🟢|✅|⚪|⛔|🛑|ℹ️?)\s*/;
+
+  var reviewPushed = null, reviewAsideSel = null;
+
+  /* Constats de la vue, rangés par gravité puis dans l'ordre du rapport ; calculés une fois par lecture. */
+  function reviewModel(v) {
+    if (!v || !v.review || !Array.isArray(v.review.findings) || !v.review.findings.length) return null;
+    if (v.rvModel) return v.rvModel;
+    var seen = {};
+    var list = v.review.findings.map(function (f, i) {
+      var key = String(f.id || i + 1);
+      while (seen[key]) key += '′';
+      seen[key] = true;
+      return {
+        key: key, id: String(f.id || ''), sev: REVIEW_SEV[f.severity] ? f.severity : 'minor',
+        title: String(f.title || ''), category: String(f.category || ''), where: String(f.where || ''),
+        tags: Array.isArray(f.tags) ? f.tags.map(String) : [], html: String(f.html || ''), order: i
+      };
+    });
+    list.sort(function (a, b) { return REVIEW_ORDER.indexOf(a.sev) - REVIEW_ORDER.indexOf(b.sev) || a.order - b.order; });
+    v.rvModel = { verdict: String(v.review.verdict || ''), level: String(v.review.level || ''), findings: list };
+    return v.rvModel;
+  }
+
+  /* La vue revue l'emporte sur le lecteur tant qu'on ne lui a pas préféré le rapport complet. */
+  function reviewShown(r) {
+    if (!(r && r.view && r.mode !== 'doc' && reviewModel(r.view))) return false;
+    if (!r.rv) r.rv = { sel: '', cat: '', scroll: 0 };
+    return true;
+  }
+
+  /* Constats affichés : ceux de la catégorie retenue, s'il y en a une. */
+  function reviewList(r) {
+    var m = reviewModel(r.view);
+    var cat = r.rv.cat;
+    return cat ? m.findings.filter(function (f) { return f.category.toLowerCase() === cat; }) : m.findings;
+  }
+
+  function reviewCurrent(r) {
+    if (!r || !r.rv || !r.rv.sel) return null;
+    var m = reviewModel(r.view);
+    for (var i = 0; m && i < m.findings.length; i++) if (m.findings[i].key === r.rv.sel) return m.findings[i];
+    return null;
+  }
+
+  /* Santé de la branche, calculée comme dans ReviewTool : bloquant 30, majeur 12, mineur 4
+     (suggestion 1) ; un bloquant la plafonne bas, aucun constat la met à 100. */
+  function reviewHealth(m) {
+    var weight = 0, blockers = 0;
+    m.findings.forEach(function (f) { weight += REVIEW_SEV[f.sev].weight; if (f.sev === 'blocker') blockers++; });
+    var score = Math.min(100, Math.max(blockers ? 5 : 55, Math.round(100 - weight * 0.9)));
+    var tone = blockers ? REVIEW_SEV.blocker.color : (score >= 80 ? '#2b7a4b' : REVIEW_SEV.major.color);
+    return { score: score, color: tone, blockers: blockers };
+  }
+
+  /* Niveau d'un rapport pour la pastille de son onglet : celui du verdict, sinon le constat le plus grave. */
+  function reviewLevel(m) {
+    if (REVIEW_SEV[m.level]) return m.level;
+    if (m.level === 'ok') return 'ok';
+    return m.findings[0] ? m.findings[0].sev : 'ok';
+  }
+
+  /* Le code d'un titre garde ses accents graves : on le rend en <code>, le reste échappé. */
+  function tickHtml(text) {
+    return String(text || '').split('`').map(function (part, i) {
+      return i % 2 ? '<code>' + esc(part) + '</code>' : esc(part);
+    }).join('');
+  }
+
+  /* Emplacement court pour une carte : le premier fichier cité (« Contact.cs:987 »), sinon le début du texte. */
+  function reviewLoc(where) {
+    var spans = String(where || '').match(/`[^`]+`/g) || [];
+    for (var i = 0; i < spans.length; i++) {
+      var m = /^(.*?[\w\-]+\.[A-Za-z][A-Za-z0-9]{0,7})(:\S*)?$/.exec(spans[i].slice(1, -1).trim());
+      if (m) return lastSegment(m[1]) + (m[2] || '');
+    }
+    var plain = String(where || '').replace(/`/g, '').trim();
+    return plain.length > 48 ? plain.slice(0, 47) + '…' : plain;
+  }
+
+  function reviewSevStyle(sev) {
+    var s = REVIEW_SEV[sev];
+    return '--sev:' + s.color + ';--sev-ink:' + s.ink;
+  }
+
+  function reviewRingHtml(h, size, hole) {
+    return '<span class="rv-ring" style="width:' + size + 'px;height:' + size + 'px;background:conic-gradient('
+      + h.color + ' ' + (h.score * 3.6) + 'deg, var(--color-neutral-300) 0)">'
+      + (hole ? '<span class="rv-ring-hole" style="width:' + hole + 'px;height:' + hole + 'px">' + esc(h.score) + '</span>' : '')
+      + '</span>';
+  }
+
+  function reviewCardHtml(f, talks) {
+    var loc = reviewLoc(f.where);
+    return '<button type="button" class="rv-card" data-act="rv-pick" data-key="' + esc(f.key) + '" style="' + reviewSevStyle(f.sev) + '">'
+      + '<span class="rv-card-body">'
+      + '<span class="rv-card-top">' + (f.id ? '<span class="rv-id">' + esc(f.id) + '</span>' : '')
+      + (f.category ? '<span class="rv-cat">' + esc(f.category) + '</span>' : '')
+      + f.tags.map(function (t) { return '<span class="rv-tag">' + esc(t) + '</span>'; }).join('')
+      + talkMarkHtml(talks && talks[f.key]) + '</span>'
+      + '<span class="rv-card-title">' + tickHtml(f.title) + '</span>'
+      + (loc ? '<span class="rv-card-loc" title="' + esc(f.where.replace(/`/g, '')) + '">' + esc(loc) + '</span>' : '')
+      + '</span></button>';
+  }
+
+  function reviewOverviewHtml(r, m) {
+    var h = reviewHealth(m);
+    var shown = reviewList(r);
+    var verdict = m.verdict.replace(REVIEW_MARK, '');
+    verdict = verdict.charAt(0).toUpperCase() + verdict.slice(1);
+    var level = REVIEW_SEV[m.level] ? m.level : (m.level === 'ok' ? '' : (h.blockers ? 'blocker' : ''));
+    var counts = REVIEW_ORDER.map(function (sev) {
+      var n = m.findings.filter(function (f) { return f.sev === sev; }).length;
+      return '<span class="rv-count" style="' + reviewSevStyle(sev) + '"><span class="rv-sq"></span><b>' + esc(n) + '</b>'
+        + esc((n > 1 ? REVIEW_SEV[sev].many : REVIEW_SEV[sev].label).toLowerCase()) + '</span>';
+    }).join('');
+
+    var cats = {};
+    m.findings.forEach(function (f) {
+      if (!f.category) return;
+      var k = f.category.toLowerCase();
+      if (!cats[k]) cats[k] = { label: f.category, n: 0 };
+      cats[k].n++;
+    });
+    var catKeys = Object.keys(cats);
+    var filters = catKeys.length > 1
+      ? '<div class="rv-filters"><span class="rv-filters-label">Catégories</span>'
+        + '<button type="button" class="rv-chip" data-act="rv-cat" data-cat="" aria-pressed="' + (!r.rv.cat) + '">Toutes<span class="rv-chip-n">' + esc(m.findings.length) + '</span></button>'
+        + catKeys.map(function (k) {
+          return '<button type="button" class="rv-chip" data-act="rv-cat" data-cat="' + esc(k) + '" aria-pressed="' + (r.rv.cat === k) + '">'
+            + esc(cats[k].label) + '<span class="rv-chip-n">' + esc(cats[k].n) + '</span></button>';
+        }).join('') + '</div>'
+      : '';
+
+    var talks = findingTalks(r);
+    var cols = REVIEW_ORDER.map(function (sev) {
+      var items = shown.filter(function (f) { return f.sev === sev; });
+      return '<section class="rv-col" style="' + reviewSevStyle(sev) + '"><div class="rv-col-head">'
+        + '<span class="rv-col-label">' + esc(REVIEW_SEV[sev].many) + '</span><span class="rv-col-n">' + esc(items.length) + '</span></div>'
+        + (items.length ? items.map(function (f) { return reviewCardHtml(f, talks); }).join('') : '<span class="rv-col-empty">Aucun</span>') + '</section>';
+    }).join('');
+
+    return '<div class="rv-overview-in">'
+      + '<section class="rv-health">' + reviewRingHtml(h, 64, 52)
+      + '<div class="rv-verdict"><span class="rv-kicker">' + (verdict ? 'Verdict' : 'Santé de la branche') + '</span>'
+      + (verdict ? '<span class="rv-verdict-text">' + tickHtml(verdict) + '</span>' : '')
+      + '<span class="rv-badge" style="' + reviewSevStyle(h.blockers ? 'blocker' : (level || 'info')) + '">'
+      + esc(h.blockers ? h.blockers + (h.blockers > 1 ? ' bloquants avant merge' : ' bloquant avant merge') : 'Aucun bloquant') + '</span></div>'
+      + '<div class="rv-counts">' + counts + '</div></section>'
+      + filters
+      + '<div class="rv-cols">' + cols + '</div>'
+      + '</div>';
+  }
+
+  function reviewHeadHtml(r, m, f) {
+    var shown = reviewList(r);
+    var idx = -1;
+    for (var i = 0; i < shown.length; i++) if (shown[i].key === f.key) idx = i;
+    var talk = findingTalks(r)[f.key];
+    var talking = !!r.rv.chat;
+    return '<div class="rv-art-top"><span class="rv-art-pos">' + esc((idx + 1) + ' / ' + shown.length) + '</span>'
+      + '<span class="rv-art-nav">'
+      + '<button type="button" class="rv-nav-btn rv-talk-btn' + (talk && talk.running ? ' is-running' : '') + '" data-act="rv-chat" aria-pressed="' + talking + '" title="'
+      + esc(talking ? 'Revenir à la liste des constats (Échap)' : 'Poser des questions sur ce constat à l’agent qui a écrit la revue') + '">'
+      + ICON.talk + '<span>Discuter</span>' + (talk && talk.n ? '<span class="rv-talk-n">' + esc(talk.n) + '</span>' : '') + '</button>'
+      + '<button type="button" class="rv-nav-btn" data-act="rv-prev"' + (idx <= 0 ? ' disabled' : '') + ' title="Constat précédent (↑)">‹ Précédent</button>'
+      + '<button type="button" class="rv-nav-btn" data-act="rv-next"' + (idx >= shown.length - 1 ? ' disabled' : '') + ' title="Constat suivant (↓)">Suivant ›</button>'
+      + '</span></div>'
+      + '<div class="rv-art-badges"><span class="rv-badge">' + esc(REVIEW_SEV[f.sev].label) + '</span>'
+      + (f.id ? '<span class="rv-id">' + esc(f.id) + '</span>' : '')
+      + (f.category ? '<span class="rv-cat">' + esc(f.category) + '</span>' : '')
+      + f.tags.map(function (t) { return '<span class="rv-tag">' + esc(t) + '</span>'; }).join('') + '</div>'
+      + '<h2 class="rv-art-title">' + tickHtml(f.title) + '</h2>'
+      + (f.where ? '<div class="rv-art-where"><span class="rv-art-where-k">Où</span>' + tickHtml(f.where) + '</div>' : '');
+  }
+
+  function reviewAsideHtml(r, m, f) {
+    var shown = reviewList(r);
+    var h = reviewHealth(m);
+    var talks = findingTalks(r);
+    var groups = REVIEW_ORDER.map(function (sev) {
+      var items = shown.filter(function (x) { return x.sev === sev; });
+      if (!items.length) return '';
+      return '<div class="rv-side-group" style="' + reviewSevStyle(sev) + '"><div class="rv-side-head"><span class="rv-sq"></span>'
+        + esc(items.length > 1 ? REVIEW_SEV[sev].many : REVIEW_SEV[sev].label) + '<span class="rv-col-n">' + esc(items.length) + '</span></div>'
+        + items.map(function (x) {
+          return '<button type="button" class="rv-side-item" data-act="rv-pick" data-key="' + esc(x.key) + '"'
+            + (x.key === f.key ? ' aria-current="true"' : '') + '>'
+            + '<span class="rv-side-id">' + esc(x.id || '·') + '</span>'
+            + '<span class="rv-side-title">' + tickHtml(x.title) + '</span>' + talkMarkHtml(talks[x.key]) + '</button>';
+        }).join('') + '</div>';
+    }).join('');
+    return '<button type="button" class="rv-overview-btn" data-act="rv-overview" title="Revenir aux colonnes (Échap)">'
+      + reviewRingHtml(h, 28, 0) + '<span class="rv-overview-label">Vue d’ensemble</span>'
+      + '<span class="rv-overview-score">santé ' + esc(h.score) + '</span></button>'
+      + '<div class="rv-side-list">' + groups + '</div>'
+      + '<div class="rv-keys">↑ ↓ constat précédent / suivant · ' + (r.group ? 'Ctrl + Pg↑ / Pg↓ ticket · ' : '') + 'Échap vue d’ensemble</div>';
+  }
+
+  function reviewShellHtml(r) {
+    var v = r.view;
+    var G = r.group;
+    return '<div class="reader-backdrop rv-backdrop' + (G ? ' is-group' : '') + '"><div class="rv' + (G && G.entered ? '' : ' enter') + '" role="dialog" aria-label="Revue de code">'
+      + '<div class="reader-bar">'
+      + (r.back ? '<button type="button" class="dark-btn reader-btn reader-back" data-act="reader-back" title="Revenir au rapport précédent">‹</button>' : '')
+      + '<span class="reader-icon">' + ICON.review + '</span>'
+      + '<div class="reader-head"><div class="rv-title" title="' + esc(v.title) + '">' + esc(v.title || lastSegment(v.full)) + '</div>'
+      + '<div class="reader-meta" data-role="rv-meta"></div></div>'
+      + '<span class="panel-spacer"></span>'
+      + '<button type="button" class="dark-btn reader-btn" data-act="rv-doc" title="Lire le rapport en entier">Rapport complet</button>'
+      + '<button type="button" class="dark-btn reader-btn" data-act="reader-vscode" title="Ouvrir dans Visual Studio Code">VS Code</button>'
+      + '<button type="button" class="dark-btn reader-btn" data-act="reader-folder" title="Afficher dans l’Explorateur">Dossier</button>'
+      + '<button type="button" class="panel-x" data-act="close-reader" title="Fermer (Échap)">✕</button>'
+      + '</div>'
+      + (G ? '<div class="rv-tabs-host" data-role="rv-tabs"></div>' : '')
+      + '<div class="rv-main">'
+      + '<div class="rv-overview" data-role="rv-overview"></div>'
+      + '<div class="rv-focus" data-role="rv-focus" hidden>'
+      + '<article class="rv-article" data-role="rv-article"><div class="rv-art-head" data-role="rv-art-head"></div>'
+      + '<div class="rv-art-body"><iframe class="reader-frame rv-frame" title="Détail du constat" sandbox="allow-scripts" srcdoc="'
+      + esc(readerFrameDoc()) + '"></iframe></div></article>'
+      + '<aside class="rv-aside" data-role="rv-aside"></aside>'
+      /* Discussion sur le constat ouvert : construite une fois avec la vue, comme le cadre du constat.
+         Le fil (texte de l'agent) est dans un cadre isolé ; la zone de saisie reste dans la page. */
+      + '<section class="rv-chat" data-role="rv-chat" hidden aria-label="Discussion sur le constat">'
+      + '<div class="rv-chat-head" data-role="rv-chat-head"></div>'
+      + '<div class="rv-chat-body"><iframe class="reader-frame rv-chat-frame" title="Discussion sur le constat" sandbox="allow-scripts" srcdoc="'
+      + esc(readerFrameDoc()) + '"></iframe></div>'
+      + '<div class="rv-chat-form"><textarea class="input rv-chat-q" data-role="rv-chat-q" rows="2" spellcheck="true"></textarea>'
+      + '<div class="rv-chat-actions" data-role="rv-chat-actions"></div></div>'
+      + '</section>'
+      + '</div></div></div></div>';
+  }
+
+  /* Ne réécrit un bloc que si son HTML a changé : un rendu de l'application (relecture des
+     sessions…) ne doit ni faire clignoter la vue ni perdre un survol. */
+  function setHtml(el, html) {
+    if (el && el.rvHtml !== html) { el.innerHTML = html; el.rvHtml = html; }
+  }
+
+  /* Le cadre du constat est construit une fois pour toutes avec la vue : les rendus suivants
+     ne touchent qu'à ce qui l'entoure, et lui poussent le corps du constat ouvert. */
+  function renderReview(host, r) {
+    var v = r.view;
+    var m = reviewModel(v);
+    var key = 'review|' + r.path + '|' + r.cwd + '|' + (r.back ? 'b' : '') + (r.group ? '|g' + r.taskId : '');
+    var built = readerKey !== key;
+    if (built) {
+      host.innerHTML = reviewShellHtml(r);
+      readerKey = key; readerStamp = null; readerReady = false;
+      readerFrame = host.querySelector('.rv-frame');
+      reviewPushed = null; reviewAsideSel = null;
+      chatFrame = host.querySelector('.rv-chat-frame'); chatReady = false; chatPushed = null; chatShape = null;
+      if (r.group) r.group.entered = true;
+    }
+    if (r.group) renderReviewTabs(host, r.group);
+    readerStamp = v.stamp;
+    var meta = host.querySelector('[data-role="rv-meta"]');
+    if (meta) meta.textContent = lastSegment(v.full) + ' · ' + readerMeta(v);
+    ensureFindingChats(v.full);
+
+    if (r.rv.sel && !reviewCurrent(r)) r.rv.sel = '';
+    var f = reviewCurrent(r);
+    var overview = host.querySelector('[data-role="rv-overview"]');
+    var focus = host.querySelector('[data-role="rv-focus"]');
+    if (f) {
+      /* Vue tout juste reconstruite (retour sur un onglet, d'un lien) : ses colonnes n'ont pas défilé. */
+      if (!overview.hidden) { if (!built) r.rv.scroll = overview.scrollTop; overview.hidden = true; }
+      focus.hidden = false;
+      host.querySelector('[data-role="rv-article"]').setAttribute('style', reviewSevStyle(f.sev));
+      setHtml(host.querySelector('[data-role="rv-art-head"]'), reviewHeadHtml(r, m, f));
+      /* À côté du constat : la liste des autres, ou la discussion sur celui-ci. */
+      var aside = host.querySelector('[data-role="rv-aside"]');
+      var chatEl = host.querySelector('[data-role="rv-chat"]');
+      aside.hidden = !!r.rv.chat;
+      chatEl.hidden = !r.rv.chat;
+      if (r.rv.chat) {
+        reviewAsideSel = null;
+        renderFindingChat(host, r, f);
+      } else {
+        setHtml(aside, reviewAsideHtml(r, m, f));
+        if (reviewAsideSel !== f.key) {
+          reviewAsideSel = f.key;
+          var cur = host.querySelector('.rv-side-item[aria-current="true"]');
+          if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
+        }
+      }
+    } else {
+      focus.hidden = true;
+      reviewAsideSel = null;
+      var back = overview.hidden;
+      overview.hidden = false;
+      setHtml(overview, reviewOverviewHtml(r, m));
+      if (back || built) overview.scrollTop = r.rv.scroll || 0;
+    }
+
+    /* Nouveau constat : son corps part en haut ; même constat relu (le rapport s'écrit) : le défilement tient. */
+    var pushKey = (f ? f.key : '') + '|' + v.stamp;
+    if (readerReady && pushKey !== reviewPushed) {
+      var same = reviewPushed !== null && reviewPushed.split('|')[0] === (f ? f.key : '');
+      pushReaderHtml(same);
+    }
+  }
+
+  /* Les colonnes vont disparaître (rapport complet, autre onglet) : leur défilement est relevé, la
+     vue reconstruite au retour le reprend. */
+  function keepReviewScroll(r) {
+    var overview = $('#reader [data-role="rv-overview"]');
+    if (overview && !overview.hidden && reviewShown(r) && !r.rv.sel) r.rv.scroll = overview.scrollTop;
+  }
+
+  function reviewPick(key) {
+    var r = S.ui.reader;
+    if (!reviewShown(r)) return;
+    r.rv.sel = String(key || '');
+    render();
+  }
+
+  function reviewStep(delta) {
+    var r = S.ui.reader;
+    var f = reviewCurrent(r);
+    if (!f) return;
+    var shown = reviewList(r);
+    for (var i = 0; i < shown.length; i++) {
+      if (shown[i].key !== f.key) continue;
+      var next = shown[i + delta];
+      if (next) reviewPick(next.key);
+      return;
+    }
+  }
+
+  /* Touches de la vue revue (depuis la page ou le cadre) : Échap remonte d'un cran — discussion,
+     constat, puis vue d'ensemble, puis fermeture —, ↑ ↓ (et ← →) passent d'un constat à l'autre. */
+  function reviewKey(key) {
+    var r = S.ui.reader;
+    if (!reviewShown(r)) return false;
+    if (key === 'Escape') {
+      if (r.rv.sel && r.rv.chat) closeFindingChat();
+      else if (r.rv.sel) { r.rv.sel = ''; render(); } else { closeReader(); }
+      return true;
+    }
+    if (!r.rv.sel) return false;
+    if (key === 'ArrowUp' || key === 'ArrowLeft') { reviewStep(-1); return true; }
+    if (key === 'ArrowDown' || key === 'ArrowRight') { reviewStep(1); return true; }
+    return false;
+  }
+
+  /* ── Discussion sur un constat ───────────────────────────────────────────
+     « Discuter », dans l'en-tête d'un constat, remplace la liste latérale par une discussion avec
+     l'agent : la première question part dans une copie de la session qui a écrit la revue (il a
+     déjà lu le ticket, le diff et le code ; l'original n'est pas touché), les suivantes reprennent
+     cette copie. Sans session Claude à copier, un agent neuf lit le rapport et le code. Lecture
+     seule, hors terminal : l'hôte appelle `claude -p` et pousse la réponse au fil de l'eau
+     (événement `findingChat`). Les discussions sont gardées par l'hôte (finding-chats.json), une
+     par constat ; la page n'en tient qu'une copie, par rapport, et le texte en cours de saisie. */
+
+  var FINDING_WAIT_MS = 11 * 60000;
+  /* Par rapport (chemin complet en minuscules) : { loaded, loading, chats: clé → discussion,
+     runs: clé → réponse en cours, doneAt: clé → début de la dernière réponse rendue,
+     stopping: clé → arrêt demandé, pour ne pas l'annoncer comme une réponse }. */
+  var fcStore = {};
+  var fcDrafts = {};
+  var fcArmed = null, fcArmTimer = null, fcClock = null;
+  var chatFrame = null, chatReady = false, chatPushed = null, chatShape = null;
+
+  function fcGet(full) {
+    var k = String(full || '').toLowerCase();
+    return fcStore[k] || (fcStore[k] = { loaded: false, loading: false, chats: {}, runs: {}, doneAt: {}, stopping: {} });
+  }
+
+  function fcKey(full, key) { return String(full || '').toLowerCase() + '|' + key; }
+
+  function ensureFindingChats(full) {
+    var st = fcGet(full);
+    if (!st.loaded && !st.loading) loadFindingChats(full);
+  }
+
+  function loadFindingChats(full) {
+    var st = fcGet(full);
+    st.loading = true;
+    return bridge.call('getFindingChats', { report: full }).then(function (res) {
+      st.loading = false;
+      st.loaded = true;
+      st.chats = {};
+      ((res && res.chats) || []).forEach(function (c) { if (c && c.finding) st.chats[c.finding] = c; });
+      ((res && res.running) || []).forEach(function (p) { if (p && p.finding && !st.runs[p.finding]) st.runs[p.finding] = p; });
+      if (Object.keys(st.runs).length) startChatClock();
+      fcRefresh(full);
+    })['catch'](function (e) {
+      st.loading = false;
+      st.loaded = true;
+      bridge.call('log', { level: 'warn', message: 'Discussions illisibles : ' + e.message })['catch'](function () { /* sans importance */ });
+    });
+  }
+
+  /* Redessine la vue revue si elle montre ce rapport. */
+  function fcRefresh(full) {
+    var r = S.ui.reader;
+    if (r && r.view && String(r.view.full || '').toLowerCase() === String(full || '').toLowerCase()) renderReader();
+  }
+
+  /* Constats qui ont une discussion : nombre de questions, réponse en cours. */
+  function findingTalks(r) {
+    var out = {};
+    if (!r || !r.view) return out;
+    var st = fcGet(r.view.full);
+    Object.keys(st.chats).forEach(function (k) {
+      var n = (st.chats[k].turns || []).length;
+      if (n) out[k] = { n: n, running: false };
+    });
+    Object.keys(st.runs).forEach(function (k) { (out[k] = out[k] || { n: 0 }).running = true; });
+    return out;
+  }
+
+  function talkMarkHtml(t) {
+    if (!t) return '';
+    var tip = t.running ? 'L’agent répond…' : t.n + (t.n > 1 ? ' questions posées' : ' question posée');
+    return '<span class="rv-talk' + (t.running ? ' is-running' : '') + '" title="' + esc(tip) + '">' + ICON.talk
+      + (t.n ? '<b>' + esc(t.n) + '</b>' : '') + '</span>';
+  }
+
+  /* La conversation qui a écrit le rapport (la plus récente si plusieurs l'ont touché) : c'est elle
+     qu'on copie. Une session Copilot ne se copie pas : un agent Claude neuf prend le relais. */
+  function reviewSourceConvo(full) {
+    var want = String(full || '').toLowerCase();
+    var best = null;
+    if (!want) return null;
+    S.data.convos.forEach(function (c) {
+      if (c.taskId === FEEDBACK_ID) return;
+      var wrote = (c.artifacts || []).some(function (a) {
+        return a.action !== 'deleted' && artifactFullPath(a.path, c.cwd).toLowerCase() === want;
+      });
+      if (wrote && (!best || (toMs(c.updated) || toMs(c.created)) > (toMs(best.updated) || toMs(best.created)))) best = c;
+    });
+    return best;
+  }
+
+  function findingAgent(r) {
+    var c = reviewSourceConvo(r.view.full);
+    var fork = !!(c && providerOf(c) === 'claude');
+    return {
+      convo: c, fork: fork, source: fork ? c.id : '',
+      cwd: c ? c.cwd : (r.cwd || folderOf(r.view.full)),
+      model: fork ? c.model : S.settings.claudeModel,
+      effort: fork ? c.effort : S.settings.claudeEffort,
+      task: c ? taskById(c.taskId) : (r.taskId ? taskById(r.taskId) : null)
+    };
+  }
+
+  function findingAgentLine(ag, chat) {
+    var started = chat && chat.sessionId;
+    var fork = started ? !!chat.source : ag.fork;
+    var who = fork ? 'Copie de la session du relecteur' : (started ? 'Agent neuf' : 'Agent neuf (aucune session Claude à copier)');
+    var conv = fork && ag.convo ? ' « ' + firstLine(ag.convo.title, 40) + ' »' : '';
+    var model = (started ? chat.model : ag.model) || 'modèle par défaut';
+    var effort = started ? chat.effort : ag.effort;
+    return who + conv + ' · ' + model + (effort ? ' · ' + effort : '') + ' · lecture seule';
+  }
+
+  function openFindingChat() {
+    var r = S.ui.reader;
+    if (!reviewShown(r) || !reviewCurrent(r)) return;
+    r.rv.chat = true;
+    chatShape = null;
+    render();
+    var ta = $('#reader [data-role="rv-chat-q"]');
+    if (ta) ta.focus();
+  }
+
+  function closeFindingChat() {
+    var r = S.ui.reader;
+    if (!r || !r.rv) return;
+    r.rv.chat = false;
+    render();
+  }
+
+  function renderFindingChat(host, r, f) {
+    var full = r.view.full;
+    var st = fcGet(full);
+    var chat = st.chats[f.key] || null;
+    var run = st.runs[f.key] || null;
+    var ag = findingAgent(r);
+    var bind = fcKey(full, f.key);
+    var turns = chat && Array.isArray(chat.turns) ? chat.turns : [];
+    var armed = fcArmed === bind;
+
+    setHtml(host.querySelector('[data-role="rv-chat-head"]'), '<div class="rv-chat-top">'
+      + '<button type="button" class="rv-nav-btn" data-act="rv-chat-close" title="Revenir à la liste des constats (Échap)">‹ Constats</button>'
+      + '<span class="rv-chat-title">' + ICON.talk + '<span>Discussion' + (f.id ? ' · <b>' + esc(f.id) + '</b>' : '') + '</span></span>'
+      + (turns.length ? '<button type="button" class="rv-nav-btn rv-chat-forget' + (armed ? ' is-armed' : '') + '" data-act="rv-chat-forget"'
+        + (run ? ' disabled' : '') + ' title="Effacer cette discussion : la question suivante repartira d’une copie neuve de la revue">'
+        + (armed ? 'Effacer la discussion ?' : 'Nouvelle discussion') + '</button>' : '')
+      + '</div><div class="rv-chat-agent">' + esc(findingAgentLine(ag, chat)) + '</div>');
+
+    var draft = fcDrafts[bind] || '';
+    setHtml(host.querySelector('[data-role="rv-chat-actions"]'), run
+      ? '<span class="rv-chat-status" data-role="rv-chat-clock">' + esc(runPhaseText(run)) + '</span>'
+        + '<button type="button" class="rv-nav-btn rv-chat-stop" data-act="rv-chat-stop" title="Arrêter la réponse en cours">' + ICON.stop + 'Arrêter</button>'
+      : '<span class="rv-chat-hint">Entrée envoie · Maj + Entrée : à la ligne</span>'
+        + '<button type="button" class="rv-nav-btn rv-chat-send" data-act="rv-chat-send"' + (draft.trim() ? '' : ' disabled') + '>Envoyer</button>');
+
+    var ta = host.querySelector('[data-role="rv-chat-q"]');
+    if (ta.getAttribute('data-bound') !== bind) {
+      ta.setAttribute('data-bound', bind);
+      ta.value = draft;
+      fitChatInput(ta);
+    }
+    var hint = run ? 'Votre prochaine question… (l’agent répond encore)'
+      : (turns.length ? 'Une autre question sur ' : 'Votre question sur ') + (f.id || 'ce constat') + '…';
+    if (ta.placeholder !== hint) ta.placeholder = hint;
+
+    pushFindingChat();
+    updateChatClock();
+  }
+
+  /* Le fil de la discussion, dans le cadre isolé : les réponses sont le Markdown de l'agent, rendu
+     par l'hôte (comme le corps d'un constat), les questions sont échappées. */
+  function findingThreadHtml(f, chat, run, ag) {
+    var turns = chat && Array.isArray(chat.turns) ? chat.turns : [];
+    var h = [];
+    if (!turns.length && !run) {
+      var fork = chat && chat.sessionId ? !!chat.source : ag.fork;
+      h.push('<div class="chat-empty"><p><strong>Posez vos questions sur ' + esc(f.id || 'ce constat') + '.</strong></p><p>'
+        + esc(fork
+          ? 'Elles partent vers une copie de la session qui a écrit la revue : l’agent a déjà lu le ticket, le diff et le code. La session d’origine n’est pas touchée.'
+          : 'Aucune session Claude de cette revue n’est disponible : un agent neuf lira le rapport et le code avant de répondre.')
+        + '</p><p>L’agent est en lecture seule : il relit le code et l’historique, ne modifie rien et ne poste rien.</p>'
+        + '<p class="chat-ideas">Par exemple : « Pourquoi bloquant plutôt que majeur ? », « Montre-moi le chemin qui déclenche le problème », '
+        + '« La correction proposée casse-t-elle autre chose ? »</p></div>');
+    }
+    turns.forEach(function (t) {
+      h.push('<section class="turn' + (t.error ? ' is-error' : '') + '"><div class="q">' + esc(t.q) + '</div>'
+        + (t.html ? '<div class="a">' + t.html + '</div>' : '')
+        + (t.error ? '<div class="a-error">' + esc(t.error) + '</div>' : '')
+        + '<div class="a-meta">' + esc(turnMeta(t)) + '</div></section>');
+    });
+    if (run) {
+      var steps = Array.isArray(run.steps) ? run.steps : [];
+      h.push('<section class="turn is-running"><div class="q">' + esc(run.q) + '</div>'
+        + (steps.length ? '<ol class="steps">' + steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ol>' : '')
+        + (run.html ? '<div class="a">' + run.html + '</div>' : '')
+        + '<div class="a-meta is-wait">' + esc(runPhaseText(run)) + '</div></section>');
+    }
+    return '<div class="chat">' + h.join('') + '</div>';
+  }
+
+  /* Pousse le fil au cadre s'il a changé. Une question de plus (ou un autre constat) ramène en
+     bas ; une réponse qui s'écrit garde la lecture en place, ou suit la fin si on y était. */
+  function pushFindingChat() {
+    var r = S.ui.reader;
+    if (!chatFrame || !chatReady || !reviewShown(r) || !r.rv.chat) return;
+    var f = reviewCurrent(r);
+    if (!f) return;
+    var st = fcGet(r.view.full);
+    var chat = st.chats[f.key] || null, run = st.runs[f.key] || null;
+    var html = findingThreadHtml(f, chat, run, findingAgent(r));
+    var shape = r.view.full + '|' + f.key + '|' + (chat && chat.turns ? chat.turns.length : 0) + '|' + (run ? 'r' : '');
+    if (html === chatPushed && shape === chatShape) return;
+    var jump = shape !== chatShape;
+    chatPushed = html;
+    chatShape = shape;
+    try {
+      chatFrame.contentWindow.postMessage({ type: 'html', html: html, follow: !jump, y: jump ? 1e9 : 0, variant: 'chat' }, '*');
+    } catch (e) { /* cadre en cours de remplacement */ }
+  }
+
+  function turnMeta(t) {
+    var parts = [fmtTime(t.at)];
+    if (t.ms) parts.push(fmtSpan(t.ms));
+    if (t.error) parts.push('échec');
+    return parts.filter(Boolean).join(' · ');
+  }
+
+  function fmtSpan(ms) {
+    var s = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+    return s < 60 ? s + ' s' : Math.floor(s / 60) + ' min ' + ('0' + (s % 60)).slice(-2);
+  }
+
+  function runPhaseText(run) {
+    var steps = Array.isArray(run.steps) ? run.steps : [];
+    if (run.phase === 'tool' && steps.length) return steps[steps.length - 1] + '…';
+    if (run.phase === 'writing') return 'L’agent répond…';
+    return steps.length || run.text ? 'L’agent réfléchit…' : 'L’agent reprend la revue…';
+  }
+
+  /* Le temps écoulé se met à jour seul, sans redessiner la vue. */
+  function updateChatClock() {
+    var r = S.ui.reader;
+    var el = $('#reader [data-role="rv-chat-clock"]');
+    var f = r && reviewShown(r) ? reviewCurrent(r) : null;
+    var run = f ? fcGet(r.view.full).runs[f.key] : null;
+    if (el && run) el.textContent = runPhaseText(run) + ' · ' + fmtSpan(Date.now() - (toMs(run.startedAt) || Date.now()));
+    var any = Object.keys(fcStore).some(function (k) { return Object.keys(fcStore[k].runs).length > 0; });
+    if (!any && fcClock) { clearInterval(fcClock); fcClock = null; }
+  }
+
+  function startChatClock() {
+    if (!fcClock) fcClock = setInterval(updateChatClock, 1000);
+  }
+
+  function fitChatInput(ta) {
+    ta.rows = Math.min(8, Math.max(2, String(ta.value || '').split('\n').length));
+  }
+
+  function sendFindingQuestion() {
+    var r = S.ui.reader;
+    if (!reviewShown(r)) return;
+    var f = reviewCurrent(r);
+    if (!f) return;
+    var full = r.view.full;
+    var st = fcGet(full);
+    var bind = fcKey(full, f.key);
+    var ta = $('#reader [data-role="rv-chat-q"]');
+    var q = String((ta && ta.getAttribute('data-bound') === bind ? ta.value : fcDrafts[bind]) || '').trim();
+    if (!q) return;
+    if (st.runs[f.key]) { toast('L’agent répond encore : attendez sa réponse, ou arrêtez-la.'); return; }
+    var chat = st.chats[f.key] || null;
+    var started = !!(chat && chat.sessionId);
+    var ag = findingAgent(r);
+    var task = ag.task;
+    st.runs[f.key] = { report: full, finding: f.key, q: q, phase: 'thinking', text: '', html: '', steps: [], startedAt: Date.now() };
+    fcDrafts[bind] = '';
+    if (ta) { ta.value = ''; fitChatInput(ta); }
+    startChatClock();
+    renderReader();
+    bridge.call('askFinding', {
+      report: full, cwd: ag.cwd, source: ag.source,
+      /* Une discussion commencée garde son modèle : la copie et le cache de l'API vont avec. */
+      model: started ? String(chat.model || '') : ag.model,
+      effort: started ? String(chat.effort || '') : ag.effort,
+      context: task ? String(task.text || '').slice(0, 3000) : '',
+      question: q,
+      finding: { key: f.key, id: f.id, order: f.order, title: f.title, severity: f.sev, where: f.where, category: f.category }
+    }, FINDING_WAIT_MS).then(function (res) {
+      if (res && res.finding) st.chats[res.finding] = res;
+      delete st.runs[f.key];
+      fcRefresh(full);
+    })['catch'](function (e) {
+      delete st.runs[f.key];
+      /* Rien n'est perdu : la question revient dans la zone de saisie. */
+      if (!fcDrafts[bind]) fcDrafts[bind] = q;
+      var cur = $('#reader [data-role="rv-chat-q"]');
+      if (cur && cur.getAttribute('data-bound') === bind && !cur.value.trim()) { cur.value = q; fitChatInput(cur); }
+      toast('Question non envoyée : ' + e.message);
+      fcRefresh(full);
+    });
+  }
+
+  function stopFindingAnswer() {
+    var r = S.ui.reader;
+    var f = reviewShown(r) ? reviewCurrent(r) : null;
+    if (!f) return;
+    var st = fcGet(r.view.full);
+    (st.stopping = st.stopping || {})[f.key] = true;
+    bridge.call('stopFinding', { report: r.view.full, finding: f.key })['catch'](function (e) {
+      delete st.stopping[f.key];
+      toast('Arrêt impossible : ' + e.message);
+    });
+  }
+
+  /* La discussion de ce constat est-elle sous les yeux ? */
+  function fcWatching(full, key) {
+    var r = S.ui.reader;
+    return !!(r && r.view && r.rv && r.rv.chat && r.rv.sel === key && document.visibilityState !== 'hidden'
+      && String(r.view.full || '').toLowerCase() === String(full || '').toLowerCase());
+  }
+
+  /* Rouvre un rapport sur la discussion d'un de ses constats (toast « Voir »). */
+  function openFindingChatAt(full, key) {
+    var r = S.ui.reader;
+    if (!(r && r.view && String(r.view.full || '').toLowerCase() === String(full || '').toLowerCase())) {
+      openReader(full, '');
+      r = S.ui.reader;
+    }
+    r.mode = 'review';
+    r.rv = r.rv || { sel: '', cat: '', scroll: 0 };
+    r.rv.cat = '';
+    r.rv.sel = key;
+    r.rv.chat = true;
+    chatShape = null;
+    render();
+  }
+
+  /* « Nouvelle discussion » : un premier clic arme le bouton, un second (dans les 4 s) efface. */
+  function forgetFindingChat() {
+    var r = S.ui.reader;
+    var f = reviewShown(r) ? reviewCurrent(r) : null;
+    if (!f) return;
+    var full = r.view.full;
+    var bind = fcKey(full, f.key);
+    clearTimeout(fcArmTimer);
+    if (fcArmed !== bind) {
+      fcArmed = bind;
+      fcArmTimer = setTimeout(function () { fcArmed = null; renderReader(); }, 4000);
+      renderReader();
+      return;
+    }
+    fcArmed = null;
+    bridge.call('forgetFinding', { report: full, finding: f.key }).then(function () {
+      delete fcGet(full).chats[f.key];
+      chatShape = null;
+      fcRefresh(full);
+      toast('Discussion effacée : la prochaine question repartira d’une copie neuve de la revue');
+    })['catch'](function (e) { toast('Effacement impossible : ' + e.message); renderReader(); });
+  }
+
+  /* Avancement poussé par l'hôte ; `done` : la réponse est rangée, on relit la discussion. Un
+     avancement d'une réponse déjà rendue (arrivé en retard) est ignoré. */
+  function onFindingChat(p) {
+    if (!p || !p.report || !p.finding) return;
+    var st = fcGet(p.report);
+    var key = String(p.finding);
+    if (p.phase === 'done') {
+      st.doneAt[key] = toMs(p.startedAt);
+      delete st.runs[key];
+      loadFindingChats(p.report);
+      /* Une réponse met une à trois minutes : si l'on est passé à autre chose, un toast y ramène. */
+      if (st.stopping && st.stopping[key]) delete st.stopping[key];
+      else if (!fcWatching(p.report, key)) {
+        toast('L’agent a répondu sur ' + key.replace(/′/g, '') + ' : « ' + firstLine(p.q, 50) + ' »',
+          { label: 'Voir', run: function () { openFindingChatAt(p.report, key); } });
+      }
+    } else {
+      if (toMs(p.startedAt) && st.doneAt[key] >= toMs(p.startedAt)) return;
+      st.runs[key] = p;
+      startChatClock();
+    }
+    fcRefresh(p.report);
+  }
+
+  /* Messages du cadre de la discussion : prêt, lien cliqué, Échap, Ctrl + Pg↑ / Pg↓. Les flèches
+     y font défiler le fil, elles ne changent pas de constat. */
+  function onChatFrameMessage(m) {
+    if (m.type === 'ready') {
+      chatReady = true;
+      chatPushed = null;
+      chatShape = null;
+      pushFindingChat();
+    } else if (m.type === 'close') {
+      reviewKey('Escape');
+    } else if (m.type === 'key') {
+      var key = String(m.key || '');
+      if (key === 'TabNext' || key === 'TabPrev') reviewGroupStep(key === 'TabNext' ? 1 : -1);
+    } else if (m.type === 'link') {
+      followReaderLink(m.href);
+    }
   }
 
   /* ── Toast ──────────────────────────────────────────────────────────── */
 
   var toastTimer = null;
   function renderToast() {
-    $('#toast-host').innerHTML = S.ui.toast ? '<div class="toast">' + esc(S.ui.toast) + '</div>' : '';
+    var act = S.ui.toast ? S.ui.toastAction : null;
+    $('#toast-host').innerHTML = S.ui.toast
+      ? '<div class="toast' + (act ? ' has-act' : '') + '">' + esc(S.ui.toast)
+        + (act ? '<button type="button" class="toast-act" data-act="toast-act">' + esc(act.label) + '</button>' : '') + '</div>'
+      : '';
   }
-  function toast(msg) {
+  /* `action` : { label, run } — un bouton dans le toast, qui reste alors 12 s pour laisser le temps de cliquer. */
+  function toast(msg, action) {
     S.ui.toast = msg;
+    S.ui.toastAction = action || null;
     renderToast();
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { S.ui.toast = ''; renderToast(); }, 3400);
+    toastTimer = setTimeout(clearToast, action ? 12000 : 3400);
+  }
+  function clearToast() {
+    clearTimeout(toastTimer);
+    S.ui.toast = '';
+    S.ui.toastAction = null;
+    renderToast();
   }
 
   /* ══ Actions — tâches ═════════════════════════════════════════════════ */
@@ -3707,6 +5857,15 @@
     orphans.forEach(function (k) { delete k.parent; });
     S.data.tasks = S.data.tasks.filter(function (t) { return t.id !== id; });
     S.data.convos = S.data.convos.filter(function (c) { return c.taskId !== id; });
+    /* Ses pièces jointes sont des copies : elles partent avec elle (les originaux restent où ils sont). */
+    cancelOwnerTranscriptions(id);
+    if (Array.isArray(task.attachments)) {
+      task.attachments.forEach(function (a) {
+        var p = textPending[a.id];
+        if (p) { clearTimeout(p.timer); delete textPending[a.id]; }
+      });
+      bridge.call('removeAttachments', { taskId: id })['catch'](function () { /* sans importance */ });
+    }
     if (S.ui.termTaskId === id) {
       S.ui.termTaskId = null; S.ui.termConvId = null; S.ui.artifactView = false; S.ui.artifactConvId = null; syncPolling();
     }
@@ -3762,6 +5921,7 @@
     S.ui.catName = '';
     S.ui.composerType = t.id;
     S.ui.composerOpen = true;
+    if (!S.ui.composerId) S.ui.composerId = uid('n');
     commit();
   }
 
@@ -3943,6 +6103,8 @@
   function openComposer(at, parentId) {
     var parent = parentId ? taskById(parentId) : null;
     if (parent && parent.parent) parent = parentOf(parent) || parent;
+    dropComposerAttachments();
+    S.ui.composerId = uid('n');
     S.ui.composerOpen = true;
     S.ui.insertAt = at;
     S.ui.composerParent = parent ? parent.id : null;
@@ -3958,6 +6120,7 @@
   }
 
   function closeComposer() {
+    dropComposerAttachments();
     S.ui.composerOpen = false;
     S.ui.composerText = '';
     S.ui.composerParent = null;
@@ -3969,7 +6132,11 @@
   function addFromComposer() {
     var text = S.ui.composerText.trim();
     if (!text || !S.ui.composerType) return;
-    var t = { id: uid('n'), type: S.ui.composerType, text: text, done: false, doing: false, created: Date.now() };
+    var t = { id: S.ui.composerId || uid('n'), type: S.ui.composerType, text: text, done: false, doing: false, created: Date.now() };
+    /* Les pièces jointes sont déjà copiées sous l'identifiant de la tâche : elle les emporte. */
+    if (S.ui.composerAttachments.length) t.attachments = S.ui.composerAttachments;
+    S.ui.composerAttachments = [];
+    S.ui.composerId = null;
     var parent = S.ui.composerParent ? taskById(S.ui.composerParent) : null;
     var at = S.ui.insertAt || 'top';
     var idx = 0;
@@ -3979,8 +6146,10 @@
       idx = j < 0 ? 0 : j + 1;
     }
     if (parent) {
-      /* Dans le groupe du parent : après la tâche visée si elle en fait partie, sinon en dernier. */
+      /* Dans le groupe du parent : après la tâche visée si elle en fait partie, sinon en dernier.
+         Un groupe replié se déplie, sans quoi la sous-tâche créée disparaîtrait aussitôt. */
       t.parent = parent.id;
+      delete parent.collapsed;
       var anchor = at !== 'top' && at !== 'bottom' ? taskById(at) : null;
       if (!anchor || (anchor.id !== parent.id && anchor.parent !== parent.id)) {
         idx = S.data.tasks.indexOf(lastOfGroup(parent)) + 1;
@@ -4057,7 +6226,10 @@
     } else if (overParent) {
       asChildOf = overParent.id;
     } else if (after && childrenOf(over.id).length) {
-      asChildOf = over.id;
+      /* Sous la carte d'un parent replié, on ne voit pas ses sous-tâches : la tâche se pose
+         après le groupe, au premier niveau, plutôt que de disparaître dedans. */
+      if (subsFolded(over)) anchor = lastOfGroup(over);
+      else asChildOf = over.id;
     }
     if (asChildOf) drag.parent = asChildOf; else delete drag.parent;
     var to = S.data.tasks.indexOf(anchor);
@@ -4080,6 +6252,7 @@
 
   function openTerm(taskId) {
     var convs = convosOf(taskId);
+    markTaskNotificationsRead(taskId);
     S.ui.termTaskId = taskId;
     S.ui.termConvId = convs.length === 1 && taskId !== FEEDBACK_ID ? convs[0].id : null;
     S.ui.artifactView = false;
@@ -4090,6 +6263,22 @@
     syncPolling();
     refreshSessions();
     if (S.ui.termConvId) loadTranscript();
+  }
+
+  /* Ce que fait le clic sur l'icône de console d'une carte reste au choix (`termClick`) : le panneau,
+     ou le terminal de la seule conversation — sa fenêtre ramenée, ou la session reprise si elle a été
+     fermée (resumeConvo). Avec plusieurs conversations, ou aucune, le panneau s'ouvre : c'est là
+     qu'on choisit, ou qu'on en lance une. Maj + clic fait l'autre, pour que le panneau d'une tâche à
+     une seule conversation reste à portée — c'est lui qui en lance une seconde. */
+  function wantsTerminal(convs, shift) {
+    return convs.length === 1 && (S.settings.termClick === 'terminal') !== !!shift;
+  }
+
+  function clickTerm(taskId, shift) {
+    var convs = convosOf(taskId);
+    if (!wantsTerminal(convs, shift)) { openTerm(taskId); return; }
+    if (markTaskNotificationsRead(taskId)) render();
+    resumeConvo(convs[0].id);
   }
 
   function closeTerm() {
@@ -4141,9 +6330,14 @@
 
   var readerTimer = null, readerToken = 0;
 
-  /* `back` : le lecteur d'où l'on vient, quand un lien du rapport mène à un autre fichier. */
+  /* `back` : le lecteur d'où l'on vient, quand un lien du rapport mène à un autre fichier.
+     `mode` : un rapport de revue s'ouvre sur l'inventaire de ses constats (`rv` : constat ouvert,
+     catégorie filtrée, défilement des colonnes), sauf si l'on a demandé le rapport complet (`doc`). */
   function openReader(path, cwd, back) {
-    S.ui.reader = { path: String(path || ''), cwd: String(cwd || ''), view: null, busy: false, error: '', back: back || null };
+    S.ui.reader = { path: String(path || ''), cwd: String(cwd || ''), view: null, busy: false, error: '', back: back || null,
+      mode: 'review', rv: { sel: '', cat: '', scroll: 0 } };
+    /* Lien suivi depuis un onglet de revues groupées : la chaîne des lecteurs reste dans l'onglet. */
+    if (back && back.group) { S.ui.reader.group = back.group; S.ui.reader.taskId = back.taskId; }
     render();
     syncReaderPolling();
     loadReader(false);
@@ -4155,6 +6349,13 @@
     render();
   }
 
+  /* Bouton de la carte : le rapport de revue le plus probable de la tâche, dans la vue revue. */
+  function openReview(taskId) {
+    var list = reviewReportsOf(convosOf(taskId));
+    if (!list.length) { toast('Aucun rapport de revue pour cette tâche'); return; }
+    openReader(list[0].path, list[0].cwd);
+  }
+
   function backReader() {
     var r = S.ui.reader;
     if (!r || !r.back) return;
@@ -4162,6 +6363,277 @@
     S.ui.reader.busy = false;
     render();
     loadReader(true);
+  }
+
+  /* ── Revues groupées : un onglet par ticket ───────────────────────────
+     Les rapports de revue de plusieurs tâches — les sous-tâches d'une revue générale, ou toute la
+     file — se lisent dans un même panneau plein écran, un onglet par tâche. Chaque onglet a son
+     lecteur, de la forme de `S.ui.reader` plus `group`, `taskId`, `pending` (« Revue en cours… »),
+     `docY` (défilement du rapport complet) : constat ouvert, filtre, rapport complet, lien suivi y
+     restent quand on passe à un autre. `S.ui.reader` désigne toujours le lecteur de l'onglet actif :
+     vue revue, clavier et relecture toutes les 2 s marchent comme pour un rapport seul.
+     `group` = { scope: { parentId, taskIds }, title, tabs: [{ taskId, state, path, cwd, r, fetched }],
+     active, entered, prefetch }. Rien n'est enregistré. */
+
+  var REVIEW_PENDING_STATES = { working: 1, waiting: 1, open: 1 };
+  /* Genres dont la lecture fait servir leur dossier par l'hôte (un seul à la fois). */
+  var READER_SERVED = { markdown: 1, html: 1, pdf: 1, image: 1 };
+  var readerServed = '';
+
+  /* Ouvre le panneau à onglets. `parentId` : la parente (si elle a son propre rapport) puis ses
+     sous-tâches, terminées comprises, qui ont un rapport ou une session en cours ; `taskIds` : ces
+     tâches-là, dans cet ordre ; ni l'un ni l'autre : les tâches en file qui ont un rapport.
+     `focusTaskId` : l'onglet ouvert d'abord (sinon le premier qui a un rapport). */
+  function openReviewGroup(opts) {
+    opts = opts || {};
+    var scope = {
+      parentId: opts.parentId ? String(opts.parentId) : '',
+      taskIds: Array.isArray(opts.taskIds) ? opts.taskIds.map(String) : null
+    };
+    var tabs = reviewGroupTabs(scope);
+    var first = null;
+    tabs.forEach(function (tab) { if (!first && tab.state === 'report') first = tab; });
+    if (!first) { toast('Aucun rapport de revue pour l’instant'); return false; }
+    var parent = scope.parentId ? taskById(scope.parentId) : null;
+    var G = {
+      scope: scope, tabs: tabs, active: '', entered: false, prefetch: '',
+      title: parent ? firstLine(parent.text, 60) || 'Revues' : (scope.taskIds ? 'Revues' : 'Revues — tâches en file')
+    };
+    tabs.forEach(function (tab) { tab.r = tabReader(tab, G); });
+    first = (opts.focusTaskId && reviewTab(G, String(opts.focusTaskId))) || first;
+    G.active = first.taskId;
+    first.fetched = true;
+    S.ui.reader = first.r;
+    render();
+    syncReaderPolling();
+    loadReader(false).then(function () { prefetchReviewGroup(G); });
+    return true;
+  }
+
+  function reviewGroupTabs(scope) {
+    var tasks;
+    if (scope.parentId) {
+      var p = taskById(scope.parentId);
+      tasks = p ? [p].concat(childrenOf(p.id)) : [];
+    } else if (scope.taskIds) {
+      tasks = scope.taskIds.map(function (id) { return taskById(id); }).filter(Boolean);
+    } else {
+      tasks = S.data.tasks.filter(function (t) { return !t.done; });
+    }
+    var tabs = [];
+    tasks.forEach(function (t) {
+      var list = taskReviews(t.id);
+      if (list.length) { tabs.push({ taskId: t.id, state: 'report', path: list[0].path, cwd: list[0].cwd }); return; }
+      if (scope.parentId && t.id !== scope.parentId
+          && convosOf(t.id).some(function (c) { return REVIEW_PENDING_STATES[displayState(c)]; })) {
+        tabs.push({ taskId: t.id, state: 'pending', path: '', cwd: '' });
+      }
+    });
+    return tabs;
+  }
+
+  function tabReader(tab, G) {
+    return { path: tab.path, cwd: tab.cwd, view: null, busy: false, error: '', back: null, mode: 'review',
+      rv: { sel: '', cat: '', scroll: 0 }, group: G, taskId: tab.taskId, pending: tab.state === 'pending', docY: 0 };
+  }
+
+  function reviewTab(G, taskId) {
+    for (var i = 0; i < G.tabs.length; i++) if (G.tabs[i].taskId === taskId) return G.tabs[i];
+    return null;
+  }
+
+  /* Lecteur affiché par un onglet (l'actif : celui du panneau), et celui de son rapport, sous les liens suivis. */
+  function tabCurrent(G, tab) {
+    return tab.taskId === G.active && S.ui.reader && S.ui.reader.group === G ? S.ui.reader : tab.r;
+  }
+
+  function tabRoot(r) {
+    while (r && r.back) r = r.back;
+    return r;
+  }
+
+  /* Remet les onglets d'accord avec les rapports à chaque rendu du panneau : un onglet « en cours »
+     dont le rapport paraît devient un vrai onglet (lu aussitôt s'il est actif), un nouveau rapport
+     ajoute le sien, un onglet « en cours » dont la session s'est arrêtée sans rapport s'en va. Un
+     rapport déjà là reste, avec son chemin d'ouverture. Ne redessine rien elle-même. */
+  function syncReviewGroup(G) {
+    var fresh = reviewGroupTabs(G.scope);
+    var old = {}, tabs = [], load = null, at = 0;
+    G.tabs.forEach(function (tab, i) { old[tab.taskId] = tab; if (tab.taskId === G.active) at = i; });
+    fresh.forEach(function (f) {
+      var tab = old[f.taskId];
+      if (!tab) { f.r = tabReader(f, G); tabs.push(f); return; }
+      delete old[f.taskId];
+      if (tab.state === 'pending' && f.state === 'report') {
+        tab.state = 'report'; tab.path = f.path; tab.cwd = f.cwd;
+        tab.r.pending = false; tab.r.path = f.path; tab.r.cwd = f.cwd;
+        if (tab.taskId === G.active) { tab.fetched = true; load = tab.r; }
+      }
+      tabs.push(tab);
+    });
+    var prev = null;
+    G.tabs.forEach(function (tab) {
+      if (old[tab.taskId] === tab && tab.state === 'report' && taskById(tab.taskId)) {
+        tabs.splice(prev ? tabs.indexOf(prev) + 1 : 0, 0, tab);
+      }
+      if (tabs.indexOf(tab) >= 0) prev = tab;
+    });
+    G.tabs = tabs;
+    if (!tabs.length) {
+      S.ui.reader = null;
+      syncReaderPolling();
+      toast('Plus aucun rapport de revue à afficher');
+      return;
+    }
+    if (!reviewTab(G, G.active)) {
+      var next = tabs[Math.min(at, tabs.length - 1)];
+      G.active = next.taskId;
+      next.fetched = true;
+      next.r.busy = false;
+      S.ui.reader = next.r;
+      load = next.r;
+    }
+    if (load) setTimeout(function () { if (S.ui.reader === load) loadReader(false); }, 0);
+    if (G.prefetch === 'done' && tabs.some(function (t) { return t.state === 'report' && !t.fetched; })) {
+      G.prefetch = '';
+      setTimeout(function () { prefetchReviewGroup(G); }, 0);
+    }
+  }
+
+  /* Passe à l'onglet d'une autre tâche : celui qu'on quitte garde son lecteur tel quel. Le rapport
+     visé est relu en entier (l'hôte sert alors son dossier) ; sa vue déjà lue s'affiche en attendant. */
+  function reviewGroupGo(taskId) {
+    var r = S.ui.reader;
+    var G = r && r.group;
+    if (!G) return;
+    var to = reviewTab(G, String(taskId || ''));
+    var from = reviewTab(G, G.active);
+    if (!to || to === from) return;
+    if (from) {
+      from.r = r;
+      keepReviewScroll(r);
+    }
+    G.active = to.taskId;
+    to.fetched = true;
+    to.r.busy = false;
+    S.ui.reader = to.r;
+    render();
+    if (!to.r.pending) loadReader(false);
+  }
+
+  /* Onglet suivant (1) ou précédent (-1), en boucle. */
+  function reviewGroupStep(delta) {
+    var r = S.ui.reader;
+    var G = r && r.group;
+    if (!G || G.tabs.length < 2) return;
+    var n = G.tabs.length;
+    var i = Math.max(0, G.tabs.indexOf(reviewTab(G, G.active)));
+    reviewGroupGo(G.tabs[(i + (delta < 0 ? -1 : 1) + n) % n].taskId);
+  }
+
+  /* Lit une fois, à la suite, les onglets jamais lus, pour que leur pastille dise leur verdict ;
+     seul l'onglet actif est ensuite relu toutes les 2 s. L'hôte ne sert que le dossier du dernier
+     rapport lu : à la fin, s'il n'est plus celui de l'onglet actif, celui-ci est relu en entier. */
+  function prefetchReviewGroup(G) {
+    if (G.prefetch === 'running') return;
+    G.prefetch = 'running';
+    function shown() { return S.ui.reader && S.ui.reader.group === G; }
+    function next() {
+      if (!shown()) { G.prefetch = 'done'; return; }
+      var tab = null;
+      G.tabs.forEach(function (t) {
+        if (!tab && t.state === 'report' && !t.fetched && t.taskId !== G.active) tab = t;
+      });
+      if (!tab) {
+        G.prefetch = 'done';
+        var a = S.ui.reader;
+        if (a.view && !a.busy && READER_SERVED[a.view.kind]
+            && String(a.view.root || '').toLowerCase() !== readerServed.toLowerCase()) loadReader(false);
+        return;
+      }
+      tab.fetched = true;
+      if (tab.r.view || tab.r.busy) { next(); return; }
+      readReport(tab.r, false).then(function () {
+        if (shown()) renderReader();
+        next();
+      });
+    }
+    next();
+  }
+
+  /* Barre d'onglets et en-tête du ticket actif. La pastille d'un onglet dit le niveau de son
+     rapport (grise tant qu'il n'est pas lu), son compteur les bloquants ; ✓ : tâche terminée. */
+  function reviewTabsHtml(G) {
+    var tabs = G.tabs.map(function (tab) {
+      var t = taskById(tab.taskId) || { id: tab.taskId, text: '' };
+      var root = tabRoot(tabCurrent(G, tab));
+      var m = tab.state === 'report' && root && root.view ? reviewModel(root.view) : null;
+      var level = m ? reviewLevel(m) : '';
+      var color = level === 'ok' ? '#2b7a4b' : (REVIEW_SEV[level] ? REVIEW_SEV[level].color : '');
+      var blockers = m ? reviewHealth(m).blockers : 0;
+      var state;
+      if (tab.state === 'pending') state = 'Revue en cours…';
+      else if (!root || !root.view) state = root && root.error ? 'Lecture impossible' : 'Pas encore lu';
+      else if (!m) state = 'Aucun constat reconnu';
+      else state = (m.verdict.replace(REVIEW_MARK, '') || 'Sans verdict')
+        + (blockers ? ' · ' + blockers + (blockers > 1 ? ' bloquants' : ' bloquant') : '');
+      var label = t.jira || taskJiraKeys(t)[0] || firstLine(t.text, 28) || 'Tâche';
+      return '<button type="button" class="rv-tab' + (t.done ? ' is-done' : '') + '" role="tab" data-act="rv-tab" data-id="'
+        + esc(tab.taskId) + '" aria-selected="' + (tab.taskId === G.active) + '" title="' + esc(firstLine(t.text, 160) + '\n' + state) + '">'
+        + '<span class="rv-tab-dot' + (tab.state === 'pending' ? ' is-pending' : '') + '"' + (color ? ' style="--sev:' + color + '"' : '') + '></span>'
+        + '<span class="rv-tab-label">' + esc(label) + '</span>'
+        + (blockers ? '<span class="rv-tab-n">' + esc(blockers) + '</span>' : '')
+        + '</button>';
+    }).join('');
+    var act = taskById(G.active);
+    var head = act
+      ? '<div class="rv-tab-head"><span class="rv-tab-head-text" title="' + esc(firstLine(act.text, 300)) + '">' + esc(firstLine(act.text, 300)) + '</span>'
+        + jiraChipsHtml(act) + prChipsHtml(act) + '</div>'
+      : '';
+    return '<div class="rv-tabs-bar"><span class="rv-tabs-title" title="' + esc(G.title) + '">' + esc(G.title) + '</span>'
+      + '<div class="rv-tabs" role="tablist" aria-label="Rapports de revue">' + tabs + '</div>'
+      + '<span class="rv-tabs-keys">Ctrl + Pg↑ / Pg↓</span></div>'
+      + head;
+  }
+
+  /* Ne réécrit la barre que si elle a changé, et ramène alors l'onglet actif en vue. */
+  function renderReviewTabs(host, G) {
+    var el = host.querySelector('[data-role="rv-tabs"]');
+    if (!el) return;
+    var html = reviewTabsHtml(G);
+    if (el.rvHtml === html) return;
+    setHtml(el, html);
+    var cur = el.querySelector('.rv-tab[aria-selected="true"]');
+    if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  /* Onglet d'une sous-tâche dont la session tourne encore : il s'ouvrira sur le rapport dès qu'il paraîtra. */
+  function renderReviewPending(host, r) {
+    var G = r.group;
+    var key = 'pending|' + r.taskId;
+    if (readerKey !== key) {
+      host.innerHTML = '<div class="reader-backdrop rv-backdrop is-group"><div class="reader is-wide' + (G.entered ? '' : ' enter')
+        + '" role="dialog" aria-label="Revue en cours">'
+        + '<div class="reader-bar"><span class="reader-icon">' + ICON.review + '</span>'
+        + '<div class="reader-head"><div class="rv-title">Revue en cours…</div><div class="reader-meta" data-role="rv-meta"></div></div>'
+        + '<span class="panel-spacer"></span>'
+        + '<button type="button" class="panel-x" data-act="close-reader" title="Fermer (Échap)">✕</button></div>'
+        + '<div class="rv-tabs-host" data-role="rv-tabs"></div>'
+        + '<div class="reader-body"><div class="reader-note rv-pending"><p><strong>Revue en cours…</strong></p>'
+        + '<p>L’agent n’a pas encore écrit son rapport ; cet onglet s’ouvrira dessus dès qu’il paraîtra.</p>'
+        + '<p class="rv-pending-state" data-role="rv-pending-state"></p></div></div></div></div>';
+      readerKey = key; readerStamp = null; readerFrame = null; readerReady = false;
+      chatFrame = null; chatReady = false;
+      G.entered = true;
+    }
+    renderReviewTabs(host, G);
+    var c = bestConvo(convosOf(r.taskId));
+    var meta = host.querySelector('[data-role="rv-meta"]');
+    var title = c ? c.title || 'Nouvelle session' : '';
+    if (meta && meta.textContent !== title) meta.textContent = title;
+    var line = host.querySelector('[data-role="rv-pending-state"]');
+    var text = stateText(c);
+    if (line && line.textContent !== text) line.textContent = text;
   }
 
   /* Tant que le lecteur est ouvert, le fichier est relu toutes les 2 s : l'hôte ne renvoie rien
@@ -4175,18 +6647,29 @@
   }
 
   function loadReader(silent) {
-    var r = S.ui.reader;
-    if (!r || (silent && r.busy)) return Promise.resolve();
+    return readReport(S.ui.reader, silent);
+  }
+
+  /* Lit le fichier d'un lecteur, affiché ou non (préchargement des onglets des revues groupées).
+     Un jeton par lecteur écarte une réponse dépassée ; un lecteur quitté pendant sa lecture garde
+     la vue reçue et ne reste pas « occupé » (il ne serait plus relu). Seul le lecteur affiché
+     redessine. */
+  function readReport(r, silent) {
+    if (!r || r.pending || (silent && r.busy)) return Promise.resolve();
     var token = ++readerToken;
+    r.token = token;
     r.busy = true;
     return bridge.call('readArtifact', { path: r.path, cwd: r.cwd, stamp: silent && r.view ? r.view.stamp : '' })
       .then(function (v) {
-        if (S.ui.reader !== r) return;
+        if (r.token !== token) return;
         r.busy = false;
-        if (token !== readerToken || !v || v.changed === false) return;
+        if (!v || v.changed === false) return;
+        if (READER_SERVED[v.kind]) readerServed = String(v.root || '');
         if (v.kind === 'binary') {
-          /* Rien à afficher ici (tableur, document Office…) : le fichier part vers son application. */
-          closeReader();
+          if (S.ui.reader !== r) return;
+          /* Rien à afficher ici (tableur, document Office…) : le fichier part vers son application.
+             Atteint par un lien depuis un onglet des revues groupées, on revient au rapport. */
+          if (r.group && r.back) backReader(); else closeReader();
           bridge.call('openPath', { path: v.full, editor: 'default' }).then(function (res) {
             toast(res && res.editor === 'default' ? 'Ouvert avec l’application associée' : 'Affiché dans l’Explorateur');
           })['catch'](function (e) { toast('Ouverture impossible : ' + e.message); });
@@ -4194,13 +6677,12 @@
         }
         r.view = v;
         r.error = '';
-        render();
+        if (S.ui.reader === r) render();
       })['catch'](function (e) {
-        if (S.ui.reader !== r) return;
+        if (r.token !== token) return;
         r.busy = false;
-        if (token !== readerToken) return;
         /* Une relecture qui échoue pendant que l'agent écrit ne doit pas effacer ce qu'on lit. */
-        if (!silent || !r.view) { r.error = e.message; r.view = null; render(); }
+        if (!silent || !r.view) { r.error = e.message; r.view = null; if (S.ui.reader === r) render(); }
       });
   }
 
@@ -4250,6 +6732,7 @@
       var changed = false;  /* à persister dans data.json */
       var dirty = false;    /* à redessiner */
       var arrived = [];
+      var asking = [];
       list.forEach(function (info) {
         var c = convoById(info.sessionId);
         if (!c) return;
@@ -4283,12 +6766,16 @@
           || (prev.agents || []).join('') !== next.agents.join('')) dirty = true;
         S.ui.activity[c.id] = next;
         if ((before === 'working' || before === 'waiting') && displayState(c) === 'ready') arrived.push(c);
+        else if (before && before !== 'waiting' && displayState(c) === 'waiting') asking.push(c);
       });
       if (changed) saveDataLater();
       /* Rien de neuf : on laisse la page tranquille (une relecture toutes les secondes et demie
          ne doit ni interrompre une sélection ni faire clignoter la liste). */
       if (changed || dirty) renderActivity();
       if (arrived.length) announce(arrived);
+      if (asking.length) announceQuestions(asking);
+      /* Après l'annonce : la fin d'un lot passe devant la « réponse prête » de sa dernière conversation. */
+      checkBatches();
     })['catch'](function (e) {
       console.warn('[organizator] getSessions', e);
     }).then(function () {
@@ -4338,14 +6825,227 @@
     armSessionsPoll();
   }
 
-  /* Une réponse vient d'arriver : toast, et clignotement dans la barre des tâches si la
-     fenêtre est en arrière-plan (c'est l'hôte qui tranche). */
+  /* Une réponse vient d'arriver : toast, notification gardée dans la cloche, et — si la fenêtre est
+     en arrière-plan, c'est l'hôte qui tranche — clignotement dans la barre des tâches et
+     notification Windows. */
   function announce(convs) {
     var titles = convs.map(function (c) { return c.title || 'Nouvelle session'; });
     toast(convs.length === 1 ? 'Réponse prête : ' + titles[0] : convs.length + ' réponses prêtes');
-    bridge.call('notify', { count: convs.length, title: titles[0] })['catch'](function () { /* sans importance */ });
+    notifyOutside(convs.map(function (c) { return recordNotification('ready', c); }));
     /* Le quota vient de bouger : relecture forcée, une fois l'API à jour. */
     setTimeout(function () { refreshUsage(true); }, 2000);
+  }
+
+  /* Un agent pose une question (ou demande une autorisation) : il est bloqué tant qu'on ne lui
+     répond pas — c'est l'événement qu'on veut le moins manquer hors d'Organizator. */
+  function announceQuestions(convs) {
+    var notes = convs.map(function (c) { return recordNotification('waiting', c); });
+    toast(notes.length === 1 ? 'Question de l’agent : ' + notes[0].title : notes.length + ' questions des agents');
+    notifyOutside(notes);
+  }
+
+  /* ── Notifications ──────────────────────────────────────────────────────
+     Ce qui a été annoncé (réponse prête, question, fin d'un lot de sous-tâches) est gardé dans
+     data.json (`notifications`, les plus récentes d'abord) : la cloche de l'en-tête les liste,
+     son badge compte les non lues. Hors d'Organizator, l'hôte en fait des notifications Windows,
+     rangées dans le centre de notifications ; un clic ramène la fenêtre sur la tâche. */
+  var NOTIF_MAX = 60;
+  var NOTIF_KINDS = { ready: 'Réponse prête', waiting: 'Question de l’agent', batch: 'Sous-tâches terminées' };
+
+  function normalizeNotifications(list) {
+    return (Array.isArray(list) ? list : []).filter(function (n) {
+      return n && typeof n === 'object' && n.id && NOTIF_KINDS[n.kind];
+    }).map(function (n) {
+      return {
+        id: String(n.id), at: toMs(n.at), kind: n.kind, read: !!n.read,
+        taskId: String(n.taskId || ''), convoId: String(n.convoId || ''),
+        title: String(n.title || ''), convoTitle: String(n.convoTitle || ''), text: String(n.text || ''),
+        reports: Number(n.reports) || 0
+      };
+    }).slice(0, NOTIF_MAX);
+  }
+
+  function notificationById(id) {
+    for (var i = 0; i < S.data.notifications.length; i++) if (S.data.notifications[i].id === id) return S.data.notifications[i];
+    return null;
+  }
+
+  function unreadCount() {
+    return S.data.notifications.filter(function (n) { return !n.read; }).length;
+  }
+
+  /* `c` : la conversation concernée ; `extra` complète ou remplace (fin d'un lot : la tâche parente). */
+  function recordNotification(kind, c, extra) {
+    var task = c ? taskById(c.taskId) : null;
+    var n = Object.assign({
+      id: uid('nt'), at: Date.now(), kind: kind, read: false,
+      taskId: c ? c.taskId : '', convoId: c ? c.id : '',
+      title: task ? (firstLine(task.text, 90).trim() || 'Tâche sans titre') : '',
+      convoTitle: c ? (c.title || 'Nouvelle session') : '',
+      text: c ? saidOf(c) : '', reports: 0
+    }, extra || {});
+    /* Une conversation ne garde qu'une notification non lue de chaque genre : la dernière. */
+    S.data.notifications = S.data.notifications.filter(function (x) {
+      return x.read || !n.convoId || x.convoId !== n.convoId || x.kind !== n.kind;
+    });
+    S.data.notifications.unshift(n);
+    if (S.data.notifications.length > NOTIF_MAX) S.data.notifications.length = NOTIF_MAX;
+    saveDataSoon();
+    renderNotifsBtn();
+    if (S.ui.notifsOpen) renderNotifs();
+    return n;
+  }
+
+  /* Clignotement et notifications Windows : l'hôte n'en montre que si la fenêtre n'est pas devant. */
+  function notifyOutside(notes) {
+    if (!notes.length) return;
+    var toasts = S.settings.windowsNotifications === false ? [] : notes.slice(0, 3).map(function (n) {
+      return {
+        title: NOTIF_KINDS[n.kind] + ' · ' + (n.title || 'Organizator'),
+        body: n.text || '', attribution: n.kind === 'batch' ? '' : n.convoTitle,
+        args: 'n=' + n.id, tag: n.convoId || n.id
+      };
+    });
+    bridge.call('notify', { count: notes.length, title: notes[0].title, toasts: toasts })['catch'](function () { /* sans importance */ });
+  }
+
+  /* Ouvrir le panneau d'une tâche, c'est avoir vu ce qu'elle annonçait. */
+  function markTaskNotificationsRead(taskId) {
+    var any = false;
+    S.data.notifications.forEach(function (n) {
+      if (!n.read && n.taskId === taskId) { n.read = true; any = true; }
+    });
+    if (any) saveDataSoon();
+    return any;
+  }
+
+  /* Une notification ouverte (cloche, ou clic sur la notification Windows) : la tâche se montre —
+     dépliée si c'est une sous-tâche repliée —, son panneau s'ouvre sur la conversation concernée ;
+     la fin d'une revue générale ouvre ses rapports. */
+  function openNotification(id) {
+    var n = notificationById(id);
+    S.ui.notifsOpen = false;
+    if (!n) { render(); return; }
+    n.read = true;
+    saveDataSoon();
+    var task = taskById(n.taskId);
+    if (!task) { render(); toast('La tâche de cette notification n’existe plus.'); return; }
+    if (n.kind === 'batch' && n.reports && openReviewGroup({ parentId: task.id })) { render(); return; }
+    var parent = parentOf(task);
+    if (parent && parent.collapsed) delete parent.collapsed;
+    var c = n.convoId ? convoById(n.convoId) : null;
+    openTerm(task.id);
+    if (c && c.taskId === task.id) openTranscript(c.id);
+    if (task.id !== FEEDBACK_ID) revealTask(task.id);
+  }
+
+  /* Amène la carte sous les yeux et la fait briller un instant. */
+  function revealTask(id) {
+    var find = function () { return document.querySelector('.task[data-card="' + id + '"]'); };
+    var el = find();
+    if (!el && S.ui.search) {
+      S.ui.search = '';
+      var box = $('#search');
+      if (box) box.value = '';
+      renderList();
+      el = find();
+    }
+    if (!el) return;
+    if (el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    /* L'éclat est noté dans l'état : un rendu dans la foulée (journal relu, sessions) reconstruit la
+       carte, qui le reprend là où il en était (flashStyle) au lieu de le perdre ou de le rejouer. */
+    S.ui.flash = { id: id, at: Date.now() };
+    el.className += ' is-flash';
+    el.setAttribute('style', flashStyle(id).replace(/^ style="|"$/g, ''));
+  }
+
+  var FLASH_MS = 1800;
+
+  function flashStyle(id) {
+    var f = S.ui.flash;
+    if (!f || f.id !== id) return '';
+    var gone = Date.now() - f.at;
+    return gone < FLASH_MS ? ' style="animation-delay:-' + gone + 'ms"' : '';
+  }
+
+  function renderNotifsBtn() {
+    var btn = $('#notifs-btn');
+    if (!btn) return;
+    var n = unreadCount();
+    var badge = btn.querySelector('.btn-badge');
+    badge.textContent = n ? String(n) : '';
+    badge.hidden = !n;
+    btn.classList.toggle('on', !!S.ui.notifsOpen);
+    btn.setAttribute('aria-expanded', S.ui.notifsOpen ? 'true' : 'false');
+    btn.title = 'Notifications' + (n ? ' · ' + n + (n > 1 ? ' non lues' : ' non lue') : '');
+    /* Le bouton de la barre des tâches porte aussi le compte, comme les messageries. */
+    if (n !== lastBadge) {
+      lastBadge = n;
+      bridge.call('badge', { count: n })['catch'](function () { /* hôte plus ancien */ });
+    }
+  }
+  var lastBadge = -1;
+
+  function notifItemHtml(n) {
+    return '<button type="button" class="notif k-' + esc(n.kind) + (n.read ? '' : ' is-unread') + '" data-act="open-notif" data-id="' + esc(n.id) + '"'
+      + (n.text ? ' title="' + esc(n.text) + '"' : '') + '>'
+      + '<span class="notif-dot"></span>'
+      + '<span class="notif-main">'
+      + '<span class="notif-head"><span class="notif-kind">' + esc(NOTIF_KINDS[n.kind]) + '</span>'
+      + '<span class="notif-time">' + esc(fmtTime(n.at)) + '</span></span>'
+      + '<span class="notif-task">' + esc(n.title || 'Tâche supprimée') + '</span>'
+      + (n.text ? '<span class="notif-text">' + esc(n.text) + '</span>' : '')
+      + (n.kind !== 'batch' && n.convoTitle ? '<span class="notif-convo">' + esc(n.convoTitle) + '</span>' : '')
+      + '</span></button>';
+  }
+
+  function notifsHtml() {
+    var list = S.data.notifications;
+    var unread = unreadCount();
+    var h = ['<div class="notifs-head"><span class="notifs-title">Notifications</span><span class="notifs-spacer"></span>'];
+    if (unread) h.push('<button type="button" class="notifs-link" data-act="notifs-read-all">Tout marquer comme lu</button>');
+    if (list.length) h.push('<button type="button" class="notifs-link" data-act="notifs-clear">Effacer</button>');
+    h.push('</div>');
+    if (!list.length) {
+      h.push('<div class="notifs-empty">Aucune notification. Les réponses prêtes et les questions des agents s’afficheront ici'
+        + (S.settings.windowsNotifications === false ? '.' : ' — et dans le centre de notifications de Windows quand Organizator est en arrière-plan.') + '</div>');
+    } else {
+      h.push('<div class="notifs-list">' + list.map(notifItemHtml).join('') + '</div>');
+    }
+    h.push('<div class="notifs-foot">Notifications Windows : ' + (S.settings.windowsNotifications === false ? 'coupées' : 'actives')
+      + ' · <button type="button" class="notifs-link" data-act="notifs-settings">Réglages</button></div>');
+    return h.join('');
+  }
+
+  /* Menu déroulant sous la cloche : posé en position fixe sous le bouton, refermé par un clic
+     ailleurs ou Échap. */
+  function renderNotifs() {
+    var host = $('#notifs');
+    if (!host) return;
+    if (!S.ui.notifsOpen) { if (host.innerHTML) host.innerHTML = ''; return; }
+    var list = host.querySelector('.notifs-list');
+    var scroll = list ? list.scrollTop : 0;
+    host.innerHTML = '<div class="notifs-pop" role="dialog" aria-label="Notifications">' + notifsHtml() + '</div>';
+    placeNotifs();
+    list = host.querySelector('.notifs-list');
+    if (list) list.scrollTop = scroll;
+  }
+
+  /* Sous la cloche, qui bouge avec la page (défilement, largeur de la fenêtre). */
+  function placeNotifs() {
+    var pop = $('#notifs .notifs-pop');
+    if (!pop) return;
+    var btn = $('#notifs-btn');
+    var r = btn && btn.getBoundingClientRect ? btn.getBoundingClientRect() : null;
+    pop.style.top = (r && r.bottom ? Math.round(r.bottom + 8) : 64) + 'px';
+    pop.style.right = (r && r.right ? Math.max(12, Math.round(window.innerWidth - r.right)) : 24) + 'px';
+  }
+
+  function closeNotifs() {
+    if (!S.ui.notifsOpen) return;
+    S.ui.notifsOpen = false;
+    renderNotifs();
+    renderNotifsBtn();
   }
 
   /* ── Quotas des agents ──────────────────────────────────────────────── */
@@ -4420,7 +7120,8 @@
     if (!host) return;
     var reports = S.ui.usage.reports || {};
     host.innerHTML = PROVIDERS.filter(function (pr) { return hasProvider(pr.id) || !!reports[pr.id]; })
-      .map(function (pr) { return usageCardHtml(pr, reports[pr.id] || null); }).join('');
+      .map(function (pr) { return usageCardHtml(pr, reports[pr.id] || null); }).join('')
+      + ARTICLE_FEEDS.map(function (F) { return articleCardHtml(F); }).join('');
   }
 
   /* Sans `force`, une lecture de moins de 5 min suffit ; l'hôte a lui-même un cache de 2 min. */
@@ -4443,6 +7144,315 @@
       renderUsage();
       console.warn('[organizator] getUsage', e);
     });
+  }
+
+  /* ── Article du jour et veille IA ───────────────────────────────────────
+     Une fois par jour, Claude Code (outils web seulement, hors terminal) cherche un article, le lit
+     et le résume. Deux fils, mêmes mécanismes : l'article du jour éclaire ce sur quoi l'utilisateur
+     travaille ; la veille IA raconte ce qui vient de se passer dans l'IA, vu par un développeur qui
+     travaille avec des agents, sans regarder sa file. L'hôte garde chaque fiche et ses précédentes
+     (article.json, article-ai.json) ; l'UI lui donne les centres d'intérêt (article du jour
+     seulement) et les affiche : une carte par fil en tête de fenêtre, à côté des quotas, et le
+     panneau latéral au clic. */
+  var ARTICLE_WAIT = 270000;              /* l'hôte abandonne à 240 s */
+  var ARTICLE_CHECK_MS = 10 * 60 * 1000;  /* changement de date, fenêtre restée ouverte */
+  var ARTICLE_RETRY_MS = 60 * 60 * 1000;  /* après un échec, nouvel essai automatique dans l'heure */
+  var ARTICLE_TASKS = 25, ARTICLE_CONVOS = 12;
+  var ARTICLE_LANGS = { en: 'en anglais', de: 'en allemand', es: 'en espagnol', it: 'en italien' };
+
+  /* `id` : le `kind` envoyé à l'hôte et la clé de S.ui.articles ; `panel` : l'identifiant du panneau ;
+     `setting` : l'interrupteur des Réglages ; `interests` : ce que l'agent reçoit de l'utilisateur. */
+  var ARTICLE_FEEDS = [
+    {
+      id: 'daily', panel: ARTICLE_ID, setting: 'articleEnabled', interests: articleInterests,
+      name: 'Article du jour', title: 'article du jour', subject: 'l’article du jour', of: 'Article du ',
+      back: '‹ Article du jour', searching: 'Recherche de l’article du jour…', why: 'Pourquoi pour vous',
+      lookup: 'L’agent cherche un article qui éclaire vos sujets du moment, le lit et le résume. Comptez une minute environ.',
+      off: 'L’article du jour est désactivé dans les Réglages.',
+      empty: 'Pas encore d’article aujourd’hui.', fetch: 'Chercher l’article du jour',
+      settings: 'Sujets et réglages de l’article du jour…'
+    },
+    {
+      id: 'ai', panel: ARTICLE_AI_ID, setting: 'articleAiEnabled', interests: null,
+      name: 'Veille IA', title: 'veille IA', subject: 'la veille IA', of: 'Veille IA du ',
+      back: '‹ Veille IA du jour', searching: 'Recherche de la veille IA…', why: 'Ce que ça change pour vous',
+      lookup: 'L’agent cherche ce qui a marqué l’IA ces derniers jours, choisit un article récent, le lit et le résume. Comptez une minute environ.',
+      off: 'La veille IA est désactivée dans les Réglages.',
+      empty: 'Pas encore de veille IA aujourd’hui.', fetch: 'Chercher la veille IA',
+      settings: 'Réglages de la veille IA…'
+    }
+  ];
+
+  function feedById(id) { return ARTICLE_FEEDS.filter(function (F) { return F.id === id; })[0] || ARTICLE_FEEDS[0]; }
+
+  /* Le fil dont le panneau est ouvert sous cet identifiant, ou null (une tâche). */
+  function feedOfPanel(id) { return ARTICLE_FEEDS.filter(function (F) { return F.panel === id; })[0] || null; }
+
+  /* Boutons des cartes et du panneau : le fil est porté par `data-feed`. */
+  function feedOf(el) { return feedById(el && el.getAttribute('data-feed')); }
+
+  function articleState(F) { return S.ui.articles[F.id]; }
+
+  function pad2(n) { return ('0' + n).slice(-2); }
+
+  function todayKey() {
+    var d = new Date();
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  }
+
+  /* « 2026-10-05 » → date locale, ou null. */
+  function dayDate(key) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(key || ''));
+    return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+  }
+
+  function fmtDay(key, opts) {
+    var d = dayDate(key);
+    return d ? d.toLocaleDateString('fr-FR', opts || { weekday: 'long', day: 'numeric', month: 'long' }) : String(key || '');
+  }
+
+  function articleOn(F) { return S.settings[F.setting] !== false && hasProvider('claude'); }
+
+  function currentArticle(F) {
+    var st = articleState(F).store;
+    return st && st.current && st.current.url ? st.current : null;
+  }
+
+  function articleHistory(F) {
+    var st = articleState(F).store;
+    return st && Array.isArray(st.history) ? st.history.filter(function (a) { return a && a.url; }) : [];
+  }
+
+  function articleIsToday(a) { return !!a && a.day === todayKey(); }
+
+  /* Ce que l'agent sait de l'utilisateur : les sujets qu'il a fixés, qui priment, puis ce qu'il a
+     en file et ses dernières conversations — des titres, sans les adresses. */
+  function articleInterests() {
+    var lines = [];
+    var clean = function (v) { return String(v || '').replace(URL_RE, '').replace(/\s+/g, ' ').trim(); };
+    var topics = String(S.settings.articleTopics || '').trim();
+    if (topics) lines.push('Sujets qui l’intéressent, fixés par lui (prioritaires) :', topics, '');
+    var seen = {};
+    var tasks = S.data.tasks.filter(function (t) { return !t.done; }).slice(0, ARTICLE_TASKS)
+      .map(function (t) { return clean(firstLine(t.text, 160)); })
+      .filter(function (v) { if (!v || seen[v]) return false; seen[v] = true; return true; });
+    if (tasks.length) {
+      lines.push('Ce sur quoi il travaille en ce moment — sa file de tâches, par ordre de priorité :');
+      tasks.forEach(function (v) { lines.push('- ' + v); });
+      lines.push('');
+    }
+    var convs = S.data.convos.filter(function (c) { return c.taskId !== FEEDBACK_ID; })
+      .sort(function (a, b) { return toMs(b.updated) - toMs(a.updated); })
+      .map(function (c) { return clean(c.title); })
+      .filter(function (v) { if (!v || v === 'Nouvelle session' || seen[v]) return false; seen[v] = true; return true; })
+      .slice(0, ARTICLE_CONVOS);
+    if (convs.length) {
+      lines.push('Ses dernières conversations avec des agents :');
+      convs.forEach(function (v) { lines.push('- ' + v); });
+    }
+    return lines.join('\n').trim();
+  }
+
+  /* Les cartes et, s'il est ouvert, le panneau du fil : rien d'autre ne montre l'article. */
+  function renderArticle(F) {
+    renderPass(function () {
+      renderUsage();
+      if (S.ui.termTaskId === F.panel) renderPanel();
+    });
+  }
+
+  /* Au démarrage : ce que l'hôte garde, sans rien lancer — puis l'article du jour de chaque fil s'il manque. */
+  function peekArticles() {
+    ARTICLE_FEEDS.forEach(function (F) {
+      bridge.call('getArticle', { kind: F.id, mode: 'peek' }).then(function (r) {
+        var A = articleState(F);
+        A.store = r || null;
+        A.loaded = true;
+        renderArticle(F);
+        ensureArticle(F, !!(r && r.busy));
+      })['catch'](function (e) { console.warn('[organizator] getArticle ' + F.id, e); });
+    });
+  }
+
+  function ensureArticles() {
+    ARTICLE_FEEDS.forEach(function (F) { ensureArticle(F, false); });
+  }
+
+  /* Un article par jour et par fil : cherché s'il manque celui du jour (démarrage, retour au premier
+     plan, changement de date), jamais par-dessus une recherche en cours, et pas plus d'une fois par
+     heure après un échec. `hostBusy` : l'hôte cherche déjà (page rechargée) — on attend sa fiche. */
+  function ensureArticle(F, hostBusy) {
+    var A = articleState(F);
+    if (!A.loaded || !articleOn(F) || A.busy) return;
+    if (!hostBusy) {
+      if (articleIsToday(currentArticle(F))) return;
+      if (A.failedAt && Date.now() - A.failedAt < ARTICLE_RETRY_MS) return;
+    }
+    fetchArticle(F, 'today');
+  }
+
+  /* `today` : l'article du jour (l'hôte rend celui qu'il garde s'il date d'aujourd'hui) ;
+     `another` : un autre, l'actuel passant dans les précédents. */
+  function fetchArticle(F, mode) {
+    var A = articleState(F);
+    if (A.busy) return;
+    A.busy = true;
+    A.error = '';
+    if (mode === 'another') A.shown = '';
+    renderArticle(F);
+    bridge.call('getArticle', { kind: F.id, mode: mode, interests: F.interests ? F.interests() : '' }, ARTICLE_WAIT).then(function (r) {
+      A.busy = false;
+      A.failedAt = 0;
+      if (r) A.store = r;
+      if (S.ui.termTaskId === F.panel && !A.shown) markArticleSeen(F);
+      renderArticle(F);
+    })['catch'](function (e) {
+      A.busy = false;
+      A.error = e.message;
+      A.failedAt = Date.now();
+      renderArticle(F);
+      /* Lancé depuis la carte, panneau fermé : la carte garde l'article actuel, l'échec ne se verrait pas. */
+      if (mode === 'another' && S.ui.termTaskId !== F.panel) toast('Pas d’autre article pour l’instant : ' + firstLine(e.message, 120));
+    });
+  }
+
+  /* L'article du jour du fil est ouvert : sa carte ne le signale plus comme neuf. */
+  function markArticleSeen(F) {
+    var a = currentArticle(F);
+    if (!a || a.seenAt) return;
+    a.seenAt = Date.now();
+    bridge.call('articleSeen', { kind: F.id, url: a.url })['catch'](function () { /* sans importance */ });
+  }
+
+  function scrollPanelTop() {
+    var body = $('#panel .panel-body');
+    if (body) body.scrollTop = 0;
+  }
+
+  function toggleArticle(F) {
+    if (S.ui.termTaskId === F.panel) { closeTerm(); return; }
+    articleState(F).shown = '';
+    markArticleSeen(F);
+    openTerm(F.panel);
+    if (!currentArticle(F) && articleOn(F)) ensureArticle(F, false);
+  }
+
+  /* « source · 8 min · en anglais » */
+  function articleMetaShort(a) {
+    return [a.source, a.readingMinutes ? a.readingMinutes + ' min' : '', ARTICLE_LANGS[a.language] || ''].filter(Boolean).join(' · ');
+  }
+
+  function articlePublished(a) {
+    var d = dayDate(a.published);
+    return d ? 'publié le ' + d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+  }
+
+  function articleCardHtml(F) {
+    if (!articleOn(F)) return '';
+    var A = articleState(F);
+    var a = currentArticle(F);
+    var fresh = a && !a.seenAt && articleIsToday(a);
+    var open = S.ui.termTaskId === F.panel;
+    var feed = ' data-feed="' + F.id + '"';
+    var tip = a ? a.title + (a.why ? '\n' + a.why : '') + '\nCliquer pour lire le résumé' : F.name;
+    var h = ['<div class="usage-card article-card article-' + F.id + (open ? ' on' : '') + (A.busy && !a ? ' busy' : '') + '" data-act="open-article"' + feed + ' title="' + esc(tip) + '">'];
+    h.push('<div class="usage-head"><span class="usage-name">' + esc(F.name) + '</span>'
+      + '<span class="usage-plan">' + esc(a ? fmtDay(a.day, { weekday: 'short', day: 'numeric', month: 'short' }) : '') + '</span>'
+      + (fresh ? '<span class="article-new" title="Pas encore lu"></span>' : '') + '</div>');
+    if (a) {
+      h.push('<div class="article-card-title">' + esc(a.title) + '</div>');
+      /* « Suivant › » cherche un autre article sans ouvrir le panneau : le bouton porte sa propre
+         action, le dispatcher prend la plus proche du clic. */
+      h.push('<div class="article-card-foot">'
+        + '<span class="article-card-meta' + (A.busy ? ' article-searching' : '') + '">' + esc(A.busy ? 'Recherche d’un nouvel article…' : articleMetaShort(a)) + '</span>'
+        + '<button type="button" class="article-next" data-act="article-another"' + feed + (A.busy ? ' disabled' : '')
+        + ' title="' + esc(A.busy ? 'Recherche en cours…' : 'Article suivant : en chercher un autre, celui-ci passe dans les précédents') + '">Suivant ›</button>'
+        + '</div>');
+    } else if (A.busy) {
+      h.push('<div class="usage-msg article-searching">' + esc(F.searching) + '</div>');
+    } else if (A.error) {
+      h.push('<div class="usage-msg st-error">Indisponible · ' + esc(firstLine(A.error, 90)) + '</div>');
+    } else {
+      h.push('<div class="usage-msg">Aucun article pour l’instant.</div>');
+    }
+    h.push('</div>');
+    return h.join('');
+  }
+
+  function articleBodyHtml(F, a, current) {
+    var A = articleState(F);
+    var h = ['<article class="article">'];
+    h.push('<a class="article-title" href="' + esc(a.url) + '" data-act="open-url" data-url="' + esc(a.url) + '" title="Lire l’article dans le navigateur">'
+      + esc(a.title) + '</a>');
+    var meta = [a.source, a.author, articlePublished(a), a.readingMinutes ? a.readingMinutes + ' min de lecture' : '', ARTICLE_LANGS[a.language] || '']
+      .filter(Boolean);
+    if (meta.length) h.push('<div class="article-meta">' + esc(meta.join(' · ')) + '</div>');
+    if (a.topic) h.push('<div class="article-topic">' + esc(a.topic) + '</div>');
+    h.push('<p class="article-summary">' + esc(a.summary) + '</p>');
+    var points = Array.isArray(a.keyPoints) ? a.keyPoints.filter(Boolean) : [];
+    if (points.length) {
+      h.push('<div class="article-sub">À retenir</div><ul class="article-points">'
+        + points.map(function (p) { return '<li>' + esc(p) + '</li>'; }).join('') + '</ul>');
+    }
+    if (a.why) h.push('<div class="article-sub">' + esc(F.why) + '</div><p class="article-why">' + esc(a.why) + '</p>');
+    h.push('<div class="article-actions">'
+      + '<button type="button" class="dark-btn dark-btn-primary" data-act="open-url" data-url="' + esc(a.url) + '">Lire l’article ↗</button>'
+      + '</div>');
+    if (current && A.error) h.push('<div class="article-error">Recherche impossible : ' + esc(A.error) + '</div>');
+    var by = [a.fetchedAt ? 'Proposé le ' + fmtDate(a.fetchedAt) : '', a.model, a.ms ? Math.round(a.ms / 1000) + ' s' : ''].filter(Boolean);
+    if (by.length) h.push('<div class="article-foot">' + esc(by.join(' · ')) + '</div>');
+    h.push('</article>');
+    return h.join('');
+  }
+
+  function articlePanelHtml(F) {
+    var A = articleState(F);
+    var cur = currentArticle(F);
+    var history = articleHistory(F);
+    var shown = A.shown ? history.filter(function (a) { return a.url === A.shown; })[0] || null : null;
+    var a = shown || cur;
+    var feed = ' data-feed="' + F.id + '"';
+    var h = ['<div class="panel-body article-panel">'];
+    if (shown) h.push('<button type="button" class="panel-link article-back" data-act="article-current"' + feed + '>' + esc(F.back) + '</button>');
+    /* « Article suivant › » en tête de la fiche du jour, pas sous le résumé où on ne le voyait pas. */
+    h.push('<div class="article-head"><div class="panel-kicker">' + esc((shown ? F.of : F.name + ' · ') + fmtDay(a ? a.day : todayKey())) + '</div>'
+      + (a && !shown ? '<button type="button" class="dark-btn btn-small article-next-dark' + (A.busy ? ' article-searching' : '') + '" data-act="article-another"' + feed
+        + (A.busy ? ' disabled' : '') + ' title="En chercher un autre : celui-ci passe dans les précédents">'
+        + esc(A.busy ? 'Recherche en cours…' : 'Article suivant ›') + '</button>' : '')
+      + '</div>');
+
+    if (a) {
+      if (!shown && !articleIsToday(a) && A.busy) h.push('<div class="panel-note">Recherche de l’article d’aujourd’hui… En attendant, celui du ' + esc(fmtDay(a.day)) + '.</div>');
+      h.push(articleBodyHtml(F, a, !shown));
+    } else if (A.busy) {
+      h.push('<div class="panel-note article-searching">' + esc(F.lookup) + '</div>');
+    } else if (A.error) {
+      h.push('<div class="article-error">' + esc(A.error) + '</div>');
+      h.push('<div class="article-actions"><button type="button" class="dark-btn" data-act="article-retry"' + feed + '>Réessayer</button></div>');
+    } else if (!articleOn(F)) {
+      h.push('<div class="panel-note">' + esc(hasProvider('claude') ? F.off
+        : 'Claude Code est introuvable sur ce poste : ' + F.subject + ' a besoin de sa recherche web.') + '</div>');
+    } else {
+      h.push('<div class="panel-note">' + esc(F.empty) + '</div>');
+      h.push('<div class="article-actions"><button type="button" class="dark-btn" data-act="article-retry"' + feed + '>' + esc(F.fetch) + '</button></div>');
+    }
+
+    var older = history.filter(function (x) { return !shown || x.url !== shown.url; });
+    if (shown && cur) older.unshift(cur);
+    if (older.length) {
+      h.push('<div class="panel-kicker">Articles précédents · ' + older.length + '</div><div class="article-olds">');
+      h.push(older.map(function (x) {
+        var isCur = x === cur;
+        return '<button type="button" class="article-old" data-act="' + (isCur ? 'article-current' : 'article-show') + '"' + feed + ' data-url="' + esc(x.url) + '">'
+          + '<span class="article-old-title">' + esc(x.title) + '</span>'
+          + '<span class="article-old-meta">' + esc([fmtDay(x.day, { day: 'numeric', month: 'short' }), x.source, x.topic].filter(Boolean).join(' · ')) + '</span>'
+          + '</button>';
+      }).join(''));
+      h.push('</div>');
+    }
+    h.push('<div class="feedback-alt"><button type="button" class="panel-link" data-act="article-settings">' + esc(F.settings) + '</button></div>');
+    h.push('</div>');
+    return h.join('');
   }
 
   /* Relectures du journal en cours : une relecture de fond (minuteur, événement de l'hôte) ne part
@@ -4514,17 +7524,48 @@
     return !hasProvider(wanted) && hasProvider(other) ? other : wanted;
   }
 
+  /* Dossier proposé sur une tâche parente : le sien si elle a déjà tourné, sinon celui de la
+     dernière conversation de ses sous-tâches — c'est là que la revue s'est faite —, sinon le réglage. */
+  function groupCwdFor(parent) {
+    if (convosOf(parent.id).length) return defaultCwdFor(parent.id);
+    var convs = [];
+    childrenOf(parent.id).forEach(function (k) { convs = convs.concat(convosOf(k.id)); });
+    convs.sort(function (a, b) { return toMs(b.updated) - toMs(a.updated); });
+    for (var i = 0; i < convs.length; i++) if (convs[i].cwd) return convs[i].cwd;
+    return defaultCwdFor(parent.id);
+  }
+
   function openNewConvo() {
+    flushTextWrites();
+    var task = taskById(S.ui.termTaskId);
+    var subs = batchSubsOf(task);
     S.ui.newConvoOpen = true;
     newFormEntered = false;
-    S.ui.newConvoCwd = defaultCwdFor(S.ui.termTaskId);
-    S.ui.newConvoPrompt = buildPrompt(taskById(S.ui.termTaskId));
+    S.ui.newConvoCwd = subs.length ? groupCwdFor(task) : defaultCwdFor(S.ui.termTaskId);
+    S.ui.newConvoPrompt = buildPrompt(task);
     S.ui.newConvoKeywords = [];
     S.ui.newKeywordOpen = false;
     S.ui.newKeywordName = '';
     S.ui.newKeywordPrompt = '';
+    /* Une revue générale, ou une tâche dont chaque sous-tâche porte ses PRs, se lance d'office sur
+       ses sous-tâches. Celles qui ont déjà leur rapport de revue, ou une conversation ouverte, partent
+       décochées. */
+    S.ui.newConvoTarget = subs.length && (task.reviewGroup
+      || subs.every(function (k) { return taskPullRequests(k).length > 0; })) ? 'subs' : 'self';
+    S.ui.newConvoSubs = {};
+    subs.forEach(function (k) {
+      S.ui.newConvoSubs[k.id] = !reviewReportsOf(convosOf(k.id)).length && !batchSubBusy(k);
+    });
+    S.ui.newConvoNote = '';
     setNewConvoProvider(defaultProviderId());
-    loadRecap(taskById(S.ui.termTaskId));
+    if (S.ui.newConvoTarget === 'self') {
+      loadRecap(task);
+    } else {
+      recapToken++;
+      S.ui.newConvoRecap = '';
+      S.ui.newConvoRecapMeta = null;
+      S.ui.newConvoRecapBusy = false;
+    }
     render();
     var el = document.querySelector('[data-focus-key="new-cwd"]');
     if (el) { el.focus(); el.select(); }
@@ -4540,11 +7581,18 @@
   function launchConvo() {
     var task = taskById(S.ui.termTaskId);
     if (!task) return;
+    if (batchTargetOn(task)) { launchBatch(task); return; }
     var provider = S.ui.newConvoProvider === 'copilot' ? 'copilot' : 'claude';
     var cwd = String(S.ui.newConvoCwd || '').trim();
     if (!cwd) { toast('Indiquez un dossier de travail.'); return; }
-    startSession(task, provider, String(S.ui.newConvoModel || '').trim(), String(S.ui.newConvoEffort || '').trim(), cwd,
-      keywordIdsFor(task, S.ui.newConvoKeywords), S.ui.newConvoPrompt, S.ui.newConvoRecapBusy ? '' : S.ui.newConvoRecap);
+    /* Les blocs de texte joints sont écrits sur le disque avant le départ : l'agent lit la dernière
+       version, et un message resté tel que proposé est recomposé avec leurs chemins à jour. */
+    var auto = S.ui.newConvoPrompt === buildPrompt(task);
+    flushTextWrites().then(function () {
+      startSession(task, provider, String(S.ui.newConvoModel || '').trim(), String(S.ui.newConvoEffort || '').trim(), cwd,
+        keywordIdsFor(task, S.ui.newConvoKeywords), auto ? buildPrompt(task) : S.ui.newConvoPrompt,
+        S.ui.newConvoRecapBusy ? '' : S.ui.newConvoRecap);
+    });
   }
 
   /* Bouton direct du carnet : agent, modèle et effort par défaut, dans le dépôt. Le texte
@@ -4571,26 +7619,14 @@
     if (feedback && !pending.length) { toast('Aucune remarque à envoyer.'); return; }
     var first = feedback ? feedbackPrompt(pending)
       : String(prompt == null ? buildPrompt(task) : prompt).trim();
-    var title = feedback ? feedbackTitle(pending.length) : firstLine(task.text, 46);
-    var chosen = keywordIdsFor(task, keywords);
-    /* La tâche reste dans le contexte sauf quand c'est elle qui part en message : un message
-       retouché (« commence par reproduire le bug ») ne doit pas priver l'agent de l'énoncé. */
-    var taskInContext = first !== buildPrompt(task);
     S.ui.launchBusy = true;
     render();
-    bridge.call('startSession', {
-      taskId: task.id, provider: provider, model: model, effort: effort, cwd: cwd, title: title,
-      keywords: chosen, context: buildContext(task, chosen, taskInContext, feedback ? '' : String(recap || '').trim()), prompt: first
+    launchSession(task, {
+      provider: provider, model: model, effort: effort, cwd: cwd, keywords: keywords, prompt: first, recap: recap,
+      title: feedback ? feedbackTitle(pending.length) : ''
     })
-      .then(function (r) {
-        if (!r || !r.sessionId) throw new Error('réponse incomplète de l’hôte');
-        var now = Date.now();
-        S.data.convos.push({
-          id: r.sessionId, taskId: task.id, provider: provider, model: model, effort: effort, title: title, cwd: r.cwd || cwd,
-          keywords: chosen, artifacts: [], created: toMs(r.created) || now, updated: toMs(r.created) || now, messageCount: 0
-        });
-        if (feedback) markRemarksSent(pending, r.sessionId);
-        S.ui.sessionExists[r.sessionId] = false;
+      .then(function (c) {
+        if (feedback) markRemarksSent(pending, c.id);
         S.ui.launchBusy = false;
         S.ui.newConvoOpen = false;
         S.ui.newConvoCwd = '';
@@ -4606,6 +7642,40 @@
       });
   }
 
+  /* Demande à l'hôte d'ouvrir la session, puis l'enregistre ; rend la conversation. Ni verrou, ni
+     formulaire, ni toast : c'est l'affaire de l'appelant (startSession pour une conversation,
+     launchBatch pour un lot). `o` : { provider, model, effort, cwd, keywords, prompt, recap,
+     title?, taskInContext?, batch? } — `taskInContext`, s'il est donné, remplace la règle ordinaire. */
+  function launchSession(task, o) {
+    var first = String(o.prompt == null ? buildPrompt(task) : o.prompt).trim();
+    var title = o.title || firstLine(task.text, 46);
+    var chosen = keywordIdsFor(task, o.keywords);
+    /* La tâche reste dans le contexte sauf quand c'est elle qui part en message : un message
+       retouché (« commence par reproduire le bug ») ne doit pas priver l'agent de l'énoncé. */
+    var taskInContext = typeof o.taskInContext === 'boolean' ? o.taskInContext : first !== buildPrompt(task);
+    var recap = task.id === FEEDBACK_ID ? '' : String(o.recap || '').trim();
+    return bridge.call('startSession', {
+      taskId: task.id, provider: o.provider, model: o.model, effort: o.effort, cwd: o.cwd, title: title,
+      keywords: chosen, context: buildContext(task, chosen, taskInContext, recap), prompt: first
+    }).then(function (r) {
+      if (!r || !r.sessionId) throw new Error('réponse incomplète de l’hôte');
+      return recordConvo(task, r, { provider: o.provider, model: o.model, effort: o.effort, title: title, cwd: o.cwd, keywords: chosen, batch: o.batch });
+    });
+  }
+
+  /* `batch` : identifiant du lot dont la conversation fait partie (voir launchBatch). */
+  function recordConvo(task, r, o) {
+    var now = Date.now();
+    var c = {
+      id: r.sessionId, taskId: task.id, provider: o.provider, model: o.model, effort: o.effort, title: o.title, cwd: r.cwd || o.cwd,
+      keywords: o.keywords, artifacts: [], created: toMs(r.created) || now, updated: toMs(r.created) || now, messageCount: 0
+    };
+    if (o.batch) c.batch = o.batch;
+    S.data.convos.push(c);
+    S.ui.sessionExists[r.sessionId] = false;
+    return c;
+  }
+
   /* Le texte tapé mais pas encore ajouté devient une remarque ; vrai si quelque chose a été ajouté. */
   function flushTypedRemark() {
     var text = String(S.ui.remarkText || '').trim();
@@ -4616,35 +7686,222 @@
   }
 
   /* L'hôte a-t-il ouvert un terminal, ou ramené celui de la session ? Quand le terminal groupe ses
-     sessions en onglets, il active celui de la session ; s'il n'a pas su lequel c'était (deux
-     onglets du même nom), il le nomme — à nous de le dire. */
+     sessions en onglets, il active celui de la session ; s'il n'a pas su lequel c'était, il le
+     nomme — à nous de le dire. Une session vivante dont la fenêtre reste introuvable n'est pas
+     relancée (`alive`) : un second agent travaillerait sur le même fichier de session. */
   function resumeToast(r) {
+    if (r && r.alive && !r.focused) return 'Session déjà ouverte, mais sa fenêtre est introuvable';
     if (!r || !r.focused) return 'Session reprise dans PowerShell';
+    if (r.raised === false) {
+      return 'Session déjà ouverte : Windows n’a pas laissé passer son terminal devant — son bouton clignote dans la barre des tâches'
+        + (r.tab ? ', onglet « ' + r.tab + ' »' : '');
+    }
     if (r.tab) return 'Session déjà ouverte : fenêtre au premier plan, onglet « ' + r.tab + ' »';
     return r.tabActivated
       ? 'Session déjà ouverte : son onglet est au premier plan'
       : 'Session déjà ouverte : sa fenêtre est au premier plan';
   }
 
-  /* `withRemarks` : reprend la session en lui envoyant les remarques en attente (carnet seulement). */
-  function resumeConvo(convId, withRemarks) {
+  /* Reprises en cours, par conversation : un double-clic en envoyait deux, et la seconde, partie
+     avant que le terminal de la première n'ait sa fenêtre, pouvait en ouvrir un second. */
+  var resuming = {};
+
+  /* `withRemarks` : reprend la session en lui envoyant les remarques en attente (carnet seulement).
+     `force` : second terminal sur une session vivante dont la fenêtre est introuvable, demandé
+     depuis le toast. */
+  function resumeConvo(convId, withRemarks, force) {
     var c = convoById(convId);
-    if (!c) return;
+    if (!c || resuming[convId]) return;
     var provider = providerOf(c);
     if (!hasProvider(provider)) { toast(providerById(provider).missing); return; }
     var task = taskById(c.taskId);
     var pending = withRemarks && c.taskId === FEEDBACK_ID ? pendingRemarks() : [];
+    resuming[convId] = true;
     bridge.call('resumeSession', {
       sessionId: c.id, provider: provider, model: c.model || '', effort: c.effort || '', cwd: c.cwd, title: c.title,
       keywords: task ? keywordIdsFor(task, c.keywords) : [],
-      context: task ? buildContext(task, c.keywords, true) : '', prompt: pending.length ? feedbackPrompt(pending) : ''
+      context: task ? buildContext(task, c.keywords, true) : '', prompt: pending.length ? feedbackPrompt(pending) : '',
+      force: !!force
     }).then(function (r) {
+      delete resuming[convId];
+      if (r && r.alive && !r.focused) {
+        toast(resumeToast(r), { label: 'Ouvrir un second terminal', run: function () { resumeConvo(convId, withRemarks, true); } });
+        return;
+      }
       if (!pending.length) { toast(resumeToast(r)); return; }
       markRemarksSent(pending, c.id);
       c.updated = Date.now();
       commit();
       toast('Remarques envoyées dans la session existante');
-    })['catch'](function (e) { toast('Reprise impossible : ' + e.message); });
+    })['catch'](function (e) { delete resuming[convId]; toast('Reprise impossible : ' + e.message); });
+  }
+
+  /* ══ Lancement sur les sous-tâches et lots ════════════════════════════ */
+
+  /* Depuis une tâche parente, une conversation par sous-tâche cochée — même agent, même modèle,
+     même effort, mêmes mots-clés —, chacune sur le texte de sa sous-tâche, avec son propre
+     « Travail déjà fait ». Les lancements se suivent, espacés : chacun occupe le fil de l'hôte un
+     instant (Process.Start), écrit ~/.claude.json, et ouvre un onglet de terminal qu'on veut dans
+     l'ordre de la file. Le lot est noté sur la parente (`batch` : { id, at, n, endedAt }, le dernier
+     seulement) et sur chacune de ses conversations (`batch` : id) : c'est ce qui dit quand tout est fini. */
+  var BATCH_LAUNCH_GAP_MS = 1500, BATCH_GRACE_MS = 30000, BATCH_DEAD_MS = 120000, BATCH_CONFIRM_MS = 5000;
+  /* Lot en cours de lancement : il n'est pas jugé avant que toutes ses conversations soient parties. */
+  var batchLaunching = null;
+  /* Lot vu fini à une relecture, en attente de la confirmation : id → heure (mémoire seulement). */
+  var batchDoneSince = {};
+
+  function batchWait(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  function launchBatch(parent) {
+    if (S.ui.launchBusy) return;
+    var provider = S.ui.newConvoProvider === 'copilot' ? 'copilot' : 'claude';
+    if (!hasProvider(provider)) { toast(providerById(provider).missing); return; }
+    var cwd = String(S.ui.newConvoCwd || '').trim();
+    if (!cwd) { toast('Indiquez un dossier de travail.'); return; }
+    var subs = batchChosen(parent);
+    if (!subs.length) { toast('Cochez au moins une sous-tâche.'); return; }
+    /* Tout est figé au départ : retoucher le formulaire pendant le lancement ne change rien au lot. */
+    var model = String(S.ui.newConvoModel || '').trim();
+    var effort = String(S.ui.newConvoEffort || '').trim();
+    /* Par nom : une sous-tâche peut être rangée dans une autre catégorie que sa parente. */
+    var names = keywordsByIds(parent, keywordIdsFor(parent, S.ui.newConvoKeywords)).map(function (kw) { return kw.name; });
+    var note = String(S.ui.newConvoNote || '').trim();
+    var id = uid('b'), prev = parent.batch;
+    var launched = [], failed = [], noRecap = false;
+    var progress = S.ui.batchProgress = { parentId: parent.id, done: 0, total: subs.length, phase: 'recap' };
+    S.ui.launchBusy = true;
+    batchLaunching = id;
+    render();
+    flushTextWrites().then(function () {
+      return loadBatchRecaps(subs);
+    }).then(function (res) {
+      noRecap = res.failed;
+      parent.batch = { id: id, at: Date.now(), n: 0, endedAt: 0 };
+      progress.phase = 'launch';
+      render();
+      return subs.reduce(function (chain, sub, i) {
+        return chain.then(function () {
+          return i ? batchWait(BATCH_LAUNCH_GAP_MS) : null;
+        }).then(function () {
+          /* La précision commune suit la tâche dans le message : la tâche n'a pas à revenir dans le contexte. */
+          return launchSession(sub, {
+            provider: provider, model: model, effort: effort, cwd: cwd, keywords: keywordIdsFor(sub, names),
+            prompt: buildPrompt(sub) + (note ? '\n\n' + note : ''), taskInContext: false,
+            recap: res.recaps[sub.id] || '', batch: id
+          });
+        }).then(function (c) {
+          launched.push(c);
+          /* Déjà lancée : elle ne doit pas se perdre si l'application se ferme avant la fin du lot. */
+          saveDataLater();
+        }, function (e) {
+          failed.push({ task: sub, message: e && e.message ? e.message : String(e) });
+        }).then(function () {
+          progress.done++;
+          render();
+        });
+      }, Promise.resolve());
+    })['catch'](function (e) {
+      console.warn('[organizator] launchBatch', e);
+    }).then(function () {
+      var n = launched.length;
+      if (n) parent.batch.n = n;
+      else if (prev) parent.batch = prev;
+      else delete parent.batch;
+      batchLaunching = null;
+      S.ui.launchBusy = false;
+      S.ui.batchProgress = null;
+      /* Rien de parti : le formulaire reste ouvert, comme après l'échec d'un lancement ordinaire. */
+      if (n && S.ui.newConvoOpen && S.ui.termTaskId === parent.id) {
+        S.ui.newConvoOpen = false;
+        S.ui.newConvoCwd = '';
+        S.ui.newConvoPrompt = '';
+        S.ui.newConvoTarget = 'self';
+        S.ui.newConvoSubs = {};
+        S.ui.newConvoNote = '';
+      }
+      commit();
+      refreshSessions();
+      toast(batchLaunchText(parent, subs.length, n, failed, noRecap));
+    });
+  }
+
+  function batchLaunchText(parent, total, n, failed, noRecap) {
+    var tail = noRecap ? ' (sans « Travail déjà fait » : lecture impossible)' : '';
+    if (!n) return 'Lancement impossible : ' + (failed.length ? failed[0].message : 'aucune conversation lancée') + tail;
+    if (failed.length) {
+      return n + (n > 1 ? ' conversations lancées' : ' conversation lancée') + ' sur ' + total + ' — échec pour '
+        + failed.map(function (f) { return '« ' + firstLine(f.task.text, 40).trim() + ' »'; }).join(', ')
+        + ' : ' + failed[0].message + tail;
+    }
+    return n + (n > 1 ? ' conversations lancées, une par sous-tâche' : ' conversation lancée, sur la sous-tâche cochée')
+      + (parent.reviewGroup ? ' — la revue générale est en cours' : '') + tail;
+  }
+
+  /* Conversations du dernier lot lancé depuis `t`. */
+  function batchConvos(t) {
+    var id = t && t.batch ? t.batch.id : '';
+    return id ? S.data.convos.filter(function (c) { return c.batch === id; }) : [];
+  }
+
+  /* L'agent a-t-il rendu la main ? Prudence au départ : le processus n'est vu vivant qu'au premier
+     balayage (4 s après le lancement), l'état dirait « fermée » d'ici là. Une conversation dont
+     l'équipe travaille encore est « en cours » pour displayState : elle n'est pas finie. */
+  function batchConvoDone(c, now) {
+    var age = (now || Date.now()) - toMs(c.created);
+    if (age < BATCH_GRACE_MS) return false;
+    var st = displayState(c);
+    if (st === 'ready' || st === 'error' || st === 'closed' || st === 'idle') return true;
+    /* Jamais démarrée : ni fichier de session ni processus, longtemps après le lancement. */
+    var a = activityOf(c);
+    return st === null && !!a && a.alive === false && age > BATCH_DEAD_MS;
+  }
+
+  /* Après chaque relecture des sessions. Un lot est fini quand toutes ses conversations ont rendu
+     la main, constaté à deux relectures espacées d'au moins BATCH_CONFIRM_MS : un agent qui enchaîne
+     deux tours passe un instant par « réponse prête ». Rien ne s'ouvre tout seul : un toast le dit. */
+  function checkBatches() {
+    var now = Date.now();
+    S.data.tasks.forEach(function (t) {
+      var b = t.batch;
+      if (!b || b.endedAt || b.id === batchLaunching) return;
+      var convs = batchConvos(t);
+      /* Conversations supprimées entre-temps : le lot se clôt sans bruit. */
+      if (!convs.length) { b.endedAt = now; delete batchDoneSince[b.id]; saveDataLater(); return; }
+      if (!convs.every(function (c) { return batchConvoDone(c, now); })) { delete batchDoneSince[b.id]; return; }
+      if (!batchDoneSince[b.id]) { batchDoneSince[b.id] = now; return; }
+      if (now - batchDoneSince[b.id] < BATCH_CONFIRM_MS) return;
+      delete batchDoneSince[b.id];
+      b.endedAt = now;
+      saveDataNow();
+      batchEndToast(t, convs);
+    });
+  }
+
+  /* Rapports comptés par sous-tâche : ceux qu'une conversation du lot a écrits. */
+  function batchEndToast(t, convs) {
+    var seen = {}, reports = 0;
+    convs.forEach(function (c) {
+      if (seen[c.taskId] || !reviewReportsOf([c]).length) return;
+      seen[c.taskId] = true;
+      reports++;
+    });
+    var errors = convs.filter(function (c) { return displayState(c) === 'error'; }).length;
+    var errText = errors ? ', ' + errors + ' en erreur' : '';
+    var said = reports ? 'Revue générale terminée — ' + reports + (reports > 1 ? ' rapports' : ' rapport') + errText
+      : (t.reviewGroup ? 'Revue générale terminée — aucun rapport de revue écrit' + errText : 'Toutes les conversations des sous-tâches ont rendu la main.');
+    notifyOutside([recordNotification('batch', null, {
+      taskId: t.id, title: firstLine(t.text, 90).trim() || 'Tâche sans titre', text: said, reports: reports
+    })]);
+    if (reports) {
+      toast('Revue générale terminée — ' + reports + (reports > 1 ? ' rapports' : ' rapport') + errText,
+        { label: 'Ouvrir', run: function () { openReviewGroup({ parentId: t.id }); } });
+    } else if (t.reviewGroup) {
+      toast('Revue générale terminée — aucun rapport de revue écrit' + errText);
+    } else {
+      toast('Conversations des sous-tâches terminées — « ' + firstLine(t.text, 40).trim() + ' »');
+    }
   }
 
   /* ══ Actions — remarques sur Organizator ══════════════════════════════ */
@@ -4666,9 +7923,15 @@
     return 'Remarques Organizator · ' + n + ' · ' + new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
   }
 
+  /* La session garde aussi le texte de ce qu'elle a reçu (`convo.remarks`) : ce qui a donné lieu à la
+     conversation se lit sous elle, même une fois l'historique des remarques envoyées effacé. */
   function markRemarksSent(list, sessionId) {
     var now = Date.now();
     list.forEach(function (r) { r.sentAt = now; r.sessionId = sessionId || ''; });
+    var c = sessionId ? convoById(sessionId) : null;
+    if (c) {
+      c.remarks = convoRemarks(c).concat(list.map(function (r) { return { id: r.id, text: r.text, sentAt: now }; }));
+    }
   }
 
   function addRemark() {
@@ -4737,6 +8000,12 @@
       if (!t) return;
       openComposer(lastOfGroup(t).id, t.id);
     },
+    'toggle-subs': function (el) {
+      var t = taskById(el.getAttribute('data-id'));
+      if (!t) return;
+      if (subsFolded(t)) delete t.collapsed; else t.collapsed = true;
+      commit();
+    },
 
     edit: function (el) {
       S.ui.editingId = el.getAttribute('data-id');
@@ -4744,19 +8013,44 @@
       var ta = document.querySelector('[data-focus-key="edit-text"]');
       if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
     },
-    'stop-edit': function () { S.ui.editingId = null; render(); },
+    'stop-edit': function () { S.ui.editingId = null; flushTextWrites(); render(); },
+    'attach-pick': function (el) { pickAttachments(el.getAttribute('data-owner')); },
+    'attach-text': function (el) { addTextAttachment(el.getAttribute('data-owner')); },
+    'remove-attachment': function (el) { removeAttachment(el.getAttribute('data-owner'), el.getAttribute('data-att')); },
+    'open-attachment': function (el) { openAttachment(el.getAttribute('data-owner'), el.getAttribute('data-att')); },
     'set-type': function (el) { setType(el.getAttribute('data-id'), el.getAttribute('data-type')); },
     'toggle-done': function (el) { toggleDone(el.getAttribute('data-id')); },
     'toggle-doing': function (el) { toggleDoing(el.getAttribute('data-id')); },
     'remove-task': function (el) { removeTask(el.getAttribute('data-id')); },
     'move-bottom': function (el) { moveToBottom(el.getAttribute('data-id')); },
-    'open-term': function (el) { openTerm(el.getAttribute('data-id')); },
+    'open-term': function (el, e) { clickTerm(el.getAttribute('data-id'), e && e.shiftKey); },
     'open-artifacts': function (el) { openArtifacts(el.getAttribute('data-id')); },
     'open-artifact': function (el) {
       openReader(el.getAttribute('data-path') || '', el.getAttribute('data-cwd') || '');
     },
     'close-reader': closeReader,
     'reader-back': backReader,
+    'open-review': function (el) { openReview(el.getAttribute('data-id')); },
+    'open-review-group': function (el) { openReviewGroup({ parentId: el.getAttribute('data-id') }); },
+    'open-reviews': function () { openReviewGroup({}); },
+    'rv-tab': function (el) { reviewGroupGo(el.getAttribute('data-id')); },
+    'rv-pick': function (el) { reviewPick(el.getAttribute('data-key')); },
+    'rv-overview': function () { reviewPick(''); },
+    'rv-prev': function () { reviewStep(-1); },
+    'rv-next': function () { reviewStep(1); },
+    'rv-cat': function (el) {
+      var r = S.ui.reader;
+      if (!r || !r.rv) return;
+      r.rv.cat = el.getAttribute('data-cat') || '';
+      render();
+    },
+    'rv-chat': function () { var r = S.ui.reader; if (r && r.rv && r.rv.chat) closeFindingChat(); else openFindingChat(); },
+    'rv-chat-close': closeFindingChat,
+    'rv-chat-send': sendFindingQuestion,
+    'rv-chat-stop': stopFindingAnswer,
+    'rv-chat-forget': forgetFindingChat,
+    'rv-doc': function () { if (S.ui.reader) { keepReviewScroll(S.ui.reader); S.ui.reader.mode = 'doc'; render(); } },
+    'rv-review': function () { if (S.ui.reader) { S.ui.reader.mode = 'review'; render(); } },
     'reader-vscode': function () {
       var r = S.ui.reader;
       if (!r || !r.view) return;
@@ -4809,7 +8103,27 @@
     'close-term': closeTerm,
     'back-to-list': backToList,
     'new-convo': openNewConvo,
-    'cancel-new-convo': function () { S.ui.newConvoOpen = false; render(); },
+    'cancel-new-convo': function () {
+      S.ui.newConvoOpen = false;
+      S.ui.newConvoTarget = 'self';
+      S.ui.newConvoSubs = {};
+      S.ui.newConvoNote = '';
+      render();
+    },
+    /* Lancer sur la tâche elle-même ou sur chacune de ses sous-tâches. Le « Travail déjà fait » de la
+       tâche n'est lu qu'au premier passage sur elle-même. */
+    'pick-target': function (el) {
+      S.ui.newConvoTarget = el.getAttribute('data-id') === 'subs' ? 'subs' : 'self';
+      if (S.ui.newConvoTarget === 'self' && !S.ui.newConvoRecapMeta && !S.ui.newConvoRecapBusy && !S.ui.newConvoRecap) {
+        loadRecap(taskById(S.ui.termTaskId));
+      }
+      render();
+    },
+    'toast-act': function () {
+      var act = S.ui.toastAction;
+      clearToast();
+      if (act && act.run) act.run();
+    },
     'browse-cwd': function () {
       browseFolder(S.ui.newConvoCwd).then(function (p) { if (p) { S.ui.newConvoCwd = p; render(); } });
     },
@@ -4967,14 +8281,62 @@
     },
 
     'close-settings': function () { S.ui.settingsOpen = false; render(); },
-    'settings-tab': function (el) { S.ui.settingsTab = el.getAttribute('data-id'); render(); },
+    'settings-tab': function (el) {
+      S.ui.settingsTab = el.getAttribute('data-id');
+      render();
+      /* Les modèles ont pu se télécharger (première dictée) depuis la lecture du démarrage. */
+      if (S.ui.settingsTab === 'voice') refreshWhisper();
+    },
     'refresh-usage': function () { refreshUsage(true); },
+    'open-article': function (el) { toggleArticle(feedOf(el)); },
+    'toggle-notifs': function () {
+      S.ui.notifsOpen = !S.ui.notifsOpen;
+      renderNotifs();
+      renderNotifsBtn();
+    },
+    'open-notif': function (el) { openNotification(el.getAttribute('data-id')); },
+    'notifs-read-all': function () {
+      S.data.notifications.forEach(function (n) { n.read = true; });
+      saveDataSoon();
+      renderNotifs();
+      renderNotifsBtn();
+    },
+    'notifs-clear': function () {
+      S.data.notifications = [];
+      saveDataSoon();
+      renderNotifs();
+      renderNotifsBtn();
+    },
+    'notifs-settings': function () { S.ui.notifsOpen = false; S.ui.settingsTab = 'display'; S.ui.settingsOpen = true; render(); },
+    'toggle-win-notifs': function () { setSetting('windowsNotifications', S.settings.windowsNotifications === false); },
+    'toggle-whisper': function () { setSetting('whisperEnabled', S.settings.whisperEnabled === false); },
+    'toggle-whisper-auto': function () { setSetting('whisperAuto', S.settings.whisperAuto === false); },
+    'whisper-model': function (el) { setSetting('whisperModel', el.getAttribute('data-id')); },
+    'whisper-download': function (el) { downloadWhisper(el.getAttribute('data-id')); },
+    'whisper-remove': function (el) { removeWhisper(el.getAttribute('data-id')); },
+    'transcribe-attachment': function (el) { transcribeAttachment(el.getAttribute('data-owner'), el.getAttribute('data-att')); },
+    'cancel-transcribe': function (el) { cancelTranscription(el.getAttribute('data-att')); },
+    'article-another': function (el) { fetchArticle(feedOf(el), 'another'); },
+    'article-retry': function (el) { var F = feedOf(el); articleState(F).failedAt = 0; fetchArticle(F, 'today'); },
+    'article-show': function (el) { articleState(feedOf(el)).shown = el.getAttribute('data-url') || ''; renderPanel(); scrollPanelTop(); },
+    'article-current': function (el) { articleState(feedOf(el)).shown = ''; renderPanel(); scrollPanelTop(); },
+    'article-settings': function () { S.ui.settingsTab = 'article'; S.ui.settingsOpen = true; render(); },
+    'toggle-article': function () {
+      setSetting('articleEnabled', S.settings.articleEnabled === false);
+      if (S.settings.articleEnabled) ensureArticle(feedById('daily'), false);
+    },
+    'toggle-article-ai': function () {
+      setSetting('articleAiEnabled', S.settings.articleAiEnabled === false);
+      if (S.settings.articleAiEnabled) ensureArticle(feedById('ai'), false);
+    },
     'top-minus': function () { setSetting('topCount', Math.max(1, S.settings.topCount - 1)); },
     'top-plus': function () { setSetting('topCount', Math.min(8, S.settings.topCount + 1)); },
     'toggle-bands': function () { setSetting('showBands', !S.settings.showBands); },
     'toggle-compact': function () { setSetting('compact', !S.settings.compact); },
     'term-ps': function () { setSetting('terminal', 'powershell'); },
     'term-wt': function () { setSetting('terminal', 'wt'); },
+    'term-click-panel': function () { setSetting('termClick', 'panel'); },
+    'term-click-terminal': function () { setSetting('termClick', 'terminal'); },
     'default-claude': function () { setSetting('provider', 'claude'); },
     'default-copilot': function () { setSetting('provider', 'copilot'); },
     'browse-default-cwd': function () {
@@ -4983,6 +8345,7 @@
   };
 
   document.addEventListener('click', function (e) {
+    if (S.ui.notifsOpen && e.target.closest && !e.target.closest('#notifs, #notifs-btn')) closeNotifs();
     var el = e.target.closest ? e.target.closest('[data-act]') : null;
     if (!el) return;
     var fn = ACTIONS[el.getAttribute('data-act')];
@@ -5008,6 +8371,18 @@
       saveDataSoon();
     } else if (role === 'composer-text') {
       S.ui.composerText = el.value;
+    } else if (role === 'att-text' || role === 'att-title') {
+      var owner = el.getAttribute('data-owner');
+      var att = attachmentById(owner, el.getAttribute('data-att'));
+      if (!att) return;
+      if (role === 'att-title') {
+        att.name = el.value;
+      } else {
+        att.text = el.value;
+        el.rows = Math.min(10, Math.max(3, el.value.split('\n').length + 1));
+        writeTextSoon(owner, att);
+      }
+      attachChanged(owner, false);
     } else if (role === 'cat-name') {
       S.ui.catName = el.value;
     } else if (role === 'cat-keyword-new') {
@@ -5021,6 +8396,13 @@
       S.ui.newKeywordName = el.value;
     } else if (role === 'new-kw-prompt') {
       S.ui.newKeywordPrompt = el.value;
+    } else if (role === 'rv-chat-q') {
+      /* Pas de rendu à chaque frappe : le texte est retenu par constat, seul « Envoyer » change d'état. */
+      var bound = el.getAttribute('data-bound');
+      if (bound) fcDrafts[bound] = el.value;
+      fitChatInput(el);
+      var send = $('#reader [data-act="rv-chat-send"]');
+      if (send) send.disabled = !el.value.trim();
     } else if (role === 'draft-note') {
       /* Pas de rendu à chaque frappe : seul le bouton « Renvoyer » change d'état. */
       if (S.ui.draft) S.ui.draft.note = el.value;
@@ -5056,6 +8438,8 @@
       S.ui.newConvoPrompt = el.value;
     } else if (role === 'new-recap') {
       S.ui.newConvoRecap = el.value;
+    } else if (role === 'batch-note') {
+      S.ui.newConvoNote = el.value;
     } else if (role === 'new-model') {
       S.ui.newConvoModel = el.value;
     } else if (role === 'set-model') {
@@ -5063,6 +8447,12 @@
       saveSettingsSoon();
     } else if (role === 'draft-model') {
       S.settings.draftModel = el.value;
+      saveSettingsSoon();
+    } else if (role === 'article-topics') {
+      S.settings.articleTopics = el.value;
+      saveSettingsSoon();
+    } else if (role === 'article-model') {
+      S.settings.articleModel = el.value;
       saveSettingsSoon();
     } else if (role === 'settings-cwd') {
       S.settings.defaultCwd = el.value;
@@ -5080,6 +8470,11 @@
 
     if (role === 'pr-check') {
       if (S.ui.prImport) { S.ui.prImport.checked[el.getAttribute('data-id')] = !!el.checked; render(); }
+    } else if (role === 'pr-group-toggle') {
+      if (S.ui.prImport) { S.ui.prImport.group = !!el.checked; render(); }
+    } else if (role === 'batch-sub') {
+      S.ui.newConvoSubs[el.getAttribute('data-id')] = !!el.checked;
+      render();
     } else if (role === 'agent-model' || role === 'agent-effort') {
       setAgentField(el.getAttribute('data-id'), el.getAttribute('data-kw'), el.getAttribute('data-agent'),
         role.slice(6), v);
@@ -5103,6 +8498,14 @@
       if (v === CUSTOM) { var free = document.querySelector('[data-focus-key="draft-model"]'); if (free) free.focus(); }
     } else if (role === 'draft-effort') {
       setSetting('draftEffort', v);
+    } else if (role === 'article-model-select') {
+      S.ui.articleCustom = v === CUSTOM;
+      setSetting('articleModel', v === CUSTOM ? '' : v);
+      if (v === CUSTOM) { var own = document.querySelector('[data-focus-key="article-model"]'); if (own) own.focus(); }
+    } else if (role === 'article-effort') {
+      setSetting('articleEffort', v);
+    } else if (role === 'whisper-language') {
+      setSetting('whisperLanguage', v);
     }
   });
 
@@ -5110,7 +8513,9 @@
     var el = e.target;
     var role = el && el.getAttribute ? el.getAttribute('data-role') : null;
 
-    if (role === 'edit-text' && e.key === 'Escape') { e.preventDefault(); S.ui.editingId = null; render(); return; }
+    if ((role === 'edit-text' || role === 'att-text' || role === 'att-title') && e.key === 'Escape' && el.closest('.task.is-editing')) {
+      e.preventDefault(); S.ui.editingId = null; flushTextWrites(); render(); return;
+    }
     if (role === 'composer-text' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addFromComposer(); return; }
     if (role === 'cat-name' && e.key === 'Enter') { e.preventDefault(); addCat(); return; }
     if (role === 'cat-keyword-new' && (e.key === 'Enter' || e.key === ',')) {
@@ -5123,16 +8528,40 @@
     if ((role === 'agent-name' || role === 'agent-role') && e.key === 'Enter') { e.preventDefault(); el.blur(); render(); return; }
     if (role === 'draft-note' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); replyDraft(); return; }
     if (role === 'chat-note' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); replyChat(); return; }
+    /* Discussion sur un constat : Entrée envoie, Échap referme la discussion (pas la vue revue). */
+    if (role === 'rv-chat-q' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendFindingQuestion(); return; }
+    if (role === 'rv-chat-q' && e.key === 'Escape') { e.preventDefault(); closeFindingChat(); return; }
     if (role === 'new-kw-name' && e.key === 'Enter') { e.preventDefault(); addKeywordFromLaunch(); return; }
     if (role === 'new-kw-prompt' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addKeywordFromLaunch(); return; }
     if (role === 'remark-new' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addRemark(); return; }
-    if ((role === 'new-cwd' || role === 'new-model') && e.key === 'Enter') { e.preventDefault(); launchConvo(); return; }
+    if ((role === 'new-cwd' || role === 'new-model') && e.key === 'Enter') {
+      e.preventDefault();
+      /* Un lot ouvre plusieurs terminaux d'un coup : il ne part que du bouton. */
+      if (!batchTargetOn(taskById(S.ui.termTaskId))) launchConvo();
+      return;
+    }
     if (role === 'new-prompt' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); launchConvo(); return; }
 
     /* Échap referme d'abord l'éditeur de mot-clé, puis le dialogue. */
     if (e.key === 'Escape' && S.ui.catsOpen && S.ui.catKeywordEdit) { S.ui.catKeywordEdit = ''; render(); return; }
     if (e.key === 'Escape' && S.ui.catsOpen) { closeCats(); return; }
     if (e.key === 'Escape' && S.ui.settingsOpen) { S.ui.settingsOpen = false; render(); return; }
+    if (e.key === 'Escape' && S.ui.notifsOpen) { closeNotifs(); return; }
+    /* Revues groupées : Ctrl + Pg↓ / Pg↑ (et Ctrl + Tab, Ctrl + Maj + Tab) passent d'un ticket à
+       l'autre. Pas Alt + ← → : en mode --wwwroot, la WebView en fait un retour arrière. */
+    if (S.ui.reader && S.ui.reader.group && e.ctrlKey && !e.altKey && !e.metaKey
+        && !S.ui.catsOpen && !S.ui.settingsOpen && !S.ui.chat) {
+      var tabStep = e.key === 'PageDown' || (e.key === 'Tab' && !e.shiftKey) ? 1
+        : (e.key === 'PageUp' || (e.key === 'Tab' && e.shiftKey) ? -1 : 0);
+      if (tabStep) { e.preventDefault(); reviewGroupStep(tabStep); return; }
+    }
+    /* La vue revue : Échap remonte d'un cran, ↑ ↓ passent d'un constat à l'autre. */
+    if (S.ui.reader && !e.altKey && !e.ctrlKey && !e.metaKey
+        && !(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable))
+        && reviewKey(e.key)) {
+      e.preventDefault();
+      return;
+    }
     /* Le lecteur d'artefacts couvre la fenêtre : Échap le referme (depuis le cadre, il l'envoie par message). */
     if (e.key === 'Escape' && S.ui.reader) { closeReader(); return; }
 
@@ -5196,6 +8625,77 @@
     listEl.addEventListener('dragend', function () { endDrag(); });
   }
 
+  /* ── Fichiers déposés ou collés ─────────────────────────────────────────
+     Des fichiers glissés depuis l'Explorateur sur une carte (ou sur le dialogue Nouvelle tâche) sont
+     joints à la tâche ; coller une capture ou des fichiers copiés pendant l'édition fait de même.
+     Ailleurs, le dépôt est refusé — sans quoi WebView2 tenterait d'ouvrir le fichier. */
+  var fileOverEl = null;
+
+  function hasFiles(e) {
+    var types = e.dataTransfer && e.dataTransfer.types;
+    if (!types) return false;
+    for (var i = 0; i < types.length; i++) if (types[i] === 'Files') return true;
+    return false;
+  }
+
+  /* À qui joindre, et l'élément à surligner pendant le survol. */
+  function fileDropTarget(el) {
+    if (!el || !el.closest) return null;
+    var dialog = el.closest('.composer-dialog');
+    if (dialog) return S.ui.composerId && !S.ui.prImport ? { owner: S.ui.composerId, el: dialog } : null;
+    if (el.closest('.dialog-backdrop, #reader')) return null;
+    var card = el.closest('.task[data-card]');
+    return card ? { owner: card.getAttribute('data-card'), el: card } : null;
+  }
+
+  function markFileOver(el) {
+    if (fileOverEl === el) return;
+    if (fileOverEl) fileOverEl.classList.remove('file-over');
+    fileOverEl = el;
+    if (el) el.classList.add('file-over');
+  }
+
+  document.addEventListener('dragover', function (e) {
+    if (S.ui.dragId || !hasFiles(e)) return;
+    e.preventDefault();
+    var target = fileDropTarget(e.target);
+    e.dataTransfer.dropEffect = target ? 'copy' : 'none';
+    markFileOver(target ? target.el : null);
+  });
+
+  document.addEventListener('dragleave', function (e) {
+    /* Sortie de la fenêtre : plus rien sous le curseur. */
+    if (!e.relatedTarget) markFileOver(null);
+  });
+
+  document.addEventListener('drop', function (e) {
+    if (S.ui.dragId || !hasFiles(e)) return;
+    e.preventDefault();
+    var target = fileDropTarget(e.target);
+    markFileOver(null);
+    if (target) attachFiles(target.owner, e.dataTransfer.files);
+  });
+
+  document.addEventListener('paste', function (e) {
+    var el = e.target;
+    var owner = null;
+    if (el && el.closest) {
+      if (S.ui.composerId && !S.ui.prImport && el.closest('.composer-dialog')) owner = S.ui.composerId;
+      else {
+        var card = el.closest('.task.is-editing[data-card]');
+        if (card) owner = card.getAttribute('data-card');
+      }
+    }
+    var dt = e.clipboardData;
+    if (!owner || !dt || !dt.files || !dt.files.length) return;
+    var files = Array.prototype.slice.call(dt.files);
+    /* Du texte copié depuis Word ou Excel arrive aussi en image : le texte l'emporte et se colle. */
+    var text = dt.getData ? dt.getData('text/plain') : '';
+    if (text && text.trim() && files.every(function (f) { return /^image\//.test(f.type); })) return;
+    e.preventDefault();
+    attachFiles(owner, files);
+  });
+
   /* ══ Démarrage ════════════════════════════════════════════════════════ */
 
   function normalize(st) {
@@ -5204,6 +8704,7 @@
     S.data.types = Array.isArray(d.types) ? d.types : [];
     S.data.convos = Array.isArray(d.convos) ? d.convos : [];
     S.data.remarks = Array.isArray(d.remarks) ? d.remarks : [];
+    S.data.notifications = normalizeNotifications(d.notifications);
     S.data.lastType = d.lastType || null;
 
     S.data.types.forEach(function (type) {
@@ -5220,6 +8721,19 @@
       /* Sous-tâche : identifiant du parent ; un parent inconnu est oublié par regroupTasks. */
       if (t.parent != null && typeof t.parent !== 'string') t.parent = String(t.parent);
       if (!t.parent) delete t.parent;
+      /* Sous-tâches repliées sous ce parent (voir subsFolded). */
+      if (t.collapsed !== true) delete t.collapsed;
+      /* Revue générale (import groupé des PRs) et dernier lot lancé sur les sous-tâches (voir launchBatch). */
+      if (t.reviewGroup !== true) delete t.reviewGroup;
+      if (t.batch != null) {
+        if (typeof t.batch !== 'object' || !t.batch.id) delete t.batch;
+        else t.batch = { id: String(t.batch.id), at: toMs(t.batch.at), n: Number(t.batch.n) || 0, endedAt: toMs(t.batch.endedAt) };
+      }
+      /* Pièces jointes : copies sous <données>\attachments\<tâche>\ (voir attachmentsPrompt). */
+      if (t.attachments != null) {
+        t.attachments = normalizeAttachments(t.attachments);
+        if (!t.attachments.length) delete t.attachments;
+      }
     });
     regroupTasks();
     S.data.convos.forEach(function (c) {
@@ -5235,6 +8749,22 @@
       c.messageCount = typeof c.messageCount === 'number' ? c.messageCount : 0;
       c.created = toMs(c.created);
       c.updated = toMs(c.updated) || c.created;
+      /* Carnet de remarques : ce que la session a reçu. Les conversations d'avant ce relevé le
+         retrouvent dans les remarques envoyées, par leur `sessionId`. */
+      if (c.taskId === FEEDBACK_ID) {
+        var given = Array.isArray(c.remarks) ? c.remarks : S.data.remarks.filter(function (r) {
+          return r && toMs(r.sentAt) && r.sessionId === c.id;
+        });
+        c.remarks = given.filter(function (r) { return r && String(r.text || '').trim(); }).map(function (r) {
+          return { id: String(r.id || ''), text: String(r.text), sentAt: toMs(r.sentAt) };
+        });
+        if (!c.remarks.length) delete c.remarks;
+      } else {
+        delete c.remarks;
+      }
+      /* Lot dont la conversation fait partie : seule source de vérité de l'appartenance. */
+      if (c.batch != null) c.batch = String(c.batch);
+      if (!c.batch) delete c.batch;
     });
     S.data.remarks.forEach(function (r) {
       if (!r.id) r.id = uid('r');
@@ -5253,6 +8783,7 @@
     S.settings.repoDir = String(S.settings.repoDir || '');
     S.settings.bitbucketUrl = String(S.settings.bitbucketUrl || '');
     S.settings.terminal = S.settings.terminal === 'wt' ? 'wt' : 'powershell';
+    S.settings.termClick = S.settings.termClick === 'terminal' ? 'terminal' : 'panel';
     S.settings.provider = S.settings.provider === 'copilot' ? 'copilot' : 'claude';
     S.settings.claudeModel = String(S.settings.claudeModel || '').trim();
     S.settings.copilotModel = String(S.settings.copilotModel || '').trim();
@@ -5261,6 +8792,17 @@
     S.settings.draftProvider = S.settings.draftProvider === 'copilot' ? 'copilot' : 'claude';
     S.settings.draftModel = String(S.settings.draftModel || '').trim();
     S.settings.draftEffort = String(S.settings.draftEffort || '').trim();
+    S.settings.articleEnabled = S.settings.articleEnabled !== false;
+    S.settings.articleTopics = String(S.settings.articleTopics || '');
+    S.settings.articleAiEnabled = S.settings.articleAiEnabled !== false;
+    S.settings.articleModel = String(S.settings.articleModel == null ? DEFAULTS.articleModel : S.settings.articleModel).trim();
+    S.settings.articleEffort = String(S.settings.articleEffort == null ? DEFAULTS.articleEffort : S.settings.articleEffort).trim();
+    S.settings.windowsNotifications = S.settings.windowsNotifications !== false;
+    S.settings.whisperEnabled = S.settings.whisperEnabled !== false;
+    S.settings.whisperAuto = S.settings.whisperAuto !== false;
+    S.settings.whisperModel = String(S.settings.whisperModel || DEFAULTS.whisperModel);
+    S.settings.whisperLanguage = WHISPER_LANGS.some(function (l) { return l.id === S.settings.whisperLanguage; })
+      ? S.settings.whisperLanguage : DEFAULTS.whisperLanguage;
 
     Object.assign(S.env, (st && st.env) || {});
 
@@ -5280,9 +8822,11 @@
     $('#settings-btn').addEventListener('click', function () {
       S.ui.settingsOpen = true;
       render();
+      if (settingsTab() === 'voice') refreshWhisper();
     });
     /* La largeur du panneau change le repliement des lignes : les zones de remarques se remesurent. */
-    window.addEventListener('resize', function () { fitRemarks($('#panel')); });
+    window.addEventListener('resize', function () { fitRemarks($('#panel')); placeNotifs(); });
+    window.addEventListener('scroll', placeNotifs, { passive: true });
 
     bridge.on('sessionsChanged', function () {
       refreshSessions();
@@ -5290,24 +8834,49 @@
       if (S.ui.termConvId) loadTranscript(true);
       if (S.ui.reader) loadReader(true);
     });
+    /* Clic sur une notification Windows : l'hôte a ramené la fenêtre, la page ouvre la tâche. */
+    bridge.on('notificationClicked', function (p) {
+      var m = /(?:^|&)n=([^&]+)/.exec(String((p && p.args) || ''));
+      if (m) openNotification(decodeURIComponent(m[1]));
+    });
     bridge.on('focus', function () {
       refreshSessions();
       restartSessionsPoll();
       refreshUsage(false);
+      ensureArticles();
       if (S.ui.termConvId) loadTranscript(true);
       if (S.ui.reader) loadReader(true);
     });
 
+    /* Discussion sur un constat : la réponse de l'agent arrive au fil de l'eau. */
+    bridge.on('findingChat', onFindingChat);
+
+    /* Dictée et transcription : le micro des zones de saisie, l'avancement de Whisper. */
+    bindDictate();
+    bridge.on('whisper', onWhisperEvent);
+
     /* Messages du cadre isolé du lecteur : prêt à recevoir le HTML, lien cliqué, Échap. */
     window.addEventListener('message', function (e) {
+      if (chatFrame && e.source && e.source === chatFrame.contentWindow) { onChatFrameMessage(e.data || {}); return; }
       if (!readerFrame || !e.source || e.source !== readerFrame.contentWindow) return;
       var m = e.data || {};
       if (m.type === 'ready') {
         readerReady = true;
         pushReaderHtml(false);
-        try { readerFrame.focus(); } catch (err) { /* cadre déjà remplacé */ }
+        /* La vue revue garde la main dans la page : ↑ ↓ y passent d'un constat à l'autre. */
+        if (!reviewShown(S.ui.reader)) {
+          try { readerFrame.focus(); } catch (err) { /* cadre déjà remplacé */ }
+        }
       } else if (m.type === 'close') {
-        closeReader();
+        if (!reviewKey('Escape')) closeReader();
+      } else if (m.type === 'key') {
+        var key = String(m.key || '');
+        if (key === 'TabNext' || key === 'TabPrev') reviewGroupStep(key === 'TabNext' ? 1 : -1);
+        else reviewKey(key);
+      } else if (m.type === 'scroll') {
+        /* Rapport complet d'un onglet des revues groupées : son défilement est repris au retour. */
+        var cur = S.ui.reader;
+        if (cur && cur.group && !reviewShown(cur)) cur.docY = +m.y || 0;
       } else if (m.type === 'link') {
         followReaderLink(m.href);
       }
@@ -5315,6 +8884,8 @@
 
     /* Les quotas bougent lentement : relecture toutes les 5 min au plus, fenêtre visible. */
     setInterval(function () { if (document.visibilityState !== 'hidden') refreshUsage(false); }, 60000);
+    /* Fenêtre restée ouverte d'un jour sur l'autre : les articles du lendemain viennent tout seuls. */
+    setInterval(ensureArticles, ARTICLE_CHECK_MS);
 
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'hidden') { window.organizatorFlush(); return; }
@@ -5333,6 +8904,7 @@
       refreshSessions();
       restartSessionsPoll();
       refreshUsage(true);
+      peekArticles();
       if (S.env.hasClaude === false) toast(NO_CLAUDE);
       /* Catalogues absents ou vieux d'un jour : détection silencieuse en arrière-plan. */
       if (S.env.hasCopilot && catalogStale('copilot')) refreshModels('copilot', false);
@@ -5350,6 +8922,15 @@
   /* Exposé pour le débogage et les tests manuels. */
   window.__organizator = {
     state: S, render: render, toast: toast, refreshSessions: refreshSessions, refreshUsage: refreshUsage,
-    openReader: openReader, closeReader: closeReader
+    openReader: openReader, closeReader: closeReader, openReview: openReview
   };
+  Object.assign(window.__organizator, { checkBatches: checkBatches, launchBatch: launchBatch });
+  Object.assign(window.__organizator, { openReviewGroup: openReviewGroup, reviewGroupStep: reviewGroupStep });
+  Object.assign(window.__organizator, { openNotification: openNotification, recordNotification: recordNotification });
+  Object.assign(window.__organizator, { findingChats: fcStore, openFindingChat: openFindingChat, sendFindingQuestion: sendFindingQuestion });
+  Object.assign(window.__organizator, {
+    startDictation: startDictation, stopDictation: stopDictation, cancelDictation: cancelDictation,
+    insertDictation: insertDictation, dictation: function () { return dict; }, transcribeAttachment: transcribeAttachment,
+    buildPrompt: buildPrompt
+  });
 })();

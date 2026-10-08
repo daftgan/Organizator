@@ -43,6 +43,11 @@ public sealed class BridgeHost
     private readonly AgentDraft _draft;
     private readonly ArtifactReader _reader;
     private readonly BitbucketPullRequests _bitbucket;
+    private readonly TaskAttachments _attachments;
+    private readonly Dictionary<string, DailyArticle> _articles;
+    private readonly WindowsToasts _toasts;
+    private readonly FindingChat _findings;
+    private readonly WhisperTranscriber _whisper;
     private readonly PerfMonitor? _perf;
 
     // Dossier actuellement servi sous https://report.organizator/ (voir ArtifactReader.Locate).
@@ -58,9 +63,9 @@ public sealed class BridgeHost
     // au travail. On retient donc l'instant de la relance pour ne plus compter ceux d'avant.
     private readonly Dictionary<string, long> _relaunchedAt = new(StringComparer.OrdinalIgnoreCase);
 
-    // Terminal ouvert par une reprise : le balayage des processus ne voit l'agent qu'apres
-    // quelques secondes, et un second clic dans l'intervalle ouvrait un second terminal sur la
-    // meme session. Le PowerShell lance est retenu le temps que le balayage prenne le relais.
+    // Terminal ouvert par un lancement ou une reprise : le balayage des processus ne voit l'agent
+    // qu'apres quelques secondes, et un second clic dans l'intervalle ouvrait un second terminal
+    // sur la meme session. Le PowerShell lance est retenu le temps que le balayage prenne le relais.
     private readonly Dictionary<string, (int ProcessId, long At)> _launchedTerminal = new(StringComparer.OrdinalIgnoreCase);
     private const long LaunchedTerminalMs = 120_000;
 
@@ -92,8 +97,26 @@ public sealed class BridgeHost
         _draft = new AgentDraft(launcher, copilot, log, store.DataDir);
         _reader = new ArtifactReader(log);
         _bitbucket = new BitbucketPullRequests(log, HostVersion);
+        _attachments = new TaskAttachments(store.DataDir, log);
+        _articles = ArticleFeed.All.ToDictionary(f => f.Id, f => new DailyArticle(f, launcher, log, store.DataDir), StringComparer.Ordinal);
+        _toasts = new WindowsToasts(log, store.DataDir);
+        // Clic sur une notification Windows : la fenetre revient devant, la page ouvre la tache.
+        _toasts.Activated += arguments => _owner.Dispatcher.BeginInvoke(() =>
+        {
+            BringOwnerToFront();
+            PostEvent("notificationClicked", new JsonObject { ["args"] = arguments });
+        });
+        // Discussion sur un constat : la reponse s'ecrit au fil de l'eau, la page la suit.
+        _findings = new FindingChat(launcher, claude, log, store.DataDir);
+        _findings.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("findingChat", payload));
+        // Dictee et transcription des enregistrements : telechargement du modele et calcul s'affichent au fil de l'eau.
+        _whisper = new WhisperTranscriber(store.DataDir, log, HostVersion);
+        _whisper.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("whisper", payload));
         _core.WebMessageReceived += OnWebMessageReceived;
     }
+
+    /// <summary>Dossier des pieces jointes, servi a l'UI sous <see cref="TaskAttachments.Host"/>.</summary>
+    public string AttachmentsRoot => _attachments.Root;
 
     /// <summary>Envoie un evenement non sollicite : <c>{ event, payload }</c>.</summary>
     public void PostEvent(string name, JsonObject? payload = null)
@@ -150,6 +173,11 @@ public sealed class BridgeHost
             type = envelope["type"]?.GetValue<string>();
             var payload = envelope["payload"] as JsonObject ?? new JsonObject();
 
+            // Fichiers deposes ou colles, passes par postMessageWithAdditionalObjects : la page n'en
+            // connait que le nom, WebView2 en donne le chemin. Lus avant tout await, l'argument de
+            // l'evenement ne survit pas au gestionnaire.
+            payload["files"] = AdditionalFiles(e);
+
             if (string.IsNullOrWhiteSpace(type))
             {
                 Reply(id, false, null, "Message sans type.");
@@ -189,6 +217,35 @@ public sealed class BridgeHost
         Post(message);
     }
 
+    /// <summary>
+    /// Chemins des fichiers joints au message, dans l'ordre ; <c>null</c> pour un objet sans chemin
+    /// (image du presse-papiers, fichier virtuel) : la page le renvoie alors par son contenu.
+    /// </summary>
+    private JsonArray AdditionalFiles(CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        var files = new JsonArray();
+        try
+        {
+            var objects = e.AdditionalObjects;
+            if (objects is null)
+            {
+                return files;
+            }
+
+            foreach (var item in objects)
+            {
+                var path = item is CoreWebView2File file ? file.Path : null;
+                files.Add(string.IsNullOrWhiteSpace(path) ? null : JsonValue.Create(path));
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Fichiers joints au message illisibles : " + ex.Message);
+        }
+
+        return files;
+    }
+
     private static string Readable(Exception ex) => ex switch
     {
         InvalidOperationException => ex.Message,
@@ -213,12 +270,30 @@ public sealed class BridgeHost
         "getRecaps" => await GetRecapsAsync(payload).ConfigureAwait(true),
         "refreshModels" => await RefreshModelsAsync(payload).ConfigureAwait(true),
         "draftText" => await DraftTextAsync(payload).ConfigureAwait(true),
-        "notify" => Notify(),
+        "notify" => Notify(payload),
+        "badge" => SetBadge(payload),
         "getUsage" => await GetUsageAsync(payload).ConfigureAwait(true),
         "getPullRequests" => await GetPullRequestsAsync().ConfigureAwait(true),
+        "getArticle" => await GetArticleAsync(payload).ConfigureAwait(true),
+        "articleSeen" => ArticleOf(payload).MarkSeen(Str(payload, "url")),
         "openPath" => OpenPath(payload),
         "openUrl" => OpenUrl(payload),
         "readArtifact" => await ReadArtifactAsync(payload).ConfigureAwait(true),
+        "getFindingChats" => _findings.List(Str(payload, "report") ?? ""),
+        "askFinding" => await AskFindingAsync(payload).ConfigureAwait(true),
+        "stopFinding" => new JsonObject { ["stopped"] = _findings.Stop(Str(payload, "report") ?? "", Str(payload, "finding") ?? "") },
+        "forgetFinding" => new JsonObject { ["removed"] = _findings.Forget(Str(payload, "report") ?? "", Str(payload, "finding") ?? "") },
+        "addAttachments" => await AddAttachmentsAsync(payload).ConfigureAwait(true),
+        "pasteAttachment" => await PasteAttachmentAsync(payload).ConfigureAwait(true),
+        "writeAttachmentText" => _attachments.WriteText(Str(payload, "taskId"), Str(payload, "id"), Str(payload, "text")),
+        "removeAttachment" => new JsonObject { ["removed"] = _attachments.Remove(Str(payload, "path")) },
+        "removeAttachments" => new JsonObject { ["removed"] = _attachments.RemoveTask(Str(payload, "taskId")) },
+        "whisperStatus" => _whisper.Status(),
+        "whisperDownload" => await DownloadWhisperAsync(payload).ConfigureAwait(true),
+        "whisperRemove" => new JsonObject { ["removed"] = await _whisper.RemoveAsync(Str(payload, "model") ?? "").ConfigureAwait(true) },
+        "whisperWarm" => WarmWhisper(payload),
+        "transcribe" => await TranscribeAsync(payload).ConfigureAwait(true),
+        "cancelTranscribe" => new JsonObject { ["cancelled"] = _whisper.Cancel(Str(payload, "job")) },
         "log" => LogFromWeb(payload),
         "perf" => RecordPerf(payload),
         _ => throw new InvalidOperationException($"Type de message inconnu : {type}"),
@@ -252,6 +327,9 @@ public sealed class BridgeHost
                 ["bitbucketSource"] = bitbucket?.Source ?? "",
                 ["bitbucketToken"] = bitbucket?.Token is not null,
                 ["jiraUrl"] = bitbucket?.JiraUrl ?? "",
+                ["attachmentsDir"] = _attachments.Root,
+                ["attachmentsUrl"] = "https://" + TaskAttachments.Host + "/",
+                ["whisper"] = _whisper.Status(),
                 ["models"] = new JsonObject
                 {
                     ["claude"] = _claudeCatalog.Current().ToJson(),
@@ -366,6 +444,155 @@ public sealed class BridgeHost
         return new JsonObject { ["path"] = picked is null ? null : JsonValue.Create(picked) };
     }
 
+    /// <summary>
+    /// Pieces jointes d'une tache : fichiers choisis dans le selecteur (<c>pick</c>), ou deposes et
+    /// colles dans la page (chemins donnes par WebView2, voir <see cref="AdditionalFiles"/>). La copie
+    /// se fait hors du fil de l'interface. <c>unresolved</c> donne le rang des objets deposes sans
+    /// chemin : la page les renvoie par leur contenu (<c>pasteAttachment</c>).
+    /// </summary>
+    private async Task<JsonNode> AddAttachmentsAsync(JsonObject payload)
+    {
+        var taskId = Str(payload, "taskId");
+        var sources = new List<string>();
+        var unresolved = new JsonArray();
+
+        if (payload["files"] is JsonArray files)
+        {
+            for (var i = 0; i < files.Count; i++)
+            {
+                if (files[i] is JsonValue value && value.TryGetValue<string>(out var path) && !string.IsNullOrWhiteSpace(path))
+                {
+                    sources.Add(path);
+                }
+                else
+                {
+                    unresolved.Add(i);
+                }
+            }
+        }
+
+        if (payload["paths"] is JsonArray paths)
+        {
+            foreach (var node in paths)
+            {
+                if (node is JsonValue value && value.TryGetValue<string>(out var path) && !string.IsNullOrWhiteSpace(path))
+                {
+                    sources.Add(path);
+                }
+            }
+        }
+
+        if (payload["pick"] is JsonValue pick && pick.TryGetValue<bool>(out var wanted) && wanted)
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Joindre des fichiers à la tâche",
+                Multiselect = true,
+                CheckFileExists = true,
+            };
+
+            if (dialog.ShowDialog(_owner) != true)
+            {
+                return new JsonObject
+                {
+                    ["attachments"] = new JsonArray(),
+                    ["skipped"] = new JsonArray(),
+                    ["unresolved"] = unresolved,
+                    ["cancelled"] = true,
+                };
+            }
+
+            sources.AddRange(dialog.FileNames);
+        }
+
+        var result = await Task.Run(() => _attachments.AddFiles(taskId, sources)).ConfigureAwait(true);
+        result["unresolved"] = unresolved;
+        return result;
+    }
+
+    /// <summary>Image collee (ou fichier depose sans chemin) : contenu en base64, ecrit hors du fil de l'interface.</summary>
+    private async Task<JsonNode> PasteAttachmentAsync(JsonObject payload)
+    {
+        var taskId = Str(payload, "taskId");
+        var name = Str(payload, "name");
+        var data = Str(payload, "data");
+        return await Task.Run(() => _attachments.AddData(taskId, name, data)).ConfigureAwait(true);
+    }
+
+    // ------------------------------------------------------- dictee et transcription
+
+    // La dictee arrive en WAV 16 kHz mono 16 bits, soit 32 Ko par seconde : dix minutes tiennent sous 20 Mo.
+    private const int MaxDictationBytes = 48 * 1024 * 1024;
+
+    /// <summary>Telecharge un modele Whisper depuis les Reglages ; l'avancement part par l'evenement <c>whisper</c>.</summary>
+    private async Task<JsonNode> DownloadWhisperAsync(JsonObject payload)
+    {
+        var model = WhisperTranscriber.Find(Str(payload, "model")).Id;
+        await _whisper.EnsureModelAsync(model, CancellationToken.None).ConfigureAwait(true);
+        return _whisper.Status();
+    }
+
+    /// <summary>La dictee commence : le modele se telecharge ou se charge pendant que l'utilisateur parle.</summary>
+    private JsonNode WarmWhisper(JsonObject payload)
+    {
+        _whisper.Warm(WhisperTranscriber.SanitizeModel(Str(payload, "model")));
+        return new JsonObject();
+    }
+
+    /// <summary>
+    /// Transcrit une dictee (<c>data</c> : WAV en base64, enregistre par la page) ou un enregistrement
+    /// joint a une tache (<c>path</c>, sous le dossier des pieces jointes seulement). <c>job</c>
+    /// identifie l'appel pour l'avancement et pour <c>cancelTranscribe</c>.
+    /// </summary>
+    private async Task<JsonNode> TranscribeAsync(JsonObject payload)
+    {
+        var job = Str(payload, "job") ?? "";
+        var model = WhisperTranscriber.SanitizeModel(Str(payload, "model"));
+        var language = WhisperTranscriber.SanitizeLanguage(Str(payload, "language"));
+        var path = Str(payload, "path");
+
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            var full = Path.GetFullPath(path);
+            var root = _attachments.Root.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+            if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Seuls les enregistrements joints à une tâche se transcrivent.");
+            }
+
+            if (!File.Exists(full))
+            {
+                throw new InvalidOperationException("Enregistrement introuvable : " + Path.GetFileName(full));
+            }
+
+            return await _whisper.TranscribeAsync(job, ct => AudioDecoder.FromFile(full, ct), model, language,
+                paragraphs: true, what: "enregistrement " + Path.GetFileName(full)).ConfigureAwait(true);
+        }
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(Str(payload, "data") ?? "");
+        }
+        catch (FormatException)
+        {
+            throw new InvalidOperationException("Enregistrement illisible (base64 attendu).");
+        }
+
+        if (bytes.Length == 0)
+        {
+            throw new InvalidOperationException("Enregistrement vide.");
+        }
+
+        if (bytes.Length > MaxDictationBytes)
+        {
+            throw new InvalidOperationException("Dictée trop longue : joignez plutôt l'enregistrement à la tâche.");
+        }
+
+        return await _whisper.TranscribeAsync(job, ct => AudioDecoder.FromWav(bytes, ct), model, language,
+            paragraphs: false, what: "dictee").ConfigureAwait(true);
+    }
+
     private JsonNode StartSession(JsonObject payload)
     {
         var provider = AgentProvider.Normalize(Str(payload, "provider"));
@@ -378,6 +605,10 @@ public sealed class BridgeHost
         var terminal = _store.LoadSettings().Terminal;
 
         var started = _launcher.StartSession(provider, cwd ?? "", title, context, prompt, model, effort, terminal);
+        if (started.TerminalProcessId is int terminalProcessId)
+        {
+            RememberTerminal(started.SessionId, terminalProcessId);
+        }
 
         return new JsonObject
         {
@@ -400,37 +631,45 @@ public sealed class BridgeHost
         var title = Str(payload, "title") ?? "";
         var context = Str(payload, "context") ?? "";
         var prompt = Str(payload, "prompt") ?? "";
+        // Second terminal demande expressement (bouton du toast) : la fenetre de la session vivante
+        // est restee introuvable, et c'est l'utilisateur qui accepte deux agents sur la session.
+        var force = payload["force"] is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
         var terminal = _store.LoadSettings().Terminal;
 
-        // Une session encore ouverte n'a pas besoin d'un second terminal : sa fenetre suffit.
-        // Sauf s'il y a un message a lui remettre, que seule une reprise sait transmettre.
-        // Tant que le balayage n'a pas vu l'agent, le PowerShell qu'on vient d'ouvrir en tient lieu.
-        // Une fois vu, il est oublie : un PowerShell reste ouvert (-NoExit) apres un agent quitte.
-        var scanned = _scanner?.PidFor(sessionId);
-        if (scanned is not null)
+        // Une session encore ouverte n'a pas besoin d'un second terminal : sa fenetre suffit. Un
+        // second --resume y mettrait un second agent sur le meme fichier, puis un second onglet du
+        // meme nom. Sauf s'il y a un message a lui remettre, que seule une reprise sait transmettre.
+        if (string.IsNullOrWhiteSpace(prompt) && !force)
         {
-            lock (_cacheLock)
+            var (agents, justLaunched) = LiveAgents(sessionId);
+            if (agents.Count > 0)
             {
-                _launchedTerminal.Remove(sessionId);
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(prompt) && (scanned ?? LaunchedTerminal(sessionId)) is int agentProcessId)
-        {
-            var focus = await _windows.TryFocusAsync(agentProcessId).ConfigureAwait(true);
-            if (focus.Focused)
-            {
-                _log.Info($"Session {provider} deja ouverte : "
-                    + (focus.Tab == TabOutcome.Activated ? "onglet active" : "fenetre ramenee au premier plan")
-                    + $" ({sessionId})");
-
-                return new JsonObject
+                var focus = await FocusSessionAsync(provider, sessionId, agents, justLaunched).ConfigureAwait(true);
+                if (focus.Focused)
                 {
-                    ["focused"] = true,
-                    ["tabActivated"] = focus.Tab == TabOutcome.Activated,
-                    // Vide quand la fenetre montre deja la session ; sinon l'onglet a activer soi-meme.
-                    ["tab"] = TabToShow(focus, title),
-                };
+                    _log.Info($"Session {provider} deja ouverte : "
+                        + (focus.Tab == TabOutcome.Activated ? "onglet active" : "fenetre ramenee au premier plan")
+                        + (focus.Raised ? "" : " (premier plan refuse par Windows)")
+                        + $" ({sessionId})");
+
+                    return new JsonObject
+                    {
+                        ["focused"] = true,
+                        // Faux : Windows a refuse, le bouton du terminal clignote dans la barre des taches.
+                        ["raised"] = focus.Raised,
+                        ["tabActivated"] = focus.Tab == TabOutcome.Activated,
+                        // Vide quand la fenetre montre deja la session ; sinon l'onglet a activer soi-meme.
+                        ["tab"] = TabToShow(focus, title),
+                    };
+                }
+
+                // Le balayage a quelques secondes de retard : des agents morts entre-temps, c'est une
+                // session qu'on vient de fermer, a rouvrir. Vivants, on ne les double pas.
+                if (agents.Any(AgentWindows.IsRunning))
+                {
+                    _log.Warn($"Session {provider} deja ouverte, mais sa fenetre est introuvable : pas de second terminal ({sessionId})");
+                    return new JsonObject { ["focused"] = false, ["alive"] = true };
+                }
             }
         }
 
@@ -447,15 +686,76 @@ public sealed class BridgeHost
         var launched = _launcher.ResumeSession(provider, sessionId, cwd, title, context, prompt, model, effort, terminal);
         if (launched is int terminalProcessId)
         {
-            lock (_cacheLock)
-            {
-                _launchedTerminal[sessionId] = (terminalProcessId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-            }
-
+            RememberTerminal(sessionId, terminalProcessId);
             _ = BringLaunchedForwardAsync(provider, sessionId, terminalProcessId);
         }
 
         return new JsonObject { ["focused"] = false };
+    }
+
+    /// <summary>
+    /// Processus qui portent la session, le plus recent d'abord : ceux du balayage, a defaut le
+    /// PowerShell qu'on vient d'ouvrir pour elle (<c>launched</c>), dont la fenetre n'existe peut-etre
+    /// pas encore. Une fois l'agent vu, ce PowerShell est oublie : il reste ouvert (-NoExit) apres
+    /// que l'agent a quitte, il ne faut pas le prendre pour la session.
+    /// </summary>
+    private (IReadOnlyList<int> Agents, bool Launched) LiveAgents(string sessionId)
+    {
+        var scanned = _scanner?.PidsFor(sessionId) ?? Array.Empty<int>();
+        if (scanned.Count > 0)
+        {
+            lock (_cacheLock)
+            {
+                _launchedTerminal.Remove(sessionId);
+            }
+
+            return (scanned, false);
+        }
+
+        return LaunchedTerminal(sessionId) is int terminal ? (new[] { terminal }, true) : (Array.Empty<int>(), false);
+    }
+
+    /// <summary>
+    /// Ramene la premiere fenetre trouvee parmi ces processus — il y en a plusieurs quand la session
+    /// a ete reprise alors qu'elle tournait. Chaque essai laisse une ligne <c>[FOCUS]</c> au journal :
+    /// quelle fenetre, premier plan accepte ou non, onglet.
+    /// </summary>
+    private async Task<FocusResult> FocusSessionAsync(string provider, string sessionId, IReadOnlyList<int> agents, bool launched)
+    {
+        var focus = FocusResult.Missed;
+        foreach (var agent in agents)
+        {
+            var started = Stopwatch.GetTimestamp();
+
+            // Un terminal ouvert a l'instant n'a sa fenetre qu'apres 350 a 700 ms : un second clic
+            // aussitot doit l'attendre, pas en ouvrir un autre.
+            focus = launched
+                ? await _windows.FocusWhenShownAsync(agent, TimeSpan.FromSeconds(3)).ConfigureAwait(true)
+                : await _windows.TryFocusAsync(agent).ConfigureAwait(true);
+
+            _log.Info($"[FOCUS] {provider} {sessionId} {(launched ? "terminal lance" : "agent")} #{agent}"
+                + $" ({agents.Count} processus) : {FocusTrace(focus)}"
+                + $" ({Stopwatch.GetElapsedTime(started).TotalMilliseconds:0} ms)");
+
+            if (focus.Focused)
+            {
+                break;
+            }
+        }
+
+        return focus;
+    }
+
+    private static string FocusTrace(FocusResult focus) => focus.Focused
+        ? $"{focus.Window}, premier plan {(focus.Raised ? "accepte" : "refuse")}, onglet {focus.Tab}"
+        : "fenetre introuvable";
+
+    private void RememberTerminal(string sessionId, int terminalProcessId)
+    {
+        lock (_cacheLock)
+        {
+            _launchedTerminal[sessionId] = (terminalProcessId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        }
     }
 
     /// <summary>Etat du balayage ; un agent vu vivant n'a plus besoin du terminal retenu a sa reprise.</summary>
@@ -500,16 +800,20 @@ public sealed class BridgeHost
     /// </summary>
     private async Task BringLaunchedForwardAsync(string provider, string sessionId, int processId)
     {
+        var started = Stopwatch.GetTimestamp();
         try
         {
             var focus = await _windows.FocusWhenShownAsync(processId, TimeSpan.FromSeconds(8)).ConfigureAwait(true);
+            var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             if (focus.Focused)
             {
-                _log.Info($"Session {provider} reprise : fenetre ramenee au premier plan ({sessionId})");
+                _log.Info($"Session {provider} reprise : fenetre "
+                    + (focus.Raised ? "ramenee au premier plan" : "trouvee, premier plan refuse par Windows")
+                    + $" apres {elapsed:0} ms, {focus.Window}, onglet {focus.Tab} ({sessionId})");
             }
             else
             {
-                _log.Warn($"Session {provider} reprise : fenetre du terminal introuvable ({sessionId})");
+                _log.Warn($"Session {provider} reprise : fenetre du terminal introuvable apres {elapsed:0} ms ({sessionId})");
             }
         }
         catch (Exception ex)
@@ -575,6 +879,42 @@ public sealed class BridgeHost
         };
     }
 
+    /// <summary>
+    /// Article du jour ou veille IA (<c>kind</c>, voir <see cref="ArticleFeed"/>) : <c>peek</c> rend ce
+    /// qui est garde sans rien lancer, <c>today</c> cherche un article s'il n'y en a pas encore pour
+    /// aujourd'hui, <c>another</c> en cherche un autre. Modele et effort : ceux des Reglages, communs
+    /// aux deux fils, sauf s'ils sont donnes.
+    /// </summary>
+    private async Task<JsonNode> GetArticleAsync(JsonObject payload)
+    {
+        var article = ArticleOf(payload);
+        var mode = Str(payload, "mode") ?? "peek";
+        if (mode == "peek")
+        {
+            return article.Peek();
+        }
+
+        var settings = _store.LoadSettings();
+        var model = AgentProvider.RequireModel(Str(payload, "model") ?? settings.ArticleModel);
+        var effort = AgentProvider.RequireEffort(AgentProvider.Claude, Str(payload, "effort") ?? settings.ArticleEffort);
+        var interests = Str(payload, "interests") ?? "";
+        return await article.GetAsync(mode == "another", interests, model, effort).ConfigureAwait(true);
+    }
+
+    /// <summary>Le fil designe par <c>kind</c> ; sans <c>kind</c>, l'article du jour.</summary>
+    private DailyArticle ArticleOf(JsonObject payload)
+    {
+        var kind = Str(payload, "kind");
+        if (string.IsNullOrEmpty(kind))
+        {
+            kind = ArticleFeed.Daily.Id;
+        }
+
+        return _articles.TryGetValue(kind, out var article)
+            ? article
+            : throw new InvalidOperationException("Fil d'articles inconnu : " + kind);
+    }
+
     private static string Limit(string? value, int max)
     {
         var text = (value ?? "").Trim();
@@ -600,11 +940,69 @@ public sealed class BridgeHost
     /// L'interface signale une reponse arrivee : clignotement du bouton dans la barre des taches
     /// si la fenetre n'est pas au premier plan (le toast, lui, est affiche cote web).
     /// </summary>
-    private JsonNode Notify()
+    /// <summary>
+    /// Une reponse est prete, une question attend : le bouton de la barre des taches clignote et, si
+    /// la fenetre n'est pas au premier plan, chaque element de <c>toasts</c> devient une notification
+    /// Windows (voir <see cref="WindowsToasts"/>). Devant la fenetre, le toast de la page suffit.
+    /// </summary>
+    private JsonNode Notify(JsonObject payload)
     {
         var flashed = TaskbarFlash.Flash(_owner);
-        return new JsonObject { ["flashed"] = flashed };
+        var shown = 0;
+        if (!_owner.IsActive && payload["toasts"] is JsonArray toasts)
+        {
+            foreach (var item in toasts.OfType<JsonObject>().Take(3))
+            {
+                if (_toasts.Show(Str(item, "title") ?? "Organizator", Str(item, "body") ?? "", Str(item, "attribution") ?? "",
+                    Str(item, "args") ?? "", Str(item, "tag") ?? Guid.NewGuid().ToString("N")))
+                {
+                    shown++;
+                }
+            }
+        }
+
+        return new JsonObject { ["flashed"] = flashed, ["shown"] = shown };
     }
+
+    /// <summary>Notifications non lues : une pastille chiffree sur le bouton de la barre des taches.</summary>
+    private JsonNode SetBadge(JsonObject payload)
+    {
+        var count = payload["count"] is JsonValue value && value.TryGetValue<int>(out var n) ? Math.Max(0, n) : 0;
+        TaskbarBadge.Set(_owner, count);
+        return new JsonObject();
+    }
+
+    /// <summary>La fenetre revient devant, restauree si elle etait reduite (agrandie si elle l'etait).</summary>
+    private void BringOwnerToFront()
+    {
+        try
+        {
+            var handle = new System.Windows.Interop.WindowInteropHelper(_owner).Handle;
+            if (_owner.WindowState == WindowState.Minimized && handle != IntPtr.Zero)
+            {
+                ShowWindow(handle, 9); // SW_RESTORE : retrouve l'etat d'avant la reduction
+            }
+
+            _owner.Show();
+            _owner.Activate();
+            _owner.Topmost = true;
+            _owner.Topmost = false;
+            if (handle != IntPtr.Zero)
+            {
+                SetForegroundWindow(handle);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Fenetre non ramenee au premier plan : " + ex.Message);
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr window, int command);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr window);
 
     private SessionSummary Summarize(string provider, string sessionId, string cwd)
     {
@@ -1052,6 +1450,72 @@ public sealed class BridgeHost
             ["size"] = view.Size,
             ["modified"] = view.Modified,
             ["html"] = view.Html,
+            ["review"] = ReviewJson(view.Review),
+        };
+    }
+
+    /// <summary>
+    /// Question sur un constat de revue (voir <see cref="FindingChat"/>) : la premiere part dans une
+    /// copie de la session du relecteur (<c>source</c>), les suivantes la reprennent. Modele et effort :
+    /// ceux de la session copiee, choisis par l'UI. Rend la discussion a jour ; l'avancement arrive
+    /// entre-temps par l'evenement <c>findingChat</c>.
+    /// </summary>
+    private async Task<JsonNode> AskFindingAsync(JsonObject payload)
+    {
+        var finding = payload["finding"] as JsonObject ?? new JsonObject();
+        var order = finding["order"] is JsonValue o && o.TryGetValue<int>(out var index) ? index : -1;
+        var ask = new FindingQuestion(
+            Report: Str(payload, "report") ?? "",
+            Finding: Str(finding, "key") ?? "",
+            FindingId: Limit(Str(finding, "id"), 40),
+            Order: order,
+            Title: Limit(Str(finding, "title"), 300),
+            Severity: Limit(Str(finding, "severity"), 16),
+            Where: Limit(Str(finding, "where"), 1200),
+            Category: Limit(Str(finding, "category"), 60),
+            SourceSessionId: Guid.TryParse(Str(payload, "source"), out var source) ? source.ToString("D") : "",
+            Cwd: Str(payload, "cwd") ?? "",
+            Model: AgentProvider.RequireModel(Str(payload, "model")),
+            Effort: AgentProvider.RequireEffort(AgentProvider.Claude, Str(payload, "effort")),
+            Context: Str(payload, "context") ?? "",
+            Question: Str(payload, "question") ?? "");
+        return await _findings.AskAsync(ask).ConfigureAwait(true);
+    }
+
+    /// <summary>Constats d'un rapport de revue, pour l'inventaire plein ecran de l'UI ; <c>null</c> sinon.</summary>
+    private static JsonNode? ReviewJson(ReviewSummary? review)
+    {
+        if (review is null)
+        {
+            return null;
+        }
+
+        var findings = new JsonArray();
+        foreach (var finding in review.Findings)
+        {
+            var tags = new JsonArray();
+            foreach (var tag in finding.Tags)
+            {
+                tags.Add(tag);
+            }
+
+            findings.Add(new JsonObject
+            {
+                ["id"] = finding.Id,
+                ["severity"] = finding.Severity,
+                ["title"] = finding.Title,
+                ["category"] = finding.Category,
+                ["where"] = finding.Where,
+                ["tags"] = tags,
+                ["html"] = finding.Html,
+            });
+        }
+
+        return new JsonObject
+        {
+            ["verdict"] = review.Verdict,
+            ["level"] = review.Level,
+            ["findings"] = findings,
         };
     }
 

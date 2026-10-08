@@ -12,7 +12,8 @@ namespace Organizator.Services;
 /// <summary>
 /// Ce que l'UI affiche d'un artefact : son genre, le HTML rendu (Markdown, texte, tableau) ou
 /// l'URL a charger (page, PDF, image) sous l'hote virtuel <see cref="ArtifactReader.Host"/>,
-/// et l'empreinte du fichier pour ne renvoyer que ce qui a change.
+/// et l'empreinte du fichier pour ne renvoyer que ce qui a change. Un Markdown reconnu comme
+/// rapport de revue porte en plus ses constats (<see cref="ReviewReport"/>).
 /// </summary>
 public sealed record ArtifactView(
     string Kind,
@@ -23,7 +24,8 @@ public sealed record ArtifactView(
     string Stamp,
     long Size,
     long Modified,
-    string? Html);
+    string? Html,
+    ReviewSummary? Review = null);
 
 /// <summary>
 /// Lit un fichier produit par un agent pour le montrer dans la fenetre, sans passer par un editeur.
@@ -129,6 +131,7 @@ public sealed class ArtifactReader
         var modified = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds();
         var kind = KindOf(full);
         string? html = null;
+        ReviewSummary? review = null;
         var title = name;
 
         try
@@ -147,7 +150,7 @@ public sealed class ArtifactReader
                     var text = ReadText(full);
                     if (kind == KindMarkdown)
                     {
-                        html = RenderMarkdown(text, DirectoryUrl(url), out var heading);
+                        html = RenderMarkdown(text, DirectoryUrl(url), name, out var heading, out review);
                         if (!string.IsNullOrWhiteSpace(heading))
                         {
                             title = heading!;
@@ -183,7 +186,7 @@ public sealed class ArtifactReader
             throw new InvalidOperationException("Acces refuse : " + ex.Message);
         }
 
-        return new ArtifactView(kind, full, root, url, title, stamp, info.Length, modified, html);
+        return new ArtifactView(kind, full, root, url, title, stamp, info.Length, modified, html, review);
     }
 
     // ------------------------------------------------------------------ emplacement
@@ -316,17 +319,60 @@ public sealed class ArtifactReader
     /// <summary>
     /// Rend le Markdown en HTML. Les liens relatifs sont recrits en URL absolues sous l'hote virtuel,
     /// pour que les images s'affichent et que les autres rapports s'ouvrent ; les schemas qui
-    /// executeraient quelque chose (javascript:, vbscript:, file:) sont neutralises.
+    /// executeraient quelque chose (javascript:, vbscript:, file:) sont neutralises. Un rapport de
+    /// revue rend aussi ses constats un par un, avec le meme rendu (<paramref name="review"/>).
     /// </summary>
-    internal static string RenderMarkdown(string text, string baseUrl, out string? heading)
+    internal static string RenderMarkdown(string text, string baseUrl, string fileName, out string? heading, out ReviewSummary? review)
     {
         var document = Markdown.Parse(text, Pipeline);
         heading = FirstHeading(document);
 
+        var html = RenderBlocks(new[] { document }, baseUrl);
+        review = ReviewReport.Parse(document, fileName, blocks => RenderBlocks(blocks, baseUrl));
+        return html;
+    }
+
+    /// <summary>
+    /// Rend un court Markdown qui n'est pas un fichier (reponse d'un agent dans une discussion) avec
+    /// le pipeline et la reecriture des liens du lecteur : l'UI le pose dans le meme cadre isole.
+    /// </summary>
+    internal static string RenderFragment(string text)
+        => RenderBlocks(new MarkdownObject[] { Markdown.Parse(text ?? "", Pipeline) }, BaseUrl);
+
+    /// <summary>
+    /// Markdown du constat de rang <paramref name="order"/> d'un rapport de revue, tel qu'il est ecrit ;
+    /// vide si le fichier ne se lit plus ou si ce rang ne porte plus ce titre (rapport recrit depuis).
+    /// </summary>
+    internal static string FindingSource(string full, int order, string title)
+    {
+        try
+        {
+            var text = ReadText(full);
+            var review = ReviewReport.Parse(Markdown.Parse(text, Pipeline), Path.GetFileName(full), _ => "", text);
+            var finding = review is not null && order >= 0 && order < review.Findings.Count ? review.Findings[order] : null;
+            if (finding is null || (title.Length > 0 && !string.Equals(finding.Title.Trim(), title.Trim(), StringComparison.Ordinal)))
+            {
+                finding = review?.Findings.FirstOrDefault(f => string.Equals(f.Title.Trim(), title.Trim(), StringComparison.Ordinal));
+            }
+
+            return finding?.Source ?? "";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return "";
+        }
+    }
+
+    private static string RenderBlocks(IReadOnlyList<MarkdownObject> blocks, string baseUrl)
+    {
         var writer = new StringWriter();
         var renderer = new HtmlRenderer(writer) { LinkRewriter = link => RewriteLink(link, baseUrl) };
         Pipeline.Setup(renderer);
-        renderer.Render(document);
+        foreach (var block in blocks)
+        {
+            renderer.Render(block);
+        }
+
         writer.Flush();
         return writer.ToString();
     }
