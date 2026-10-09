@@ -5,7 +5,7 @@
    longtemps, souvent le soir.
    ═══════════════════════════════════════════════════════════════════════ */
 
-.vc-backdrop {
+.vc-backdrop, .vc-avatar-host {
   --vc-bg: var(--color-bg);
   --vc-glow-1: color-mix(in srgb, var(--color-accent-300) 45%, transparent);
   --vc-glow-2: color-mix(in srgb, var(--color-accent-2-300) 50%, transparent);
@@ -36,7 +36,8 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .vc-backdrop {
+  :root:not([data-theme="light"]) .vc-backdrop,
+  :root:not([data-theme="light"]) .vc-avatar-host {
     --vc-bg: #1d1a17;
     --vc-glow-1: color-mix(in srgb, var(--color-accent-700) 34%, transparent);
     --vc-glow-2: color-mix(in srgb, var(--color-accent-2-800) 45%, transparent);
@@ -66,7 +67,8 @@
     --vc-bubble-bot: #1d1a17;
   }
 }
-:root[data-theme="dark"] .vc-backdrop {
+:root[data-theme="dark"] .vc-backdrop,
+:root[data-theme="dark"] .vc-avatar-host {
   --vc-bg: #1d1a17;
   --vc-glow-1: color-mix(in srgb, var(--color-accent-700) 34%, transparent);
   --vc-glow-2: color-mix(in srgb, var(--color-accent-2-800) 45%, transparent);
@@ -143,6 +145,10 @@ html.vc-open { scrollbar-gutter: auto; }
 }
 .vc-avatar { width: min(330px, 44vh, 74vw); aspect-ratio: 1; flex: none; }
 .vc-face { display: block; width: 100%; height: 100%; overflow: visible; }
+/* L'avatar du moteur (voice-engine.js) : monté dans n'importe quel conteneur, il porte ses teintes
+   (variables ci-dessus) et sa phase (data-phase, is-muted) ; sans taille imposée, il prend la largeur. */
+.vc-avatar-host { display: block; aspect-ratio: 1; max-width: 100%; }
+.vc-avatar .vc-avatar-host { width: 100%; height: 100%; }
 
 .vc-status {
   display: inline-flex; align-items: center; gap: 8px; min-height: 24px;
@@ -217,7 +223,7 @@ html.vc-open { scrollbar-gutter: auto; }
 [data-phase="tool"] .vc-ring { stroke: var(--color-accent-400); stroke-dasharray: 4 12; }
 [data-phase="speaking"] .vc-ring { stroke: var(--vc-speak); }
 [data-phase="error"] .vc-ring { stroke: #b23a2e; opacity: 0.6; }
-.is-muted .vc-ring { stroke: var(--vc-think); opacity: 0.45; }
+.is-muted .vc-ring, [data-phase="idle"] .vc-ring { stroke: var(--vc-think); opacity: 0.45; }
 
 .vc-shadow { fill: var(--vc-ink); opacity: 0.08; }
 .vc-skin { fill: var(--vc-skin); }

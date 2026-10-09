@@ -367,7 +367,7 @@
     });
   }
 
-  /* Conversation vocale simulée (mode Conversation, voice.js). `voiceSay` rend le tour aussitôt puis
+  /* Conversation vocale simulée (moteur voice-engine.js : mode Conversation, Tuteur). `voiceSay` rend le tour aussitôt puis
      pousse l'évènement `voice` : thinking, une étape `tool` si window.__fakeVoiceTool, les phrases de
      window.__fakeVoiceReply (tableau, ou 'error' pour un échec), puis done ; window.__fakeVoiceDelay
      espace les phrases (350 ms). `voiceSpeak` rend un WAV synthétique (voyelles modulées, durée selon
@@ -385,11 +385,12 @@
     if (!conv) throw new Error('Conversation terminée : rouvrez le mode Conversation.');
     var turn = ++shimVoice.turn;
     conv.turn = turn;
-    var reply = window.__fakeVoiceReply || [
+    var tutor = conv.options && conv.options.mode === 'tutor';
+    var reply = tutor ? shimTutorReply(conv, p) : (window.__fakeVoiceReply || [
       'Avec plaisir, parlons des volcans !',
       'Un volcan, c’est une ouverture dans la croûte terrestre par laquelle le magma remonte à la surface.',
       'Vous voulez qu’on parle d’un volcan en particulier, l’Etna ou le Piton de la Fournaise par exemple ?'
-    ];
+    ]);
     var gap = window.__fakeVoiceDelay || 350;
     var steps = [{ phase: 'thinking' }];
     if (window.__fakeVoiceTool) steps.push({ phase: 'tool', text: 'Recherche web…' });
@@ -398,6 +399,8 @@
     } else {
       var full = '';
       reply.forEach(function (t) { full += (full ? ' ' : '') + t; steps.push({ phase: 'sentence', text: t, full: full }); });
+      var meta = tutor ? shimTutorMeta(p, full) : null;
+      if (meta) steps.push({ phase: 'meta', meta: meta });
       steps.push({ phase: 'done', full: full });
     }
     steps.forEach(function (st, i) {
@@ -407,6 +410,35 @@
       }, 120 + i * gap);
     });
     return { turn: turn };
+  }
+
+  /* Mode tutor (Tuteur de Révizator) : réplique anglaise, puis la phase `meta` (traduction, reformulation,
+     aide, fin) entre la dernière phrase et `done`, comme l'hôte. window.__fakeTutorReply (tableau) remplace
+     la réplique ; window.__fakeTutorMeta remplace la meta ('none' : pas de meta). La reformulation
+     factice reprend « since two weeks » → « for two weeks » quand l'apprenant l'a dit. */
+  function shimTutorReply(conv, p) {
+    if (window.__fakeTutorReply) return window.__fakeTutorReply;
+    var t = conv.options.tutor || {}, sc = t.scenario || {};
+    if (/^\s*\(/.test(String(p.text || ''))) {
+      return ['Hi there, welcome!', 'I’m ' + (sc.tutorRole || 'your tutor') + ', so what can I do for you today?'];
+    }
+    if (/since two weeks/i.test(p.text)) return ['Oh, for two weeks, that’s quite a while.', 'How are you finding it so far?'];
+    return ['That sounds really interesting.', 'Could you tell me a little more about it?'];
+  }
+
+  function shimTutorMeta(p, full) {
+    var fm = window.__fakeTutorMeta;
+    if (fm === 'none') return null;
+    if (fm) return fm;
+    var text = String(p.text || '');
+    if (/^\s*\(/.test(text)) return { replyFr: 'Bonjour, bienvenue ! Que puis-je faire pour vous aujourd’hui ? (simulation)', recast: { said: '', better: '' }, tipFr: '', end: false };
+    var m = /since two weeks/i.exec(text);
+    return {
+      replyFr: 'Traduction (simulation) : ' + full,
+      recast: m ? { said: m[0], better: 'for two weeks' } : { said: '', better: '' },
+      tipFr: m ? 'Pour une durée, « for » + durée ; « since » + point de départ.' : '',
+      end: /\b(bye|goodbye)\b/i.test(text)
+    };
   }
 
   /* Un WAV mono 16 bits : une « voix » en dents de scie filtrée, modulée en syllabes de 4 à 6 Hz. */
