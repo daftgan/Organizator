@@ -56,6 +56,7 @@ public sealed class BridgeHost
     private readonly NewsMenu _learnNews;
     private readonly LearningAgent _learnAgent;
     private readonly TextToSpeech _tts;
+    private readonly StreamingAsr _asr;
     private readonly PerfMonitor? _perf;
 
     // Dossier actuellement servi sous https://report.organizator/ (voir ArtifactReader.Locate).
@@ -130,8 +131,13 @@ public sealed class BridgeHost
         _learnAgent = new LearningAgent(launcher, _learning, _learnNews, log, store.DataDir);
         _learnAgent.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("learn", payload));
         // Synthese vocale anglaise (Revizator) : telechargement des voix et phrases pretes arrivent au fil de l'eau.
-        _tts = new TextToSpeech(store.DataDir, log, HostVersion);
+        // Runtime sherpa-onnx partage par la synthese (Kokoro) et la transcription en direct.
+        var sherpa = new SherpaRuntime(store.DataDir, log, HostVersion);
+        _tts = new TextToSpeech(store.DataDir, log, HostVersion, sherpa);
         _tts.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("tts", payload));
+        // Transcription en direct : texte partiel et telechargements des modeles arrivent au fil de l'eau.
+        _asr = new StreamingAsr(store.DataDir, log, HostVersion, sherpa);
+        _asr.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("asr", payload));
         _core.WebMessageReceived += OnWebMessageReceived;
     }
 
@@ -145,6 +151,7 @@ public sealed class BridgeHost
         {
             _voice.Dispose();
             _speech.Dispose();
+            _asr.Dispose();
         }
         catch (Exception ex)
         {
@@ -357,6 +364,16 @@ public sealed class BridgeHost
         "speakScript" => await SpeakScriptTtsAsync(payload).ConfigureAwait(true),
         "cancelSpeak" => new JsonObject { ["cancelled"] = _tts.Cancel(Str(payload, "job")) },
         "ttsClearCache" => await Task.Run(_tts.ClearCache).ConfigureAwait(true),
+        // Transcription en direct (sherpa-onnx en flux) : modeles, sessions, paquets de PCM.
+        "asrStatus" => await Task.Run(_asr.Status).ConfigureAwait(true),
+        "asrDownload" => await _asr.DownloadAsync(Str(payload, "lang")).ConfigureAwait(true),
+        "asrRemove" => new JsonObject { ["removed"] = await _asr.RemoveAsync(Str(payload, "lang")).ConfigureAwait(true) },
+        "asrWarm" => WarmAsr(payload),
+        "asrStart" => new JsonObject { ["session"] = await _asr.StartAsync(Str(payload, "lang")).ConfigureAwait(true) },
+        "asrFeed" => FeedAsr(payload),
+        "asrEnd" => new JsonObject { ["text"] = await _asr.EndAsync(Str(payload, "session")).ConfigureAwait(true) },
+        "asrReset" => await ResetAsrAsync(payload).ConfigureAwait(true),
+        "asrStop" => StopAsr(payload),
         "log" => LogFromWeb(payload),
         "perf" => RecordPerf(payload),
         _ => throw new InvalidOperationException($"Type de message inconnu : {type}"),
@@ -735,6 +752,35 @@ public sealed class BridgeHost
         var gapMs = int.TryParse(Str(payload, "gapMs"), System.Globalization.NumberStyles.Integer,
             System.Globalization.CultureInfo.InvariantCulture, out var gap) ? gap : 450;
         return await _tts.SpeakScriptAsync(Str(payload, "job") ?? "", lines, TtsSpeed(payload), gapMs).ConfigureAwait(true);
+    }
+
+    // --------------------------------------------------------- transcription en direct
+
+    /// <summary>Le modele de la langue se charge en arriere-plan (libere apres 10 min sans usage).</summary>
+    private JsonNode WarmAsr(JsonObject payload)
+    {
+        _asr.Warm(Str(payload, "lang"));
+        return new JsonObject();
+    }
+
+    /// <summary>Un paquet de ~100 ms (base64 d'Int16 LE mono 16 kHz) : decode sur le fil dedie, partiel par l'evenement <c>asr</c>.</summary>
+    private JsonNode FeedAsr(JsonObject payload)
+    {
+        _asr.Feed(Str(payload, "session"), Str(payload, "pcm"));
+        return new JsonObject();
+    }
+
+    /// <summary>Enonce abandonne (bruit) : l'audio recu est oublie, la session reste ouverte.</summary>
+    private async Task<JsonNode> ResetAsrAsync(JsonObject payload)
+    {
+        await _asr.ResetAsync(Str(payload, "session")).ConfigureAwait(true);
+        return new JsonObject();
+    }
+
+    private JsonNode StopAsr(JsonObject payload)
+    {
+        _asr.Stop(Str(payload, "session"));
+        return new JsonObject();
     }
 
     private static float TtsSpeed(JsonObject payload)
