@@ -3814,24 +3814,45 @@ internal static class GradeGenre
 /// </summary>
 internal static class TutorGenre
 {
-    private const string System = """
-        Tu es le tuteur d'anglais d'Organizator : un interlocuteur chaleureux, patient et curieux, qui parle avec un adulte francophone pour l'aider à parler anglais, tour par tour — ses répliques sont transcrites par reconnaissance vocale, les tiennes lues par une voix de synthèse. Ta personnalité reste la même d'une séance à l'autre : bienveillant, une pointe d'humour, sincèrement intéressé par ce que dit l'apprenant, jamais professoral. Quand un scénario te donne un rôle (réceptionniste, collègue, recruteur…), tu joues ce rôle avec naturel et tu aides l'apprenant à atteindre son objectif. Tu rends uniquement la fiche demandée.
+    // Briques des consignes, partagees avec le tuteur oral en flux (VoicePrompt, conversation vocale).
 
-        Ta réplique (reply)
-        - En anglais, une à trois phrases courtes, comme à l'oral (contractions, mots simples). Adapte ton anglais au niveau indiqué : phrases courtes et vocabulaire courant en A2-B1, plus riche et idiomatique en B2-C1.
-        - Réagis d'abord à ce que l'apprenant a dit (le sens avant la forme), puis termine le plus souvent par UNE question ouverte qui relance l'échange.
-        - Elle est lue par la synthèse vocale : ni émoticône, ni didascalie, ni liste, ni mise en forme, ni nom de locuteur.
-        - replyFr : la traduction française fidèle de reply.
+    /// <summary>Qui est le tuteur : le meme a l'ecrit tour par tour et en conversation vocale.</summary>
+    internal const string Persona =
+        "Tu es le tuteur d'anglais d'Organizator : un interlocuteur chaleureux, patient et curieux, qui parle avec un adulte francophone pour l'aider à parler anglais, tour par tour — ses répliques sont transcrites par reconnaissance vocale, les tiennes lues par une voix de synthèse. Ta personnalité reste la même d'une séance à l'autre : bienveillant, une pointe d'humour, sincèrement intéressé par ce que dit l'apprenant, jamais professoral. Quand un scénario te donne un rôle (réceptionniste, collègue, recruteur…), tu joues ce rôle avec naturel et tu aides l'apprenant à atteindre son objectif.";
 
+    private const string Sheet = " Tu rends uniquement la fiche demandée.";
+
+    /// <summary>Langue et longueur de la replique.</summary>
+    internal const string ReplyLevel =
+        "- En anglais, une à trois phrases courtes, comme à l'oral (contractions, mots simples). Adapte ton anglais au niveau indiqué : phrases courtes et vocabulaire courant en A2-B1, plus riche et idiomatique en B2-C1.";
+
+    /// <summary>Le sens avant la forme, puis une question ouverte.</summary>
+    internal const string ReplyReact =
+        "- Réagis d'abord à ce que l'apprenant a dit (le sens avant la forme), puis termine le plus souvent par UNE question ouverte qui relance l'échange.";
+
+    /// <summary>Lue par la synthese vocale : rien qui ne se dise.</summary>
+    internal const string ReplySpoken =
+        "- Elle est lue par la synthèse vocale : ni émoticône, ni didascalie, ni liste, ni mise en forme, ni nom de locuteur.";
+
+    internal const string ReplyFr =
+        "- replyFr : la traduction française fidèle de reply.";
+
+    /// <summary>recast, tipFr, end.</summary>
+    internal const string Corrections = """
         Pendant l'échange, pas de correction appuyée
         - recast : si la dernière phrase de l'apprenant contient une faute qui gêne ou une erreur typique de francophone, said = l'extrait exact de sa phrase, better = la même idée bien dite ; tu peux reprendre discrètement la bonne forme dans ta réplique (« Oh, you've lived there for ten years? ») sans dire qu'il s'est trompé. Sinon said et better restent vides. La transcription peut contenir des erreurs de reconnaissance : ne corrige pas ce qui peut en venir.
         - tipFr : le plus souvent vide ; une aide très courte (un mot qui lui manquait, une tournure utile), dans la langue d'aide indiquée, seulement s'il a cherché ses mots, répondu en français ou demandé de l'aide.
         - end : vrai si l'objectif du scénario est atteint, si l'échange a fait le tour du sujet, ou après une quinzaine d'échanges ; propose alors gentiment de conclure dans reply.
-
-        Si la conversation n'a pas commencé, ouvre-la : une salutation et une première question simple, dans ton rôle.
-
-        Quand la fin est demandée : reply = une conclusion chaleureuse d'une ou deux phrases, sans question ; end = vrai ; summary = errors (deux à quatre erreurs réelles de l'apprenant pendant l'échange : said = l'extrait exact, better, explanationFr de 25 mots au plus, category de la taxonomie), phrases (trois tournures utiles employées ou à retenir), feedbackFr (trois phrases encourageantes et concrètes, en français, en vouvoyant), levelEstimate (A2, B1, B1+, B2, B2+ ou C1). Sinon summary reste vide : listes vides, chaînes vides.
         """;
+
+    internal const string Opening =
+        "Si la conversation n'a pas commencé, ouvre-la : une salutation et une première question simple, dans ton rôle.";
+
+    private const string Ending =
+        "Quand la fin est demandée : reply = une conclusion chaleureuse d'une ou deux phrases, sans question ; end = vrai ; summary = errors (deux à quatre erreurs réelles de l'apprenant pendant l'échange : said = l'extrait exact, better, explanationFr de 25 mots au plus, category de la taxonomie), phrases (trois tournures utiles employées ou à retenir), feedbackFr (trois phrases encourageantes et concrètes, en français, en vouvoyant), levelEstimate (A2, B1, B1+, B2, B2+ ou C1). Sinon summary reste vide : listes vides, chaînes vides.";
+
+    private static readonly string System = string.Join("\n\n", Persona + Sheet,
+        string.Join("\n", "Ta réplique (reply)", ReplyLevel, ReplyReact, ReplySpoken, ReplyFr), Corrections, Opening, Ending);
 
     private static readonly string Schema = ExerciseGenre.Compact("""
         {"type":"object","additionalProperties":false,"required":["reply","replyFr","recast","tipFr","end","summary"],"properties":{
@@ -3844,18 +3865,20 @@ internal static class TutorGenre
           "levelEstimate":{"type":"string","description":"A2, B1, B1+, B2, B2+ ou C1 ; vide si la fin n'est pas demandée"}}}}}
         """.Replace("@TAX@", Taxonomy.Enum));
 
-    private static List<(string Role, string Text)> History(JsonObject p)
+    private static List<(string Role, string Text)> History(JsonObject? p, int take = 12)
         => LJ.Objects(p, "history")
             .Select(h => (Role: LJ.Pick(LJ.Str(h, "role", 10), new[] { "user", "tutor" }, "user"), Text: LJ.Str(h, "text", 1200)))
             .Where(h => h.Text.Length > 0)
-            .TakeLast(12)
+            .TakeLast(take)
             .ToList();
 
-    public static AgentCall Compose(LearnRequest r)
+    /// <summary>
+    /// Ce que le tuteur doit savoir de la seance : niveau, langue de l'aide, scenario (role, objectif,
+    /// cadre), cours du jour. Commun au tour ecrit (<see cref="Compose"/>) et a l'oral (<see cref="VoicePrompt"/>).
+    /// </summary>
+    internal static string Briefing(JsonObject? p)
     {
-        var p = r.Params;
         var level = Levels.Normalize(LJ.Str(p, "level", 10));
-        var end = LJ.Bool(p, "end");
         var help = LJ.Pick(LJ.Str(p, "lang", 4), new[] { "en", "fr" }, "fr");
         var scenario = LJ.Obj(p, "scenario");
         var lesson = LJ.Obj(p, "lesson");
@@ -3898,6 +3921,14 @@ internal static class TutorGenre
             sb.Append("Cours du jour (sujet possible si la conversation s'y prête) : « ").Append(lessonTitle).Append(" » — ").Append(LJ.Str(lesson, "summaryFr", 400)).Append('\n');
         }
 
+        return sb.ToString();
+    }
+
+    public static AgentCall Compose(LearnRequest r)
+    {
+        var p = r.Params;
+        var end = LJ.Bool(p, "end");
+        var sb = new StringBuilder(Briefing(p));
         if (r.Context.Length > 0)
         {
             sb.Append('\n').Append(r.Context.Trim()).Append('\n');
@@ -3940,15 +3971,6 @@ internal static class TutorGenre
             throw new InvalidOperationException("Le tuteur n’a rien répondu.");
         }
 
-        var recast = LJ.Obj(o, "recast");
-        var said = LJ.Str(recast, "said", 400);
-        var better = LJ.Str(recast, "better", 400);
-        if (said.Length == 0 || better.Length == 0 || LJ.Key(said) == LJ.Key(better) || !LJ.Key(lastUser).Contains(LJ.Key(said), StringComparison.Ordinal))
-        {
-            said = "";
-            better = "";
-        }
-
         var summary = LJ.Obj(o, "summary");
         var errors = new JsonArray();
         var phrases = new List<string>();
@@ -3983,7 +4005,7 @@ internal static class TutorGenre
         {
             ["reply"] = reply,
             ["replyFr"] = LJ.Str(o, "replyFr", 1200),
-            ["recast"] = new JsonObject { ["said"] = said, ["better"] = better },
+            ["recast"] = Recast(LJ.Obj(o, "recast"), lastUser),
             ["tipFr"] = LJ.Str(o, "tipFr", 400),
             ["end"] = end || LJ.Bool(o, "end"),
             ["summary"] = new JsonObject
@@ -3993,6 +4015,136 @@ internal static class TutorGenre
                 ["feedbackFr"] = feedback,
                 ["levelEstimate"] = estimate,
             },
+        };
+    }
+
+    /// <summary>Reformulation gardee seulement si <c>said</c> est bien un extrait de la derniere phrase de l'apprenant.</summary>
+    internal static JsonObject Recast(JsonObject? recast, string lastUser)
+    {
+        var said = LJ.Str(recast, "said", 400);
+        var better = LJ.Str(recast, "better", 400);
+        if (said.Length == 0 || better.Length == 0 || LJ.Key(said) == LJ.Key(better) || !LJ.Key(lastUser).Contains(LJ.Key(said), StringComparison.Ordinal))
+        {
+            said = "";
+            better = "";
+        }
+
+        return new JsonObject { ["said"] = said, ["better"] = better };
+    }
+
+    // ------------------------------------------------------------------------ tuteur oral en flux
+
+    /// <summary>Marqueur de la ligne finale du tuteur oral, jamais lue a voix haute.</summary>
+    internal const string MetaMarker = "§META";
+
+    /// <summary>Tours d'historique au plus repris en tete de la conversation vocale.</summary>
+    internal const int VoiceHistoryMax = 30;
+
+    /// <summary>Contexte (ce que l'on sait de l'apprenant) au plus, en caracteres.</summary>
+    internal const int VoiceContextMax = 8000;
+
+    private const string VoiceStage = """
+        Cette séance est une conversation orale en direct, mains libres. L'apprenant te parle au micro : ce que tu reçois est la transcription automatique de sa voix (reconnaissance vocale Whisper), qui peut contenir des mots mal reconnus, une ponctuation fantaisiste ou une phrase coupée ; devine le sens le plus probable sans le faire remarquer. Ta réplique est lue à voix haute au fur et à mesure que tu l'écris.
+        - La rapidité compte : l'apprenant attend ta voix. Sois bref, une ou deux phrases courtes le plus souvent (trois au plus), et commence par une phrase très courte pour que la voix démarre tout de suite. Laisse-le parler plus que toi.
+        - Écris directement ta réplique, en texte parlé : pas de préambule, pas de guillemets autour, pas de nom de locuteur, jamais de JSON avant la ligne finale.
+        - On peut te couper la parole : un message qui commence par une note entre parenthèses (« You were interrupted… ») dit ce que l'apprenant a entendu de ta réplique. Ne répète pas ce qu'il a déjà entendu, ne t'excuse pas longuement, réponds à ce qu'il dit maintenant.
+        - Une transcription de quelques mots sans rapport (« Thank you. », « Sous-titres réalisés par… ») vient sans doute d'un bruit : réponds très brièvement, ou demande-lui s'il te parlait.
+        - Les notes entre parenthèses viennent de l'application, pas de l'apprenant : jamais de recast sur elles.
+        """;
+
+    private const string VoiceMeta = """
+        La ligne finale (après ta réplique, toujours)
+        Termine chaque réponse par une dernière ligne, seule sur sa ligne, qui commence par §META suivi d'un espace et d'un objet JSON sur une seule ligne (sans bloc de code) :
+        §META {"replyFr":"…","recast":{"said":"…","better":"…"},"tipFr":"…","end":false}
+        - replyFr, recast, tipFr et end comme indiqué plus haut ; « reply » désigne ta réplique parlée. Chaînes vides quand il n'y a rien.
+        - Cette ligne n'est jamais lue à voix haute : rien après elle, et jamais §META ailleurs. Dans ses textes, employez des guillemets typographiques (“ ” « ») plutôt que des guillemets droits : un guillemet droit mal échappé rend le JSON illisible.
+
+        Exemple (l'apprenant a dit « I have a reservation since two weeks. ») :
+        Oh, you've had a reservation for two weeks? Lovely. Could I have your name, please?
+        §META {"replyFr":"Oh, vous avez une réservation depuis deux semaines ? Parfait. Puis-je avoir votre nom, s'il vous plaît ?","recast":{"said":"I have a reservation since two weeks","better":"I've had a reservation for two weeks"},"tipFr":"","end":false}
+        """;
+
+    /// <summary>
+    /// Prompt systeme du tuteur en conversation vocale (VoiceChat, mode <c>tutor</c>) : les memes
+    /// consignes de fond que le tour ecrit (persona, role du scenario, niveau, recast, aide, fin apres une
+    /// quinzaine d'echanges), adaptees a une sortie en flux : la replique en texte parle, puis une ligne
+    /// <c>§META {json}</c>. Le contexte et l'historique, plus longs, vont dans le premier message
+    /// (<see cref="VoicePreamble"/>) : la ligne de commande reste courte (quelques milliers de caracteres).
+    /// </summary>
+    internal static string VoicePrompt(JsonObject? tutor)
+        => string.Join("\n\n",
+            Persona,
+            VoiceStage,
+            string.Join("\n", "Ta réplique", ReplyLevel, ReplyReact, ReplySpoken),
+            Corrections,
+            Opening,
+            VoiceMeta,
+            "La séance\n" + Briefing(tutor).TrimEnd());
+
+    /// <summary>
+    /// Ce qui precede le premier message de la conversation vocale, une seule fois : ce que l'on sait
+    /// de l'apprenant (<c>context</c>, 8000 caracteres au plus) et la conversation deja tenue
+    /// (30 tours au plus). Vide s'il n'y a ni l'un ni l'autre.
+    /// </summary>
+    internal static string VoicePreamble(JsonObject? tutor)
+    {
+        var sb = new StringBuilder();
+        var context = LJ.Str(tutor, "context", VoiceContextMax);
+        if (context.Length > 0)
+        {
+            sb.Append("(Notes from the app about the learner, not said by the learner:)\n").Append(context).Append("\n\n");
+        }
+
+        var history = History(tutor, VoiceHistoryMax);
+        if (history.Count > 0)
+        {
+            sb.Append("Conversation so far:\n");
+            foreach (var (role, text) in history)
+            {
+                sb.Append(role == "tutor" ? "Tutor: " : "Learner: ").Append(text.Replace('\r', ' ').Replace('\n', ' ')).Append('\n');
+            }
+
+            sb.Append("(The conversation goes on by voice from here.)\n\n");
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// La ligne <c>§META</c> d'une replique orale (le texte qui suit le marqueur), nettoyee comme
+    /// <see cref="Sanitize"/> : <c>{ replyFr, recast: { said, better }, tipFr, end }</c> ; null si illisible.
+    /// </summary>
+    internal static JsonObject? VoiceMetaOf(string? raw, string lastUser)
+    {
+        var text = raw ?? "";
+        var open = text.IndexOf('{');
+        var close = text.LastIndexOf('}');
+        if (open < 0 || close <= open)
+        {
+            return null;
+        }
+
+        JsonObject? o;
+        try
+        {
+            o = JsonNode.Parse(text[open..(close + 1)]) as JsonObject;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        if (o is null)
+        {
+            return null;
+        }
+
+        return new JsonObject
+        {
+            ["replyFr"] = Speech.Clean(LJ.Str(o, "replyFr", 1200), null, 1200),
+            ["recast"] = Recast(LJ.Obj(o, "recast"), lastUser),
+            ["tipFr"] = Speech.Clean(LJ.Str(o, "tipFr", 400), null, 400),
+            ["end"] = LJ.Bool(o, "end"),
         };
     }
 }

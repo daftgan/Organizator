@@ -37,6 +37,10 @@ public sealed class VoiceSentences
     private string _carry = "";
     private bool _first = true;
 
+    // Filet : la ligne « §META {json} » du tuteur oral (normalement retiree en amont par VoiceMetaFilter)
+    // et tout ce qui la suit ne sont jamais dits.
+    private bool _muted;
+
     /// <summary>Ajoute un morceau de texte ; rend les phrases completes, deja nettoyees.</summary>
     public IReadOnlyList<string> Push(string? delta)
     {
@@ -46,7 +50,19 @@ public sealed class VoiceSentences
             return done;
         }
 
+        if (_muted)
+        {
+            return done;
+        }
+
         _buffer.Append(delta);
+        var meta = _buffer.ToString().IndexOf(VoiceMetaFilter.Marker, StringComparison.Ordinal);
+        if (meta >= 0)
+        {
+            _buffer.Remove(meta, _buffer.Length - meta);
+            _muted = true;
+        }
+
         while (TryCut(out var raw))
         {
             Accept(raw, done, final: false);
@@ -76,6 +92,7 @@ public sealed class VoiceSentences
         _buffer.Clear();
         _carry = "";
         _first = true;
+        _muted = false;
     }
 
     private void Accept(string raw, List<string> done, bool final)
@@ -334,5 +351,170 @@ public sealed class VoiceSentences
         }
 
         return sb.ToString();
+    }
+}
+
+/// <summary>
+/// Retire du flux de deltas la ligne finale <c>§META {json}</c> du tuteur oral, avant le decoupeur
+/// de phrases : elle n'est jamais lue a voix haute. Le marqueur peut arriver coupe entre deux deltas
+/// (« …? §ME » puis « TA {… ») : la fin du texte qui pourrait en etre le debut est retenue jusqu'au
+/// delta suivant. Reconnu : <c>§META</c> n'importe ou, et <c>META {</c> ou <c>META: {</c> en debut
+/// de ligne (marqueur sans son signe). Tout ce qui suit le marqueur est garde a part (<see cref="Meta"/>).
+/// </summary>
+public sealed class VoiceMetaFilter
+{
+    public const string Marker = "§META";
+    private const string Bare = "META";
+
+    private readonly StringBuilder _held = new();
+    private readonly StringBuilder _meta = new();
+    private bool _found;
+
+    // Debut de ligne au debut du texte retenu (le texte deja rendu finissait par un saut de ligne, ou rien n'est sorti).
+    private bool _lineStart = true;
+
+    /// <summary>Vrai des que le marqueur est passe.</summary>
+    public bool Found => _found;
+
+    /// <summary>Le texte apres le marqueur (l'objet JSON attendu) ; null sans marqueur.</summary>
+    public string? Meta => _found ? _meta.ToString() : null;
+
+    /// <summary>Ajoute un delta ; rend le texte sur a dire (sans marqueur ni ce qui le suit).</summary>
+    public string Push(string? delta)
+    {
+        if (string.IsNullOrEmpty(delta))
+        {
+            return "";
+        }
+
+        if (_found)
+        {
+            _meta.Append(delta);
+            return "";
+        }
+
+        _held.Append(delta);
+        var text = _held.ToString();
+        var (start, after) = Find(text);
+        if (start >= 0)
+        {
+            _found = true;
+            _meta.Append(text[after..]);
+            _held.Clear();
+            return Release(text[..start]);
+        }
+
+        var keep = Partial(text);
+        _held.Clear();
+        _held.Append(text[keep..]);
+        return Release(text[..keep]);
+    }
+
+    /// <summary>Fin du message : le texte retenu n'etait pas un marqueur, il part.</summary>
+    public string Flush()
+    {
+        if (_found)
+        {
+            return "";
+        }
+
+        var text = _held.ToString();
+        _held.Clear();
+        return Release(text);
+    }
+
+    private string Release(string text)
+    {
+        // Debut de ligne si le texte rendu finit par un saut de ligne suivi seulement de blancs.
+        var tail = text.TrimEnd(' ', '\t');
+        if (tail.Length > 0)
+        {
+            _lineStart = tail[^1] == '\n';
+        }
+
+        return text;
+    }
+
+    /// <summary>Position du marqueur complet et debut de ce qui le suit ; (-1, -1) sinon.</summary>
+    private (int Start, int After) Find(string text)
+    {
+        var at = text.IndexOf(Marker, StringComparison.Ordinal);
+        var bare = BareAt(text, out var bareAfter);
+        if (at >= 0 && (bare < 0 || at <= bare))
+        {
+            return (at, at + Marker.Length);
+        }
+
+        return bare >= 0 ? (bare, bareAfter) : (-1, -1);
+    }
+
+    /// <summary><c>META</c> en debut de ligne, suivi de blancs ou de deux-points puis d'une accolade.</summary>
+    private int BareAt(string text, out int after)
+    {
+        after = -1;
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (!LineStart(text, i) || string.CompareOrdinal(text, i, Bare, 0, Bare.Length) != 0)
+            {
+                continue;
+            }
+
+            var j = i + Bare.Length;
+            while (j < text.Length && text[j] is ' ' or '\t' or ':')
+            {
+                j++;
+            }
+
+            if (j < text.Length && text[j] == '{')
+            {
+                after = j;
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private bool LineStart(string text, int i)
+    {
+        var k = i - 1;
+        while (k >= 0 && text[k] is ' ' or '\t')
+        {
+            k--;
+        }
+
+        return k < 0 ? _lineStart : text[k] == '\n';
+    }
+
+    /// <summary>Debut de la fin du texte qui pourrait encore devenir un marqueur (longueur du texte si aucune).</summary>
+    private int Partial(string text)
+    {
+        for (var i = Math.Max(0, text.Length - Marker.Length); i < text.Length; i++)
+        {
+            if (Marker.StartsWith(text[i..], StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+
+        // « META » en debut de ligne, suivi peut-etre de blancs ou de deux-points : on attend l'accolade.
+        var line = text.LastIndexOf('\n') + 1;
+        var lead = line;
+        while (lead < text.Length && text[lead] is ' ' or '\t')
+        {
+            lead++;
+        }
+
+        if (lead < text.Length && (line > 0 || _lineStart))
+        {
+            var rest = text[lead..];
+            if (Bare.StartsWith(rest, StringComparison.Ordinal)
+                || (rest.StartsWith(Bare, StringComparison.Ordinal) && rest[Bare.Length..].All(c => c is ' ' or '\t' or ':')))
+            {
+                return line;
+            }
+        }
+
+        return text.Length;
     }
 }

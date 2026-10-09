@@ -7,8 +7,17 @@ using System.Text.Json.Nodes;
 
 namespace Organizator.Services;
 
-/// <summary>Reglages d'une conversation vocale, deja verifies.</summary>
-public sealed record VoiceOptions(string Model, string Effort, string Persona, string Topic, string Instructions, bool Web);
+/// <summary>
+/// Reglages d'une conversation vocale, deja verifies. <paramref name="Mode"/> : <c>free</c> (conversation
+/// libre, <see cref="VoiceChat.SystemPrompt"/>) ou <c>tutor</c> (tuteur d'anglais de Revizator,
+/// <paramref name="Tutor"/> = <c>{ scenario, level, lang, explain, lesson, context, history }</c>).
+/// <paramref name="Name"/> : nom lisible de la session de Claude Code (vide : « Conversation vocale · persona »).
+/// </summary>
+public sealed record VoiceOptions(string Model, string Effort, string Persona, string Topic, string Instructions, bool Web,
+    string Mode = VoiceChat.FreeMode, JsonObject? Tutor = null, string Name = "")
+{
+    public bool IsTutor => Mode == VoiceChat.TutorMode;
+}
 
 /// <summary>
 /// Conversation a voix haute avec Claude. Un processus <c>claude -p</c> persistant par conversation,
@@ -40,7 +49,11 @@ public sealed class VoiceChat : IDisposable
     /// <summary>Un tour sans fin au-dela est abandonne (recherche web bloquee, API muette).</summary>
     private static readonly TimeSpan TurnLimit = TimeSpan.FromMinutes(3);
 
+    public const string FreeMode = "free";
+    public const string TutorMode = "tutor";
+
     private const int MaxText = 4000;
+    private const int MaxName = 120;
     private const int MaxHeard = 1500;
     private const int MaxStderr = 4000;
     private const string WebTools = "WebSearch,WebFetch";
@@ -81,8 +94,11 @@ public sealed class VoiceChat : IDisposable
 
     /// <summary>
     /// Avancement d'une reponse : <c>{ conversationId, turn, phase, text, full, error }</c>, <c>phase</c>
-    /// valant <c>thinking</c>, <c>sentence</c>, <c>tool</c>, <c>done</c> ou <c>error</c>. Leve hors du fil de
-    /// l'interface, dans l'ordre.
+    /// valant <c>thinking</c>, <c>sentence</c>, <c>tool</c>, <c>meta</c>, <c>done</c> ou <c>error</c>. Leve hors
+    /// du fil de l'interface, dans l'ordre. En mode tutor, <c>meta</c> porte en plus
+    /// <c>meta: { replyFr, recast: { said, better }, tipFr, end }</c> (la ligne <c>§META</c> de la reponse,
+    /// jamais lue ni incluse dans <c>full</c>) : apres la derniere <c>sentence</c>, avant <c>done</c>, et
+    /// seulement pour un tour non interrompu dont la ligne est lisible.
     /// </summary>
     public event Action<JsonObject>? Progress;
 
@@ -90,6 +106,16 @@ public sealed class VoiceChat : IDisposable
     {
         var value = (topic ?? "").Trim().ToLowerInvariant();
         return Topics.ContainsKey(value) ? value : "libre";
+    }
+
+    public static string SanitizeMode(string? mode)
+        => (mode ?? "").Trim().ToLowerInvariant() == TutorMode ? TutorMode : FreeMode;
+
+    /// <summary>Nom de session lisible : une ligne, 120 caracteres au plus ; vide si rien.</summary>
+    public static string SanitizeName(string? name)
+    {
+        var value = string.Join(' ', (name ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return value.Length <= MaxName ? value : value[..MaxName].TrimEnd();
     }
 
     public static string SanitizePersona(string? persona)
@@ -117,7 +143,9 @@ public sealed class VoiceChat : IDisposable
         }
 
         Directory.CreateDirectory(_dir);
-        var conversation = new Conversation(Guid.NewGuid().ToString("N"), options, SystemPrompt(options, DateTime.Now));
+        var conversation = options.IsTutor
+            ? new Conversation(Guid.NewGuid().ToString("N"), options, TutorGenre.VoicePrompt(options.Tutor)) { Preamble = TutorGenre.VoicePreamble(options.Tutor) }
+            : new Conversation(Guid.NewGuid().ToString("N"), options, SystemPrompt(options, DateTime.Now));
 
         List<Conversation> previous;
         lock (_gate)
@@ -173,9 +201,11 @@ public sealed class VoiceChat : IDisposable
                 conversation.Heard = Clip(heard, MaxHeard);
             }
 
-            var turn = new Turn(++conversation.LastTurn, Compose(conversation, message));
+            var learner = string.IsNullOrWhiteSpace(conversation.CarryLearner) ? message : conversation.CarryLearner.Trim() + " " + message;
+            var turn = new Turn(++conversation.LastTurn, Compose(conversation, message), learner);
             conversation.Heard = null;
             conversation.Carry = null;
+            conversation.CarryLearner = null;
             Emit(conversation, turn, "thinking");
 
             conversation.Pending = turn;
@@ -277,6 +307,7 @@ public sealed class VoiceChat : IDisposable
             // Jamais parti : Claude ne l'a pas vu, son texte rejoindra le prochain message.
             pending.Cancelled = true;
             conversation.Carry = pending.Message;
+            conversation.CarryLearner = pending.Learner;
             conversation.Pending = null;
         }
 
@@ -392,13 +423,29 @@ public sealed class VoiceChat : IDisposable
         }, null, TurnLimit, Timeout.InfiniteTimeSpan);
     }
 
-    /// <summary>Le premier message apres une interruption dit a Claude ce que l'utilisateur a entendu.</summary>
+    /// <summary>
+    /// Le premier message apres une interruption dit a Claude ce que l'utilisateur a entendu (en anglais
+    /// en mode tutor). En mode tutor, le tout premier message est precede, une fois, du contexte et de la
+    /// conversation deja tenue (<see cref="TutorGenre.VoicePreamble"/>).
+    /// </summary>
     private static string Compose(Conversation conversation, string message)
     {
         var sb = new StringBuilder();
+        if (!string.IsNullOrEmpty(conversation.Preamble))
+        {
+            sb.Append(conversation.Preamble);
+            conversation.Preamble = null;
+        }
+
         if (conversation.Heard is { } heard)
         {
-            if (heard.Length > 0)
+            if (conversation.Options.IsTutor)
+            {
+                sb.Append(heard.Length > 0
+                    ? "(You were interrupted. The learner heard this much of your reply: “" + heard + "”. They did not hear the rest. Do not repeat what they already heard; answer what they say now.)\n\n"
+                    : "(You were interrupted before the learner heard anything of your reply. Answer what they say now.)\n\n");
+            }
+            else if (heard.Length > 0)
             {
                 sb.Append("(Tu as été interrompu. L'utilisateur avait entendu de ta réponse : « ").Append(heard)
                   .Append(" ». Il n'a pas entendu la suite. Ne répète pas ce qu'il a déjà entendu et réponds à ce qu'il dit maintenant.)\n\n");
@@ -533,7 +580,7 @@ public sealed class VoiceChat : IDisposable
             info.ArgumentList.Add("--session-id");
             info.ArgumentList.Add(conversation.SessionId);
             info.ArgumentList.Add("--name");
-            info.ArgumentList.Add("Conversation vocale · " + options.Persona);
+            info.ArgumentList.Add(options.Name.Length > 0 ? options.Name : "Conversation vocale · " + options.Persona);
         }
 
         info.ArgumentList.Add("--system-prompt");
@@ -749,7 +796,7 @@ public sealed class VoiceChat : IDisposable
                         case "content_block_start":
                             if (ev.TryGetProperty("content_block", out var block) && Text(block, "type") is "tool_use" or "server_tool_use")
                             {
-                                Speak(conversation, turn, turn.Splitter.Flush());
+                                FlushText(conversation, turn);
                                 if (!turn.Cancelled)
                                 {
                                     Emit(conversation, turn, "tool", Text(block, "name") == "WebFetch" ? "Je lis la page…" : "Je cherche sur le web…");
@@ -761,7 +808,8 @@ public sealed class VoiceChat : IDisposable
                         case "content_block_delta":
                             if (ev.TryGetProperty("delta", out var delta) && Text(delta, "type") == "text_delta")
                             {
-                                Speak(conversation, turn, turn.Splitter.Push(Text(delta, "text")));
+                                // La ligne §META est retiree avant le decoupeur : jamais lue, jamais dans `full`.
+                                Speak(conversation, turn, turn.Splitter.Push(turn.Meta.Push(Text(delta, "text"))));
                             }
 
                             break;
@@ -769,7 +817,13 @@ public sealed class VoiceChat : IDisposable
                         case "message_stop":
                             // Fin d'un message (avant un outil, ou fin de la reponse) : le reste part tout de suite,
                             // sans attendre le `result`, qui peut suivre de quelques secondes.
-                            Speak(conversation, turn, turn.Splitter.Flush());
+                            FlushText(conversation, turn);
+                            if (turn.Meta.Found)
+                            {
+                                // La ligne §META clot la reponse : la fiche part sans attendre le `result`.
+                                EmitMeta(conversation, turn);
+                            }
+
                             break;
                     }
 
@@ -791,7 +845,7 @@ public sealed class VoiceChat : IDisposable
                     DropActive(conversation);
                     if (!turn.Cancelled)
                     {
-                        Speak(conversation, turn, turn.Splitter.Flush());
+                        FlushText(conversation, turn);
                         var isError = root.TryGetProperty("is_error", out var flag) && flag.ValueKind == JsonValueKind.True;
                         if (isError || Text(root, "subtype") is { Length: > 0 } subtype && subtype != "success")
                         {
@@ -799,6 +853,7 @@ public sealed class VoiceChat : IDisposable
                         }
                         else
                         {
+                            EmitMeta(conversation, turn);
                             Emit(conversation, turn, "done");
                         }
                     }
@@ -822,6 +877,46 @@ public sealed class VoiceChat : IDisposable
             turn.Full.Append(turn.Full.Length > 0 ? " " : "").Append(sentence);
             Emit(conversation, turn, "sentence", sentence);
         }
+    }
+
+    /// <summary>Fin d'un message : le texte retenu par le filtre de §META, puis le reste du decoupeur.</summary>
+    private void FlushText(Conversation conversation, Turn turn)
+    {
+        Speak(conversation, turn, turn.Splitter.Push(turn.Meta.Flush()));
+        Speak(conversation, turn, turn.Splitter.Flush());
+    }
+
+    /// <summary>
+    /// Phase <c>meta</c> du mode tutor, une fois par tour : la ligne §META lue et nettoyee
+    /// (<see cref="TutorGenre.VoiceMetaOf"/>), le recast verifie sur la phrase de l'apprenant.
+    /// Illisible ou absente : rien (journalise), le reste du tour suit son cours.
+    /// </summary>
+    private void EmitMeta(Conversation conversation, Turn turn)
+    {
+        if (turn.MetaDone || turn.Cancelled)
+        {
+            return;
+        }
+
+        turn.MetaDone = true;
+        if (!conversation.Options.IsTutor)
+        {
+            if (turn.Meta.Found)
+            {
+                _log.Info($"Conversation vocale {conversation.Id} : ligne §META ignoree (mode libre).");
+            }
+
+            return;
+        }
+
+        var meta = turn.Meta.Found ? TutorGenre.VoiceMetaOf(turn.Meta.Meta, turn.Learner) : null;
+        if (meta is null)
+        {
+            _log.Warn($"Conversation vocale {conversation.Id} : tour {turn.Number} sans ligne §META lisible ({(turn.Meta.Found ? Shorten(turn.Meta.Meta ?? "", 200) : "absente")}).");
+            return;
+        }
+
+        Emit(conversation, turn, "meta", meta: meta);
     }
 
     private void DropActive(Conversation conversation)
@@ -855,7 +950,7 @@ public sealed class VoiceChat : IDisposable
         }
     }
 
-    private void Emit(Conversation conversation, Turn turn, string phase, string text = "", string error = "")
+    private void Emit(Conversation conversation, Turn turn, string phase, string text = "", string error = "", JsonObject? meta = null)
     {
         var payload = new JsonObject
         {
@@ -866,6 +961,10 @@ public sealed class VoiceChat : IDisposable
             ["full"] = turn.Full.ToString(),
             ["error"] = error,
         };
+        if (meta is not null)
+        {
+            payload["meta"] = meta;
+        }
 
         try
         {
@@ -1009,7 +1108,7 @@ public sealed class VoiceChat : IDisposable
         {
             options.Model.Length > 0 ? "modele " + options.Model : "modele par defaut",
             options.Effort.Length > 0 ? "effort " + options.Effort : "",
-            "sujet " + SanitizeTopic(options.Topic),
+            options.IsTutor ? "tuteur" : "sujet " + SanitizeTopic(options.Topic),
             options.Web ? "web" : "sans web",
         }.Where(s => s.Length > 0));
 
@@ -1117,18 +1216,33 @@ public sealed class VoiceChat : IDisposable
 
         /// <summary>Texte d'un message annule avant d'etre parti, joint au suivant.</summary>
         public string? Carry { get; set; }
+
+        /// <summary>Ce que l'apprenant avait dit dans ce message annule (sans les notes) : pour verifier le recast.</summary>
+        public string? CarryLearner { get; set; }
+
+        /// <summary>Mode tutor : contexte et conversation deja tenue, devant le premier message ; null une fois parti.</summary>
+        public string? Preamble { get; set; }
     }
 
     private sealed class Turn
     {
-        public Turn(int number, string message)
+        public Turn(int number, string message, string learner)
         {
             Number = number;
             Message = message;
+            Learner = learner;
         }
 
         public int Number { get; }
         public string Message { get; }
+
+        /// <summary>Les mots de l'utilisateur seuls (sans note ni preambule) : le recast doit en etre un extrait.</summary>
+        public string Learner { get; }
+
+        /// <summary>Retire la ligne §META du flux avant le decoupeur.</summary>
+        public VoiceMetaFilter Meta { get; } = new();
+
+        public bool MetaDone { get; set; }
         public bool Cancelled { get; set; }
         public bool Retried { get; set; }
         public VoiceSentences Splitter { get; } = new();

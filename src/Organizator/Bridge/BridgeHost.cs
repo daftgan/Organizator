@@ -1810,18 +1810,27 @@ public sealed class BridgeHost
 
     /// <summary>
     /// Ouvre une conversation vocale (voir <see cref="VoiceChat"/>) : chaque champ absent prend la valeur
-    /// des reglages. Le processus claude demarre en arriere-plan ; les reponses arrivent par l'evenement <c>voice</c>.
+    /// des reglages. <c>mode</c> : <c>free</c> (defaut) ou <c>tutor</c>, avec <c>tutor</c> =
+    /// <c>{ scenario, level, lang, explain, lesson, context, history }</c> ; <c>name</c> : nom de la session.
+    /// Le processus claude demarre en arriere-plan ; les reponses arrivent par l'evenement <c>voice</c>.
     /// </summary>
     private JsonNode StartVoice(JsonObject payload)
     {
         var settings = _store.LoadSettings();
+
+        // Mode tutor (Revizator) : le prompt vient du tuteur (TutorGenre), sans web ni consignes libres.
+        var mode = VoiceChat.SanitizeMode(Str(payload, "mode"));
+        var tutor = mode == VoiceChat.TutorMode ? (payload["tutor"] as JsonObject)?.DeepClone() as JsonObject ?? new JsonObject() : null;
         var options = new VoiceOptions(
             Model: AgentProvider.RequireModel(Str(payload, "model") ?? settings.VoiceModel),
             Effort: AgentProvider.RequireEffort(AgentProvider.Claude, Str(payload, "effort") ?? settings.VoiceEffort),
             Persona: VoiceChat.SanitizePersona(Str(payload, "persona") ?? settings.VoicePersona),
             Topic: VoiceChat.SanitizeTopic(Str(payload, "topic") ?? settings.VoiceTopic),
-            Instructions: Limit(Str(payload, "instructions") ?? settings.VoiceInstructions, 2000),
-            Web: payload["web"] is JsonValue web && web.TryGetValue<bool>(out var allowed) ? allowed : settings.VoiceWeb);
+            Instructions: tutor is null ? Limit(Str(payload, "instructions") ?? settings.VoiceInstructions, 2000) : "",
+            Web: tutor is null && (payload["web"] is JsonValue web && web.TryGetValue<bool>(out var allowed) ? allowed : settings.VoiceWeb),
+            Mode: mode,
+            Tutor: tutor,
+            Name: VoiceChat.SanitizeName(Str(payload, "name")));
         return new JsonObject { ["conversationId"] = _voice.Start(options) };
     }
 
