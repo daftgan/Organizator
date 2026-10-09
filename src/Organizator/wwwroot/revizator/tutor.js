@@ -1,10 +1,18 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    Révizator — le tuteur vocal (module U3)
-   Une conversation en anglais, tour par tour : l'apprenant parle (Whisper local, en anglais) ou écrit ;
-   le tuteur (Claude, R.gen('tutor'), modèle rapide) répond par écrit et à voix haute (R.tts.say),
-   reformule discrètement une phrase fautive (recast) et relance par une question ; à la fin, un bilan
-   (trois erreurs corrigées et expliquées, trois tournures à réemployer, un retour en français, le niveau).
-   Et la capsule « avant / après » : la même consigne orale tous les deux ou trois mois.
+   Une conversation en anglais. Deux façons de la mener :
+     · mains libres (par défaut, R.prefs.tutorLive) : le moteur vocal partagé (voice-engine.js,
+       window.OrganizatorVoice) écoute en continu, détecte la fin de phrase, transcrit (Whisper local),
+       envoie à une session Claude persistante en mode tuteur (voiceStart mode 'tutor') et lit la réponse
+       phrase par phrase (Kokoro, sinon SAPI) ; on peut couper la parole au tuteur. Avatar en tête du chat.
+       Traduction, aide et reformulation arrivent avec la phase « meta » de chaque réponse ;
+     · tour par tour (repli) : l'apprenant parle (Espace) ou écrit ; le tuteur (Claude, R.gen('tutor'),
+       modèle rapide) répond par écrit et à voix haute (R.tts.say).
+   Dans les deux cas, il reformule discrètement une phrase fautive (recast) et relance par une question ;
+   à la fin, un bilan R.gen('tutor', { end: true }) (trois erreurs corrigées et expliquées, trois tournures
+   à réemployer, un retour en français, le niveau). Et la capsule « avant / après » : la même consigne
+   orale tous les deux ou trois mois. L'écran de choix ouvre aussi la conversation en français, tous
+   sujets (window.OrganizatorVoiceOverlay, voice.js).
 
    Écrans de la vue « tutor » (R.ui.tutor.screen) :
      pick (choix du scénario, accueil de la vue) · chat (conversation) · summary (bilan) ·
@@ -15,13 +23,15 @@
          level, lesson: { id, title, summaryFr } | null,
          turns: [{ role: 'user'|'tutor', text, at, recast: { said, better } | null, url,
                    typed, unsure: [mot], seconds, wpm, sttMs,      (réplique de l'apprenant)
-                   fr, tip, ms, end }],                            (réplique du tuteur)
+                   fr, tip, ms, end, live, cut, heard }],          (réplique du tuteur ; cut : coupée,
+                                                                     heard = ce qui en a été entendu)
          summary: { errors: [{ said, better, explanationFr, category }], phrases: [string], feedbackFr, levelEstimate } | null,
          endedAt, closed, applied, logged, cardsAdded }
      tutor.pendingCards[]  cartes gardées tant que R.cards n'existe pas (versées dès qu'il paraît)
      tutor.voiceOff        true : les réponses ne sont pas lues d'office
      capsules[]  { id, at, prompt, url, text, metrics: { seconds, speechSeconds, wpm, articulationWpm, words, pauses, longPauses, unsure } }
    Actions : rz-tutor-* ; saisie : rz-tutor-text (Entrée envoie), rz-tutor-voice ; micros : rzv-mic, rzv-cap.
+   Préférences (R.prefs) : tutorLive (mains libres, défaut true), tutorSensitivity (0..100, défaut 50).
    ═══════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
@@ -32,7 +42,7 @@
   var bridge = window.bridge;
 
   var REC_KEY = 'rzv-mic', CAP_KEY = 'rzv-cap';
-  var HISTORY_TURNS = 12, REC_MAX_MS = 90000, CAP_MAX_MS = 90000, CAP_EVERY_DAYS = 60, UNSURE_P = 0.5;
+  var HISTORY_TURNS = 12, BILAN_TURNS = 40, REC_MAX_MS = 90000, CAP_MAX_MS = 90000, CAP_EVERY_DAYS = 60, UNSURE_P = 0.5;
   var LEVELS_OK = ['A2', 'B1', 'B1+', 'B2', 'B2+', 'C1'];
   var CAPSULE_PROMPT = 'Present yourself and your job in one minute.';
   var CAPSULE_PROMPT_FR = 'Présentez-vous et présentez votre travail, en une minute environ.';
@@ -331,6 +341,7 @@
     return R.tts.say(t.text, { accent: v.accent, gender: v.gender, n: v.n || 0, key: sayKey(chat, i) });
   }
   function sayText(text, chat) {
+    if (chat && liveOn(chat)) { liveReplay(text); return null; }
     var v = chat ? voiceOf(chat) : { accent: 'en-GB', gender: 'female', n: 0 };
     return R.tts.say(String(text || ''), { accent: v.accent, gender: v.gender, n: v.n || 0, key: 'rzv-phrase' });
   }
@@ -355,6 +366,8 @@
 
   function setScreen(s) {
     if (T.screen === 'capsule' && s !== 'capsule') { T.capJust = ''; T.capNote = ''; R.recReset(CAP_KEY); }
+    /* Hors de l'écran de conversation, le moteur mains libres se tait et rend le micro. */
+    if (s !== 'chat') pauseLive();
     T.screen = s;
   }
 
@@ -363,6 +376,7 @@
     var va = variantId ? arr(sc.variants).filter(function (v) { return v.id === variantId; })[0] : null;
     if (T.pending && !T.pending.end) cancelPending(true);
     R.tts.stopAll();
+    stopLive();
     dropEmpty();
     var chat = {
       id: R.uid('tc'), at: Date.now(),
@@ -384,7 +398,9 @@
     prepare(chat).then(function () {
       if (!T.pending || T.pending.chatId !== chat.id || !T.pending.preparing) return;
       T.pending = null;
-      ask(chat, false);
+      /* Mains libres : le rendu démarre le moteur (ensureLive), qui fait ouvrir la conversation au tuteur. */
+      if (liveMode()) { delete L.hold[chat.id]; R.render(); }
+      else ask(chat, false);
     });
   }
 
@@ -412,13 +428,36 @@
     var s = chat.scenario || {};
     return {
       scenario: { id: String(s.id || ''), title: String(s.title || ''), tutorRole: String(s.tutorRole || ''), learnerGoal: String(s.learnerGoal || ''), setting: String(s.setting || '') },
-      history: arr(chat.turns).slice(-HISTORY_TURNS).map(function (t) { return { role: t.role === 'tutor' ? 'tutor' : 'user', text: String(t.text || '') }; }),
+      history: historyOf(chat, HISTORY_TURNS),
       level: speakLevel(),
       lesson: chat.lesson ? { title: chat.lesson.title, summaryFr: chat.lesson.summaryFr || '' } : null,
       end: !!end,
       lang: helpLang(),
       explain: R.profile.explain || 'auto'
     };
+  }
+
+  /* Le fil tel que l'apprenant l'a vécu : une réplique coupée compte pour ce qu'il en a entendu. */
+  function spokenText(t) {
+    if (t.role === 'tutor' && t.cut) { var h = clean(t.heard, 1500); return h ? h + ' [interrupted]' : '[interrupted before speaking]'; }
+    return String(t.text || '');
+  }
+  function historyOf(chat, n) {
+    return arr(chat.turns).slice(-n).map(function (t) { return { role: t.role === 'tutor' ? 'tutor' : 'user', text: spokenText(t) }; })
+      .filter(function (h) { return h.text; });
+  }
+
+  /* Le bilan ne reçoit que les douze dernières répliques en historique (limite de l'hôte) : le début de
+     la conversation, jusqu'à BILAN_TURNS répliques en tout, part dans le contexte, en tête. */
+  function endContext(chat) {
+    var all = arr(chat.turns);
+    var older = all.slice(Math.max(0, all.length - BILAN_TURNS), Math.max(0, all.length - HISTORY_TURNS));
+    if (!older.length) return tutorContext(chat);
+    var lines = older.map(function (t) { return (t.role === 'tutor' ? 'Tutor: ' : 'Learner: ') + clean(spokenText(t), 360); });
+    var head = 'Début de cette conversation (' + plural(older.length, 'réplique') + ' avant la partie « Conversation jusqu’ici » ; le bilan porte sur toute la conversation) :';
+    var body = lines.join('\n');
+    if (body.length > 4800) body = '…\n' + body.slice(body.length - 4800).replace(/^[^\n]*\n/, '');
+    return (head + '\n' + body + '\n\n' + tutorContext(chat)).slice(0, 7900);
   }
 
   function ask(chat, end) {
@@ -430,7 +469,7 @@
     T.error = null;
     T.toEnd = true;
     startTicker();
-    R.gen('tutor', params, { job: job, context: tutorContext(chat) }).then(function (r) {
+    R.gen('tutor', params, { job: job, context: end ? endContext(chat) : tutorContext(chat) }).then(function (r) {
       if (!T.pending || T.pending.job !== job) return;
       T.pending = null;
       receive(chat.id, (r && r.doc) || {}, Date.now() - t0, !!end);
@@ -454,14 +493,7 @@
       return;
     }
     var turns = chat.turns;
-    var last = turns[turns.length - 1];
-    var rc = doc.recast || {};
-    var better = clean(rc.better, 600), said = clean(rc.said, 600);
-    /* Comme l'hôte : une reformulation ne vaut que pour une phrase présente dans la dernière réplique. */
-    var inLast = last && (!said || (' ' + R.text.norm(last.text) + ' ').indexOf(' ' + R.text.norm(said) + ' ') >= 0);
-    if (last && last.role === 'user' && better && inLast && R.text.norm(better) !== R.text.norm(said) && R.text.norm(better) !== R.text.norm(last.text)) {
-      last.recast = { said: said || last.text, better: better };
-    }
+    applyRecast(turns[turns.length - 1], doc.recast);
     if (reply) turns.push({ role: 'tutor', text: reply, at: Date.now(), recast: null, url: '', fr: clean(doc.replyFr, 1800), tip: clean(doc.tipFr, 400), ms: Math.round(ms), end: !!doc.end });
     var idx = turns.length - 1;
     if (end) {
@@ -477,6 +509,17 @@
     var here = R.viewId() === 'tutor' && T.chatId === chat.id && (T.screen === 'chat' || T.screen === 'summary');
     if (reply && here && !tutorData().voiceOff && !R.rec.busy()) speakTurn(chat, idx);
     R.render();
+  }
+
+  /* Comme l'hôte : une reformulation ne vaut que pour une phrase présente dans la dernière réplique. */
+  function applyRecast(last, rc) {
+    rc = rc || {};
+    var better = clean(rc.better, 600), said = clean(rc.said, 600);
+    if (!last || last.role !== 'user' || !better) return false;
+    var inLast = !said || (' ' + R.text.norm(last.text) + ' ').indexOf(' ' + R.text.norm(said) + ' ') >= 0;
+    if (!inLast || R.text.norm(better) === R.text.norm(said) || R.text.norm(better) === R.text.norm(last.text)) return false;
+    last.recast = { said: said || last.text, better: better };
+    return true;
   }
 
   /* Le bilan réel peut relever plus de trois erreurs (quatre dans l'essai de H2) : les trois premières sont
@@ -535,6 +578,7 @@
     var text = clean((el && el.value) || T.draft, 1000);
     if (!text) return;
     R.tts.stopAll();
+    if (liveOn(chat)) { sendLiveText(chat, text, el); return; }
     chat.turns.push({ role: 'user', text: text, at: Date.now(), recast: null, url: '', typed: true });
     chat.closed = false;
     T.newKey = chat.id + ':' + (chat.turns.length - 1);
@@ -576,6 +620,7 @@
     if (!chat) return;
     if (T.pending && !T.pending.end) cancelPending(true);
     R.tts.stopAll();
+    stopLive();
     T.chatId = chat.id;
     if (!userTurns(chat).length) { removeChat(chat.id); T.chatId = ''; setScreen('pick'); R.save(); R.render(); return; }
     setScreen('chat');
@@ -586,6 +631,7 @@
     var chat = current();
     if (T.pending) cancelPending(true);
     R.tts.stopAll();
+    stopLive();
     if (chat) {
       if (!userTurns(chat).length) removeChat(chat.id);
       else { chat.closed = true; chat.endedAt = chat.endedAt || Date.now(); logChat(chat); }
@@ -602,6 +648,389 @@
     if (T.pending && chat && !userTurns(chat).length) cancelPending(true);
     if (chat && !userTurns(chat).length && !(T.pending && T.pending.chatId === chat.id)) { removeChat(chat.id); T.chatId = ''; T.error = null; R.save(); }
     setScreen('pick');
+    R.render();
+  }
+
+  /* ══ Mains libres : le moteur vocal partagé ═════════════════════════════
+     Un moteur (window.OrganizatorVoice.create, voice-engine.js) par conversation ouverte à l'écran : il
+     écoute en continu, transcrit chaque phrase de l'apprenant (Whisper, en anglais, avec le détail des
+     mots et le son gardé), la confie à la session Claude du tuteur (voiceStart mode 'tutor') et lit la
+     réponse phrase par phrase. Ce module ne fait que tenir le fil : chaque phrase entendue devient une
+     réplique de l'apprenant, chaque réponse une réplique du tuteur, remplie au fil des phrases ; la phase
+     « meta » apporte la traduction, l'aide, la reformulation et la proposition de conclure.
+     L'avatar vit dans un élément propre au module (L.stage), jamais réécrit par le rendu : le rendu
+     laisse une place vide [data-rzv-slot] où after() le replace. */
+
+  var L = {
+    eng: null, chatId: '', stage: null, phase: 'idle', phaseText: '', caption: '', notices: {}, error: '', muted: false,
+    turns: {}, sentAt: 0, meter: null, hold: {}, sapi: null, sapiAsked: false
+  };
+  var GREETING = '(The learner has just joined. Open the conversation in character: greet them briefly and ask your first question.)';
+  var RESUMING = '(The learner is back after a short pause. Answer their last message, in character.)';
+  var NOISE = '(That was only background noise, not the learner. Carry on naturally.)';
+  var PHASES = {
+    starting: ['Joining…', 'Le tuteur arrive'], listening: ['I’m listening', 'Parlez quand vous voulez'], user: ['I’m listening…', 'Il vous entend'],
+    transcribing: ['Got it…', 'Transcription de votre phrase'], thinking: ['Thinking…', 'Le tuteur réfléchit'], tool: ['Thinking…', 'Le tuteur réfléchit'],
+    speaking: ['Speaking', 'Coupez-lui la parole quand vous voulez'], muted: ['Microphone off', 'Micro coupé : M pour le rouvrir'],
+    error: ['Something went wrong', 'Un souci avec la conversation'], idle: ['Paused', 'Conversation en pause']
+  };
+
+  function liveAvailable() { return !!(window.OrganizatorVoice && typeof window.OrganizatorVoice.create === 'function'); }
+  function livePref() { return !R.isLoaded() || R.prefs.tutorLive !== false; }
+  function liveMode() { return livePref() && liveAvailable(); }
+  function liveOn(chat) { return !!L.eng && !!chat && L.chatId === chat.id; }
+  function sensitivity() { return R.clamp(Math.round(num(R.prefs.tutorSensitivity, 50)), 0, 100); }
+
+  /* Une voix SAPI anglaise (repli quand Kokoro manque) : l'accent du scénario, puis n'importe quel anglais. */
+  function askSapi() {
+    if (L.sapiAsked || !bridge) return;
+    L.sapiAsked = true;
+    bridge.call('voiceVoices', {}, 15000).then(function (r) {
+      L.sapi = arr(r && r.voices);
+      if (L.eng) { var c = chatById(L.chatId); if (c) try { L.eng.setOptions({ tts: ttsOf(c) }); } catch (e) { /* moteur arrêté */ } }
+    }, function () { L.sapi = []; });
+  }
+  function sapiFor(v) {
+    var l = arr(L.sapi), acc = String(v.accent || 'en-US').toLowerCase();
+    var en = l.filter(function (x) { return /^en/i.test(String(x.lang || '')); });
+    var same = en.filter(function (x) { return String(x.lang || '').toLowerCase().replace('_', '-') === acc; });
+    var pool = same.length ? same : en;
+    var g = pool.filter(function (x) { return String(x.gender || '').toLowerCase() === v.gender; });
+    var pick = (g.length ? g : pool)[0];
+    return pick ? String(pick.id || '') : '';
+  }
+  function ttsOf(chat) {
+    var v = voiceOf(chat);
+    var kokoro = R.tts.engine() === 'kokoro' ? R.tts.voice(v.accent, v.gender, v.n || 0) : '';
+    return { kokoroVoice: kokoro, accent: v.accent === 'en-GB' ? 'en-GB' : 'en-US', speed: R.clamp(num(R.prefs.speed, 1), 0.7, 1.3), sapiVoice: sapiFor(v), sapiRate: 0 };
+  }
+
+  function stageEl() {
+    if (L.stage) return L.stage;
+    var el = document.createElement('div');
+    el.className = 'rzv-live';
+    el.setAttribute('data-phase', 'starting');
+    el.innerHTML = '<div class="rzv-live-ava"><div class="rzv-live-mount"></div><span class="rzv-live-ph" aria-hidden="true"></span></div>'
+      + '<div class="rzv-live-main"><div class="rzv-live-state"><span class="rzv-live-dot" aria-hidden="true"></span><span class="rzv-live-label" lang="en"></span>'
+      + '<span class="rzv-live-sub"></span><span class="rzv-live-meter" title="Niveau du micro" aria-hidden="true"><i></i></span></div>'
+      + '<div class="rzv-live-cap" lang="en" aria-live="polite"></div><div class="rzv-live-notice" hidden></div></div>';
+    L.stage = el;
+    return el;
+  }
+  function mountOf() { return stageEl().querySelector('.rzv-live-mount'); }
+
+  /* Les avis du moteur, par groupe (micro, Whisper, conversation) : le premier présent est affiché. */
+  function currentNotice() {
+    var k = Object.keys(L.notices).filter(function (g) { return L.notices[g] && L.notices[g].text; });
+    var order = ['mic', 'whisper', 'conversation'];
+    k.sort(function (a, b) { return (order.indexOf(a) + 1 || 9) - (order.indexOf(b) + 1 || 9); });
+    return k.length ? L.notices[k[0]] : null;
+  }
+  function onNotice(n, info) {
+    var g = (n && (n.group || n.kind)) || (info && info.kind) || 'other';
+    if (n && n.text) L.notices[g] = n; else delete L.notices[g];
+    updateStage();
+  }
+  function noticeAction(n) {
+    if (!n) return null;
+    var a = n.action;
+    if (typeof a === 'function') return { label: n.actionLabel || 'Corriger', run: a };
+    if (a && typeof a.run === 'function') return { label: a.label || 'Corriger', run: a.run };
+    if (n.kind === 'whisper-missing' && !(n.progress >= 0)) return { label: 'Télécharger', run: downloadWhisper };
+    return null;
+  }
+  function downloadWhisper() {
+    if (L.eng && typeof L.eng.downloadWhisper === 'function') return L.eng.downloadWhisper();
+    if (bridge) return bridge.call('whisperDownload', { model: R.prefs.whisperModel || 'small' }, 3600000);
+    return null;
+  }
+
+  /* L'état de l'avatar, le sous-titre, l'avis : écrits sur place, sans rendu de la vue. */
+  function updateStage() {
+    var el = stageEl(), chat = chatById(L.chatId) || current();
+    var held = !L.eng;
+    var ph = held ? (L.error ? 'error' : 'idle') : (L.muted && (L.phase === 'listening' || L.phase === 'muted') ? 'muted' : L.phase);
+    var lab = PHASES[ph] || PHASES.listening;
+    el.setAttribute('data-phase', ph);
+    el.classList.toggle('is-held', held);
+    var q = function (s) { return el.querySelector(s); };
+    q('.rzv-live-label').textContent = lab[0];
+    q('.rzv-live-sub').textContent = chat ? nameOf(chat) + ' · ' + lab[1] : lab[1];
+    q('.rzv-live-ph').textContent = chat ? initialOf(chat) : 'T';
+    var cap = q('.rzv-live-cap');
+    var capText = held ? '' : (ph === 'speaking' || ph === 'thinking' || ph === 'tool' ? L.caption : '');
+    if (cap.textContent !== capText) cap.textContent = capText;
+    var box = q('.rzv-live-notice');
+    var n = L.error ? { kind: 'error', text: L.error } : currentNotice();
+    var html = '';
+    if (n && n.text) {
+      var act = n.kind === 'error' ? null : noticeAction(n);
+      var prog = n.kind === 'whisper-missing' && n.progress >= 0 ? ' Téléchargement : ' + n.progress + ' %.' : '';
+      html = '<span>' + esc(n.text + prog) + '</span>' + (act ? '<button type="button" class="btn btn-primary" data-act="rz-tutor-live-notice">' + esc(act.label) + '</button>' : '')
+        + (n.kind === 'error' ? '<button type="button" class="btn btn-secondary" data-act="rz-tutor-live-resume">' + R.icon('replay') + ' Relancer</button>' : '');
+    } else if (held && chat && !chat.summary) {
+      html = '<span>' + esc(L.error ? '' : 'Le micro est fermé. Reprenez quand vous voulez : il se souvient de la conversation.') + '</span>'
+        + '<button type="button" class="btn btn-primary" data-act="rz-tutor-live-resume">' + R.icon('mic') + ' Reprendre la conversation</button>';
+    }
+    if (box.getAttribute('data-html') !== html) { box.innerHTML = typo(html); box.setAttribute('data-html', html); }
+    box.hidden = !html;
+    box.classList.toggle('is-warn', !!(n && n.text));
+  }
+
+  function startMeter() {
+    if (L.meter) return;
+    L.meter = setInterval(function () {
+      var e = L.eng;
+      if (!e) { stopMeter(); return; }
+      var st = null;
+      try { st = e.state(); } catch (err) { return; }
+      var lv = R.clamp(num(st && st.micLevel, 0), 0, 1);
+      var i = L.stage && L.stage.querySelector('.rzv-live-meter i');
+      if (i) i.style.transform = 'scaleX(' + Math.max(0.04, lv).toFixed(3) + ')';
+      if (st && !!st.muted !== L.muted) { L.muted = !!st.muted; updateStage(); R.render(); }
+    }, 90);
+  }
+  function stopMeter() { if (L.meter) { clearInterval(L.meter); L.meter = null; } }
+
+  function stopLive() {
+    var e = L.eng;
+    L.eng = null;
+    stopMeter();
+    L.phase = 'idle'; L.phaseText = ''; L.caption = ''; L.notices = {}; L.muted = false; L.turns = {};
+    if (e) { try { if (typeof e.destroy === 'function') e.destroy(); else e.stop(); } catch (err) { /* déjà arrêté */ } }
+    if (L.stage) updateStage();
+  }
+  /* Quitter l'écran ou la page : le moteur s'arrête, et ne repart qu'à la demande (Reprendre). */
+  function pauseLive() {
+    if (!L.eng) return;
+    L.hold[L.chatId] = true;
+    stopLive();
+  }
+
+  /* Le moteur démarre de lui-même quand l'écran de conversation s'affiche en mains libres (sauf pause demandée). */
+  function ensureLive() {
+    var chat = current();
+    if (T.screen !== 'chat' || !chat || chat.summary || T.pending || !liveMode() || R.viewId() !== 'tutor') return;
+    if (L.hold[chat.id] || L.error && L.chatId === chat.id) { if (!L.eng) { L.chatId = chat.id; updateStage(); } return; }
+    if (liveOn(chat)) return;
+    startLive(chat);
+    /* Le rendu en cours a été écrit sans moteur : boutons du pupitre et « Réécouter » à remettre à jour. */
+    if (L.eng) setTimeout(function () { if (liveOn(current()) && T.screen === 'chat') R.render(); }, 0);
+  }
+
+  function startLive(chat) {
+    stopLive();
+    R.tts.stopAll();
+    askSapi();
+    L.chatId = chat.id; L.error = ''; L.phase = 'starting'; L.turns = {};
+    delete L.hold[chat.id];
+    var turns = arr(chat.turns), last = turns[turns.length - 1];
+    var params = paramsOf(chat, false);
+    chat.level = params.level;
+    var greeting = !turns.length ? GREETING : (last.role === 'user' ? RESUMING : null);
+    var eng = null;
+    var mine = function () { return L.eng === eng && !!eng; };
+    try {
+      eng = window.OrganizatorVoice.create({
+        container: mountOf(), avatar: { size: 112 }, language: 'en', whisperModel: R.prefs.whisperModel || 'small',
+        sensitivity: sensitivity(), keepAudio: true, detail: true, tts: ttsOf(chat),
+        conversation: {
+          start: {
+            mode: 'tutor', model: R.prefs.tutorModel || 'haiku', effort: '', name: 'Tuteur · ' + clean(chat.scenario && chat.scenario.title, 80),
+            tutor: { scenario: params.scenario, level: params.level, lang: params.lang, explain: params.explain, lesson: params.lesson, context: tutorContext(chat), history: historyOf(chat, 30) }
+          },
+          greeting: greeting
+        },
+        texts: { noiseResume: NOISE },
+        onUserUtterance: function (text, info) { return mine() ? liveUser(text, info || {}) : false; },
+        onSentence: function (text, info) { if (mine()) liveSentence(text, info || {}); },
+        onReply: function (r) { if (mine()) liveReply(r || {}); },
+        onMeta: function (meta, info) { if (mine()) liveMeta(meta || {}, info || {}); },
+        onReplyDone: function (r) { if (mine()) liveDone(r || {}); },
+        onInterrupt: function (r) { if (mine()) liveInterrupt(r || {}); },
+        onPhase: function (p, info) {
+          if (!mine()) return;
+          L.phase = String(p || 'listening'); L.phaseText = clean(info && info.text, 200);
+          if (L.phase === 'listening' || L.phase === 'user' || L.phase === 'idle') L.caption = '';
+          updateStage();
+        },
+        onNotice: function (n, info) { if (mine()) onNotice(n, info); },
+        onError: function (err) { if (mine()) liveError(err); }
+      });
+    } catch (e) {
+      L.error = 'Le moteur vocal n’a pas pu démarrer : ' + (clean(e && e.message, 200) || 'erreur inconnue');
+      updateStage();
+      return;
+    }
+    L.eng = eng;
+    L.sentAt = Date.now();
+    startMeter();
+    updateStage();
+    var p;
+    try { p = eng.start(); } catch (e) { p = Promise.reject(e); }
+    Promise.resolve(p).then(noop, function (e) {
+      if (!mine()) return;
+      L.error = 'La conversation n’a pas pu démarrer : ' + (clean(e && e.message, 200) || 'erreur inconnue');
+      var dead = L.eng; L.eng = null; stopMeter();
+      try { if (dead) dead.destroy(); } catch (err) { /* déjà arrêté */ }
+      updateStage();
+    });
+  }
+
+  /* Les erreurs du moteur : un tour sans réponse se dit dans l'avis (la conversation continue) ;
+     une conversation qui n'a pas pu démarrer arrive aussi par l'avis « conversation ». */
+  function liveError(err) {
+    var kind = err && err.kind, msg = clean((err && (err.message || err.error)) || err, 300) || 'erreur inconnue';
+    if (kind === 'conversation') return;
+    var label = kind === 'transcribe' ? 'Transcription impossible : ' : (kind === 'reply' ? 'Le tuteur n’a pas pu répondre : ' : '');
+    onNotice({ kind: 'turn-error', group: 'turn', text: label + msg + ' Redites votre phrase, ou écrivez-la.' });
+    clearTimeout(L.errTimer);
+    L.errTimer = setTimeout(function () { onNotice(null, { kind: 'turn' }); }, 9000);
+  }
+
+  function resumeLive() {
+    var chat = current();
+    if (!chat || chat.summary) return;
+    L.error = '';
+    delete L.hold[chat.id];
+    startLive(chat);
+    R.render();
+  }
+
+  function liveChat() { var c = chatById(L.chatId); return c && !c.summary ? c : null; }
+  function liveKey(chat, idx) { return chat.id + ':' + idx; }
+
+  function liveUser(text, info) {
+    var chat = liveChat();
+    text = clean(text, 1500);
+    if (!chat || !text) return false;
+    var stt = info.stt || {};
+    var turn = {
+      role: 'user', text: text, at: Date.now(), recast: null, url: String(info.url || stt.url || ''),
+      unsure: unsureWords(stt.words), seconds: round1(info.seconds), wpm: Math.round(num(stt.wpm, 0)), sttMs: Math.round(num(stt.ms, 0)), live: true
+    };
+    chat.turns.push(turn);
+    chat.closed = false;
+    L.sentAt = Date.now();
+    T.newKey = liveKey(chat, chat.turns.length - 1);
+    T.toEnd = true;
+    R.save();
+    R.render();
+    return undefined;
+  }
+
+  function sendLiveText(chat, text, el) {
+    chat.turns.push({ role: 'user', text: text, at: Date.now(), recast: null, url: '', typed: true, live: true });
+    chat.closed = false;
+    T.newKey = liveKey(chat, chat.turns.length - 1);
+    T.draft = '';
+    if (el) el.value = '';
+    T.focusText = true;
+    T.toEnd = true;
+    L.sentAt = Date.now();
+    try { L.eng.send(text); } catch (e) { L.error = 'Message non envoyé : ' + clean(e && e.message, 200); updateStage(); }
+    R.save();
+    R.render();
+  }
+
+  /* La réplique du tuteur pour un tour du moteur : créée à la première phrase, complétée ensuite. */
+  function liveTurn(chat, turn, text) {
+    var idx = L.turns[turn];
+    if (idx != null && chat.turns[idx]) return idx;
+    chat.turns.push({ role: 'tutor', text: text || '', at: Date.now(), recast: null, url: '', fr: '', tip: '', ms: 0, end: false, live: true });
+    idx = L.turns[turn] = chat.turns.length - 1;
+    T.newKey = liveKey(chat, idx);
+    T.toEnd = true;
+    return idx;
+  }
+  function patchLiveText(chat, idx) {
+    var t = chat.turns[idx];
+    var el = document.querySelector('[data-rzv-live="' + liveKey(chat, idx) + '"]');
+    if (el && t) el.innerHTML = sayHtml(t);
+  }
+
+  function liveReply(r) {
+    var chat = liveChat();
+    if (!chat || r.turn == null) return;
+    var text = clean(r.full || arr(r.sentences).join(' '), 1500);
+    if (!text) return;
+    var known = L.turns[r.turn] != null;
+    var idx = liveTurn(chat, r.turn, text);
+    chat.turns[idx].text = text;
+    R.save();
+    if (known) patchLiveText(chat, idx); else R.render();
+  }
+
+  function liveSentence(text, info) {
+    var chat = liveChat();
+    L.caption = clean(text, 600);
+    updateStage();
+    if (!chat || info.turn == null) return;
+    var idx = liveTurn(chat, info.turn, clean(text, 1500));
+    var t = chat.turns[idx];
+    if (!t.ms) { t.ms = Math.max(1, Date.now() - L.sentAt); R.render(); }
+  }
+
+  function liveMeta(meta, info) {
+    var chat = liveChat();
+    if (!chat || info.turn == null || L.turns[info.turn] == null) return;
+    var idx = L.turns[info.turn], t = chat.turns[idx];
+    t.fr = clean(meta.replyFr, 1800);
+    t.tip = clean(meta.tipFr, 400);
+    t.end = !!meta.end;
+    if (t.end) T.dismissEnd = '';
+    applyRecast(chat.turns[idx - 1], meta.recast);
+    R.save();
+    R.render();
+  }
+
+  function liveDone(r) {
+    var chat = liveChat();
+    L.caption = '';
+    updateStage();
+    if (!chat || r.turn == null || L.turns[r.turn] == null) return;
+    var t = chat.turns[L.turns[r.turn]];
+    var full = clean(r.full, 1500);
+    if (full) t.text = full;
+    if (r.heard != null && !t.cut) { t.cut = true; t.heard = clean(r.heard, 1500); }
+    R.save();
+    R.render();
+  }
+
+  function liveInterrupt(r) {
+    var chat = liveChat();
+    L.caption = '';
+    updateStage();
+    if (!chat || r.turn == null || L.turns[r.turn] == null) return;
+    var t = chat.turns[L.turns[r.turn]];
+    t.cut = true;
+    t.heard = clean(r.heard, 1500);
+    R.save();
+    R.render();
+  }
+
+  function liveMute() {
+    if (!L.eng) return;
+    var m = true;
+    try { m = !L.eng.muted(); L.eng.mute(m); } catch (e) { /* moteur arrêté */ }
+    L.muted = m;
+    updateStage();
+    R.render();
+  }
+  function liveReplay(text) {
+    if (!L.eng || !text) return;
+    try { L.eng.replay(String(text)); } catch (e) { /* moteur arrêté */ }
+  }
+  function liveHush() { if (L.eng) try { L.eng.interrupt(); } catch (e) { /* moteur arrêté */ } }
+
+  function setLive(on) {
+    var chat = current();
+    if (on && !liveAvailable()) { R.toast('Le moteur vocal n’est pas disponible dans cette fenêtre : restez en tour par tour.'); return; }
+    R.prefs.tutorLive = !!on;
+    R.save();
+    R.tts.stopAll();
+    if (!on) stopLive();
+    else if (chat) { delete L.hold[chat.id]; L.error = ''; }
     R.render();
   }
 
@@ -682,15 +1111,34 @@
 
   /* ══ Rendu : bulles ═════════════════════════════════════════════════════ */
 
+  /* Une réplique coupée : la partie entendue, puis le reste barré et estompé (comme le mode Conversation). */
+  function sayHtml(t) {
+    var text = String(t.text || '');
+    if (!t.cut) return esc(text);
+    var heard = String(t.heard || '');
+    var n = 0;
+    if (heard && text.indexOf(heard) === 0) n = heard.length;
+    else if (heard) {
+      var words = R.text.count(heard), re = /\S+\s*/g, m;
+      while (words > 0 && (m = re.exec(text))) { n = m.index + m[0].length; words--; }
+    }
+    var rest = text.slice(n);
+    return esc(text.slice(0, n)) + (rest.trim() ? '<span class="rzv-unheard" title="Coupé : vous ne l’avez pas entendu">' + esc(rest) + '</span>' : '');
+  }
+
   function tutorTurnHtml(chat, t, i) {
     var key = sayKey(chat, i), k = chat.id + ':' + i;
     var on = !!T.fr[k];
-    var h = '<div class="rzv-turn is-tutor' + (T.newKey === k ? ' is-new' : '') + '"><span class="rzv-ava" aria-hidden="true">' + esc(initialOf(chat)) + '</span><div class="rzv-col"><div class="rzv-bubble">'
-      + '<div class="rzv-who"><span>' + esc(nameOf(chat)) + '</span>' + (t.ms ? '<span class="rzv-lat" title="Temps de réponse du tuteur">' + esc(secs(t.ms)) + '</span>' : '') + '</div>'
-      + '<div class="rzv-say" data-rz-say="' + esc(key) + '" data-rz-idx="0" lang="en">' + esc(t.text) + '</div>'
+    var live = liveOn(chat);
+    var h = '<div class="rzv-turn is-tutor' + (T.newKey === k ? ' is-new' : '') + (t.cut ? ' is-cut' : '') + '"><span class="rzv-ava" aria-hidden="true">' + esc(initialOf(chat)) + '</span><div class="rzv-col"><div class="rzv-bubble">'
+      + '<div class="rzv-who"><span>' + esc(nameOf(chat)) + '</span>' + (t.cut ? '<span class="rzv-cutk" title="Vous lui avez coupé la parole">' + R.icon('cross') + 'coupé</span>' : '')
+      + (t.ms ? '<span class="rzv-lat" title="Temps de réponse du tuteur">' + esc(secs(t.ms)) + '</span>' : '') + '</div>'
+      + '<div class="rzv-say" data-rz-say="' + esc(key) + '" data-rz-idx="0" data-rzv-live="' + esc(k) + '" lang="en">' + sayHtml(t) + '</div>'
       + (on && t.fr ? '<div class="rzv-fr" lang="fr">' + esc(t.fr) + '</div>' : '')
       + (t.tip ? '<div class="rzv-tip">' + R.icon('spark') + '<span>' + esc(t.tip) + '</span></div>' : '')
-      + '<div class="rzv-tools">' + R.h.player(key, { small: true, speeds: false, label: 'Réécouter', source: function () { return speakTurn(chat, i); } })
+      + '<div class="rzv-tools">' + (live
+        ? '<button type="button" class="rzv-link" data-act="rz-tutor-replay" data-i="' + i + '" title="Réécouter avec la voix du tuteur">' + R.icon('replay') + 'Réécouter</button>'
+        : R.h.player(key, { small: true, speeds: false, label: 'Réécouter', source: function () { return speakTurn(chat, i); } }))
       + (t.fr ? '<button type="button" class="rzv-link" data-act="rz-tutor-tr" data-chat="' + esc(chat.id) + '" data-i="' + i + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + R.icon('lang') + (on ? 'Masquer la traduction' : 'Traduire') + '</button>' : '')
       + '</div></div></div></div>';
     return h;
@@ -759,6 +1207,16 @@
       + '<div class="rzv-sc-foot"><span class="rzv-sc-min">' + R.icon('clock') + esc(sc.minutes) + '</span><span class="rzv-sc-go">Commencer ' + R.icon('arrow') + '</span></div></div>';
   }
 
+  /* La conversation en français, tous sujets : le mode Conversation plein écran (voice.js). */
+  function frCardHtml() {
+    return '<div class="rzv-sc is-fr" data-act="rz-tutor-fr" role="button" tabindex="0" aria-label="Ouvrir la conversation en français, tous sujets">'
+      + '<div class="rzv-sc-top"><span class="rzv-ic rzv-hue-lang">' + R.icon('chat') + '</span><span class="rzv-fr-tag" lang="fr">FR</span></div>'
+      + '<div class="rzv-sc-title">Conversation en français · tous sujets</div>'
+      + '<div class="rzv-sc-role">Un interlocuteur à avatar, en français : actualité, sciences, culture, débat, organisation…</div>'
+      + '<div class="rzv-sc-goal">Mains libres, plein écran, sans bilan : pour réfléchir à voix haute ou souffler entre deux séances.</div>'
+      + '<div class="rzv-sc-foot"><span class="rzv-sc-min">' + R.icon('mic') + 'Plein écran</span><span class="rzv-sc-go">Ouvrir ' + R.icon('arrow') + '</span></div></div>';
+  }
+
   function headHtml(kicker, title, lead, side) {
     return '<div class="rzv-head"><div class="rzv-head-main"><div class="rz-kicker">' + kicker + '</div><h2 class="rzv-h2">' + esc(title) + '</h2>'
       + (lead ? '<p class="rzv-lead">' + lead + '</p>' : '') + '</div>' + (side ? '<div class="rzv-head-side">' + side + '</div>' : '') + '</div>';
@@ -782,7 +1240,7 @@
       'Vous parlez, il vous répond à voix haute, reformule discrètement vos phrases et vous relance. À la fin, un bilan : trois erreurs, trois tournures à réemployer, votre niveau.', side)];
     var rc = lastResumable();
     if (rc) h.push(resumeHtml(rc));
-    h.push('<div class="rzv-pick"><div class="rzv-scs" role="list">' + SCENARIOS.map(function (sc, i) { return scCardHtml(sc, i, lesson); }).join('') + '</div>');
+    h.push('<div class="rzv-pick"><div class="rzv-scs" role="list">' + SCENARIOS.map(function (sc, i) { return scCardHtml(sc, i, lesson); }).join('') + frCardHtml() + '</div>');
     h.push('<aside class="rzv-pick-side">' + knowHtml(lesson) + capTeaserHtml() + recentHtml() + '</aside></div>');
     return h.join('');
   }
@@ -791,7 +1249,9 @@
     return '<section class="rz-card rzv-know"><div class="rz-card-head"><span class="rz-card-title">Bon à savoir</span></div><ul class="rzv-tips">'
       + '<li>Il ne vous coupe pas pour corriger : une reformulation discrète apparaît sous votre phrase, et le bilan reprend l’essentiel.</li>'
       + '<li>Demandez-lui, en français ou en anglais : « quel est le cours d’aujourd’hui ? » — ' + (lesson ? 'il connaît « ' + esc(lesson.title) + ' ».' : 'pas encore de cours aujourd’hui.') + '</li>'
-      + '<li><span class="rz-kbd">Espace</span> pour parler, encore pour terminer ; « Écrire plutôt » quand vous ne pouvez pas parler.</li>'
+      + (liveMode()
+        ? '<li>Mains libres : parlez quand vous voulez, il vous écoute en continu ; coupez-lui la parole, il s’arrête. <span class="rz-kbd">Espace</span> le fait taire, <span class="rz-kbd">M</span> coupe le micro.</li>'
+        : '<li><span class="rz-kbd">Espace</span> pour parler, encore pour terminer ; « Écrire plutôt » quand vous ne pouvez pas parler.</li>')
       + '<li>Le son reste sur ce poste (Whisper) ; seule la transcription part vers le tuteur.</li></ul></section>';
   }
 
@@ -832,6 +1292,33 @@
     return !!T.pending || !chat || !!chat.summary || R.rec.busy();
   }
 
+  function modesHtml(live, p) {
+    var rec = R.recState(REC_KEY).phase;
+    var lock = !!p || rec === 'recording' || rec === 'starting' || rec === 'processing';
+    var can = liveAvailable();
+    var btn = function (on, mode, label, title, dis) {
+      return '<button type="button" class="' + (on ? 'on' : '') + '" data-act="rz-tutor-mode" data-mode="' + mode + '" aria-pressed="' + (on ? 'true' : 'false') + '" title="' + esc(title) + '"' + (dis ? ' disabled' : '') + '>' + label + '</button>';
+    };
+    return '<div class="rzv-modes" role="group" aria-label="Façon de converser">'
+      + btn(live, 'live', R.icon('mic') + 'Mains libres', can ? 'Il écoute en continu ; vous pouvez lui couper la parole' : 'Moteur vocal indisponible dans cette fenêtre', !can || (lock && !live))
+      + btn(!live, 'turn', R.icon('chat') + 'Tour par tour', 'Espace pour parler, encore pour terminer', lock && !live)
+      + '</div>';
+  }
+
+  function liveDockHtml(chat, endBar) {
+    var muted = L.muted;
+    var hint = '<span class="rzv-live-hint">Parlez quand vous voulez, il vous écoute · <span class="rz-kbd">Espace</span> le faire taire · <span class="rz-kbd">M</span> micro · <span class="rz-kbd">R</span> réécouter · <span class="rz-kbd">T</span> traduire · <span class="rz-kbd">Échap</span> sortir</span>';
+    return '<div class="rzv-dock is-live">' + endBar
+      + '<div class="rzv-dock-row">' + modesHtml(true, null)
+      + '<div class="rzv-live-ctl">'
+      + '<button type="button" class="btn btn-secondary" data-act="rz-tutor-hush" title="Faire taire le tuteur (Espace)"' + (L.eng ? '' : ' disabled') + '>' + R.icon('stop') + ' Faire taire</button>'
+      + '<button type="button" class="btn ' + (muted ? 'btn-primary' : 'btn-secondary') + ' rzv-mute" data-act="rz-tutor-mute" aria-pressed="' + (muted ? 'true' : 'false') + '" title="' + (muted ? 'Rouvrir le micro (M)' : 'Couper le micro (M)') + '"' + (L.eng ? '' : ' disabled') + '>' + R.icon('mic') + (muted ? ' Micro coupé' : ' Micro ouvert') + '</button>'
+      + '</div></div>'
+      + '<div class="rzv-hint">' + hint + '</div>'
+      + '<div class="rzv-write"><input class="input" type="text" data-role="rz-tutor-text" data-focus-key="rzv-text" placeholder="Écrire plutôt… (Entrée envoie)" maxlength="1000" lang="en" autocomplete="off" value="' + esc(T.draft) + '">'
+      + '<button type="button" class="btn btn-secondary" data-act="rz-tutor-send"' + (L.eng ? '' : ' disabled') + '>' + R.icon('arrow') + ' Envoyer</button></div></div>';
+  }
+
   function dockHtml(chat, p, err) {
     if (p && p.end) {
       return '<div class="rzv-dock is-ending"><div class="rzv-ending"><span class="rz-spin"></span><span>Le tuteur prépare votre bilan…</span><span class="rzv-wait-t" data-rzv-wait>' + esc(secs(Date.now() - p.startedAt)) + '</span></div>'
@@ -850,10 +1337,11 @@
     var turns = arr(chat.turns), lt = turns[turns.length - 1];
     var endBar = !p && lt && lt.role === 'tutor' && lt.end && T.dismissEnd !== chat.id
       ? '<div class="rzv-endbar">' + R.icon('flag') + '<span>' + esc(nameOf(chat)) + ' propose de conclure.</span><button type="button" class="btn btn-primary" data-act="rz-tutor-end">Terminer et voir le bilan</button><button type="button" class="btn btn-ghost" data-act="rz-tutor-dismiss">Continuer</button></div>' : '';
+    if (liveMode() && (!p || p.preparing)) return liveDockHtml(chat, endBar);
     var hint = busy ? esc('Le micro est pris par une autre prise de son (dictée, exercice) : terminez-la, ou écrivez plutôt.')
       : (p ? esc('Le tuteur réfléchit… Vous pourrez répondre dès qu’il aura parlé.')
         : (T.micNote ? esc(T.micNote) : '<span class="rz-kbd">Espace</span> pour parler, encore pour terminer · 90 s au plus · <span class="rz-kbd">R</span> réécouter · <span class="rz-kbd">T</span> traduire'));
-    return '<div class="rzv-dock">' + endBar
+    return '<div class="rzv-dock">' + endBar + modesHtml(false, p)
       + '<div class="rzv-mic' + (blocked ? ' is-blocked' : '') + '">' + R.h.rec(REC_KEY, { maxMs: REC_MAX_MS, label: 'Parler', againLabel: 'Parler', stt: { keep: true }, disabled: blocked, onStart: onRecStart, onResult: onVoice }) + '</div>'
       + '<div class="rzv-hint' + (busy || T.micNote ? ' is-warn' : '') + '">' + hint + '</div>'
       + '<div class="rzv-write"><input class="input" type="text" data-role="rz-tutor-text" data-focus-key="rzv-text" placeholder="Écrire plutôt… (Entrée envoie)" maxlength="1000" lang="en" autocomplete="off" value="' + esc(T.draft) + '">'
@@ -871,7 +1359,9 @@
       + '<section class="rz-card rzv-phr"><div class="rz-kicker">' + R.icon('spark') + ' Pour vous lancer</div><div class="rzv-phrases">'
       + sc.phrases.map(function (ph) { return '<button type="button" class="rz-phrase rzv-phrase" data-act="rz-tutor-phrase" data-text="' + esc(ph) + '" title="Écouter" lang="en">' + R.icon('speak') + esc(ph) + '</button>'; }).join('')
       + '</div></section>'
-      + '<section class="rz-card rzv-opts"><label class="rzv-toggle"><input type="checkbox" data-role="rz-tutor-voice"' + (tutorData().voiceOff ? '' : ' checked') + '><span>Lire les réponses à voix haute</span></label>'
+      + '<section class="rz-card rzv-opts">' + (liveMode()
+        ? '<div class="rzv-note">Mains libres : le micro reste ouvert pendant la conversation ; le son est transcrit sur ce poste (Whisper), seule la transcription part vers le tuteur. La sensibilité du micro se règle dans ⚙ › Révizator.</div>'
+        : '<label class="rzv-toggle"><input type="checkbox" data-role="rz-tutor-voice"' + (tutorData().voiceOff ? '' : ' checked') + '><span>Lire les réponses à voix haute</span></label>')
       + '<div class="rzv-note">Whisper peut lisser vos fautes : la transcription montre ce qu’il a compris ; les mots soulignés sont ceux dont il doute.</div>'
       + (avg ? '<div class="rzv-note">Temps de réponse moyen du tuteur : ' + esc(secs(avg)) + '.</div>' : '') + '</section>'
       + '</aside>';
@@ -883,16 +1373,20 @@
     var p = T.pending && T.pending.chatId === chat.id ? T.pending : null;
     var err = T.error && T.error.chatId === chat.id ? T.error : null;
     var turns = arr(chat.turns);
-    var stuck = !p && (err ? !err.end : (!turns.length || turns[turns.length - 1].role === 'user'));
+    var live = liveMode() && !(p && p.end) && !(err && err.end);
+    var stuck = !live && !p && (err ? !err.end : (!turns.length || turns[turns.length - 1].role === 'user'));
     var h = [];
     h.push('<div class="rzv-chathead"><button type="button" class="btn btn-ghost rzv-back" data-act="rz-tutor-back" title="Revenir aux scénarios (Échap) : la conversation reste ouverte">' + R.icon('back') + ' Scénarios</button>'
       + '<div class="rzv-chathead-t"><span class="rzv-ic rzv-hue-' + esc(sc.hue) + '">' + R.icon(sc.icon) + '</span><div><div class="rzv-chat-title">' + esc(chat.scenario.title) + '</div>'
       + '<div class="rzv-chat-sub">Avec ' + esc(nameOf(chat)) + ' · ' + esc(plural(n, 'réplique')) + ' · niveau visé ' + esc(chat.level || speakLevel()) + '</div></div></div>'
       + '<div class="rzv-chathead-r">' + (n ? '<button type="button" class="btn btn-secondary" data-act="rz-tutor-end"' + (p && p.end ? ' disabled' : '') + '>' + R.icon('check') + ' Terminer</button>'
         : '<button type="button" class="btn btn-secondary" data-act="rz-tutor-quit">Quitter</button>') + '</div></div>');
-    h.push('<div class="rzv-layout"><section class="rzv-chat">');
+    h.push('<div class="rzv-layout"><section class="rzv-chat' + (live ? ' is-live' : '') + '">');
+    if (live) h.push('<div class="rzv-live-slot" data-rzv-slot></div>');
     h.push('<div class="rzv-thread" aria-live="polite">' + turnsHtml(chat)
-      + (p && !p.end ? waitHtml(chat, p) : '') + (stuck ? stuckHtml(chat, err) : '') + '</div>');
+      + (p && !p.end ? waitHtml(chat, p) : '') + (stuck ? stuckHtml(chat, err) : '')
+      + (live && !p && !turns.length ? '<div class="rzv-live-empty">' + esc(nameOf(chat)) + ' ouvre la conversation. Répondez à voix haute quand vous voulez — et coupez-lui la parole si besoin : il s’arrête et vous écoute.</div>' : '')
+      + '</div>');
     h.push(dockHtml(chat, p, err));
     h.push('</section>' + asideHtml(chat) + '</div>');
     return h.join('');
@@ -1046,7 +1540,7 @@
   /* ══ Vue et carte d'accueil ════════════════════════════════════════════ */
 
   R.view('tutor', {
-    label: 'Tuteur', icon: 'chat', order: 30, title: 'Parler anglais avec le tuteur, tour par tour',
+    label: 'Tuteur', icon: 'chat', order: 30, title: 'Parler anglais avec le tuteur, à voix haute',
     render: function () {
       if (T.screen === 'chat' || T.screen === 'summary') {
         var c = current();
@@ -1065,6 +1559,14 @@
       return typo('<div class="rzv rzv-s-' + esc(s) + '">' + html + '</div>');
     },
     after: function (host) {
+      /* L'avatar mains libres : replacé dans sa place si le rendu l'a recréée, puis le moteur démarré au besoin. */
+      var slot = host.querySelector('[data-rzv-slot]');
+      if (slot) {
+        var st = stageEl();
+        if (st.parentNode !== slot) slot.appendChild(st);
+        ensureLive();
+        updateStage();
+      }
       if (T.toTop) { T.toTop = false; T.toEnd = false; window.scrollTo(0, 0); }
       /* Une nouvelle réplique : la page descend jusqu'au pupitre (jamais vers le haut). */
       if (T.toEnd) {
@@ -1089,12 +1591,18 @@
         if (c) { if (resumable(c)) { T.chatId = c.id; setScreen('chat'); T.toEnd = true; } else { T.openId = c.id; setScreen('open'); } }
       }
     },
-    onHide: function () { R.tts.stopAll(); },
+    onHide: function () { R.tts.stopAll(); pauseLive(); },
     keydown: function (e, el, role) {
+      var ov = window.OrganizatorVoiceOverlay;
+      if (ov && typeof ov.isOpen === 'function' && ov.isOpen()) return false;
       var typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
       if (role === 'rz-tutor-text' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendText(); return true; }
       if (e.ctrlKey || e.altKey || e.metaKey) return false;
       var s = T.screen;
+      if (s === 'chat' && liveMode() && !T.pending) {
+        var lc = current();
+        if (lc && !lc.summary && liveKeydown(e, el, typing, lc)) return true;
+      }
       if (e.key === 'Escape') {
         if (typing) { el.blur(); return true; }
         if (anyPlaying()) { R.tts.stopAll(); return true; }
@@ -1108,7 +1616,11 @@
       if (typing) return false;
       if (s === 'pick') {
         if (/^[1-9]$/.test(e.key) && SCENARIOS[+e.key - 1]) { e.preventDefault(); startChat(SCENARIOS[+e.key - 1].id); return true; }
-        if (e.key === 'Enter' && el && el.classList && el.classList.contains('rzv-sc')) { e.preventDefault(); startChat(el.getAttribute('data-id')); return true; }
+        if (e.key === 'Enter' && el && el.classList && el.classList.contains('rzv-sc')) {
+          e.preventDefault();
+          if (el.getAttribute('data-act') === 'rz-tutor-fr') openFrench(); else startChat(el.getAttribute('data-id'));
+          return true;
+        }
         return false;
       }
       if (s === 'chat') {
@@ -1139,6 +1651,41 @@
     }
   });
 
+  /* Raccourcis du chat en mains libres : Espace fait taire, M coupe le micro, R réécoute, T traduit,
+     Échap sort (le moteur s'arrête ; la conversation reste ouverte). */
+  function liveKeydown(e, el, typing, chat) {
+    if (e.key === 'Escape') {
+      if (typing) { el.blur(); return true; }
+      backToPick();
+      return true;
+    }
+    if (typing) return false;
+    var li = lastTutorIdx(chat);
+    if (e.key === ' ' || e.code === 'Space') {
+      e.preventDefault();
+      if (L.eng && L.chatId === chat.id) liveHush(); else resumeLive();
+      return true;
+    }
+    if (e.key === 'm' || e.key === 'M') { e.preventDefault(); liveMute(); return true; }
+    if ((e.key === 'r' || e.key === 'R') && li >= 0) { e.preventDefault(); if (liveOn(chat)) liveReplay(chat.turns[li].text); else speakTurn(chat, li); return true; }
+    if ((e.key === 't' || e.key === 'T') && li >= 0 && chat.turns[li].fr) {
+      e.preventDefault();
+      var k = chat.id + ':' + li;
+      T.fr[k] = !T.fr[k];
+      R.render();
+      return true;
+    }
+    return false;
+  }
+
+  function openFrench() {
+    var ov = window.OrganizatorVoiceOverlay;
+    if (!ov || typeof ov.open !== 'function') { R.toast('La conversation en français n’est pas disponible dans cette fenêtre.'); return; }
+    R.tts.stopAll();
+    pauseLive();
+    ov.open();
+  }
+
   function quickScenarios() {
     var ids = [];
     if (todayLesson()) ids.push('news');
@@ -1155,7 +1702,7 @@
     var last = talked()[0];
     var lesson = todayLesson();
     var h = ['<section class="rz-card rzv-home"><div class="rz-card-head"><span class="rz-card-title">Parler avec le tuteur</span>' + R.h.level(R.level('speak').band, 'Oral') + '</div>'];
-    h.push('<p class="rzv-p">Une conversation en anglais, à voix haute et tour par tour : il reformule discrètement vos phrases et vous relance. Bilan à la fin.</p>');
+    h.push('<p class="rzv-p">Une conversation en anglais, à voix haute' + (liveMode() ? ' et mains libres' : ' et tour par tour') + ' : il reformule discrètement vos phrases et vous relance. Bilan à la fin.</p>');
     if (rc) {
       h.push('<div class="rzv-home-resume">' + R.icon('chat') + '<span>En cours : <b>' + esc(rc.scenario.title) + '</b> · ' + esc(plural(userTurns(rc).length, 'réplique')) + '</span>'
         + '<button type="button" class="btn btn-primary" data-act="rz-tutor-resume" data-id="' + esc(rc.id) + '">Reprendre</button></div>');
@@ -1188,6 +1735,8 @@
   R.act('rz-tutor-resume', function (el) {
     var c = chatById(el.getAttribute('data-id'));
     if (!c) return;
+    if (L.chatId !== c.id) stopLive();
+    delete L.hold[c.id]; L.error = '';
     T.chatId = c.id; T.error = null; T.fr = {}; T.toEnd = true;
     setScreen('chat');
     warm(c);
@@ -1229,6 +1778,50 @@
   });
   R.act('rz-tutor-phrase', function (el) { sayText(el.getAttribute('data-text'), current() || chatById(T.openId)); });
   R.act('rz-tutor-cards', function (el) { addCards(chatById(el.getAttribute('data-id'))); });
+  R.act('rz-tutor-fr', function (el, e) { if (e && e.stopPropagation) e.stopPropagation(); openFrench(); });
+  R.act('rz-tutor-mode', function (el) { setLive(el.getAttribute('data-mode') === 'live'); });
+  R.act('rz-tutor-hush', liveHush);
+  R.act('rz-tutor-mute', liveMute);
+  R.act('rz-tutor-live-resume', resumeLive);
+  R.act('rz-tutor-live-notice', function () {
+    var a = noticeAction(currentNotice());
+    if (a) { try { a.run(); } catch (e) { R.toast('Impossible : ' + clean(e && e.message, 200)); } }
+  });
+  R.act('rz-tutor-replay', function (el) {
+    var c = current(), i = +el.getAttribute('data-i');
+    var t = c && c.turns[i];
+    if (t) { if (liveOn(c)) liveReplay(t.text); else speakTurn(c, i); }
+  });
+  R.act('rz-tutor-set-live', function () {
+    R.prefs.tutorLive = !(R.prefs.tutorLive !== false);
+    if (R.prefs.tutorLive === false) stopLive();
+    R.save();
+    R.render();
+  });
+  R.act('rz-tutor-set-sens', function (el) {
+    R.prefs.tutorSensitivity = R.clamp(Math.round(num(el.getAttribute('data-value'), 50)), 0, 100);
+    if (L.eng) try { L.eng.setOptions({ sensitivity: sensitivity() }); } catch (e) { /* moteur arrêté */ }
+    R.save();
+    R.render();
+  });
+
+  /* Réglages › Révizator : la section du tuteur. */
+  var SENS = [[25, 'Basse · pièce bruyante'], [50, 'Normale'], [75, 'Haute · voix douce']];
+  R.settingsSection({ id: 'tutor', order: 30, html: function () {
+    var app = window.organizatorApp;
+    var field = function (label, ctl) { return app && app.setFieldHtml ? app.setFieldHtml(label, ctl) : '<div class="set-field"><div class="set-field-label">' + esc(label) + '</div><div class="set-field-control">' + ctl + '</div></div>'; };
+    var on = R.prefs.tutorLive !== false;
+    var sw = app && app.switchHtml ? app.switchHtml(on, 'rz-tutor-set-live', 'Tuteur mains libres')
+      : '<button type="button" class="switch' + (on ? ' on' : '') + '" data-act="rz-tutor-set-live" role="switch" aria-checked="' + on + '" aria-label="Tuteur mains libres"></button>';
+    var sens = sensitivity();
+    var near = SENS.reduce(function (a, b) { return Math.abs(b[0] - sens) < Math.abs(a[0] - sens) ? b : a; });
+    return '<div class="set-card"><div class="set-card-head"><span class="set-card-title">Tuteur</span></div>'
+      + field('Tuteur mains libres', sw)
+      + '<div class="rz-set-help">Le tuteur écoute en continu, répond phrase par phrase et se tait dès que vous parlez. Désactivé : tour par tour (Espace pour parler, encore pour terminer). La bascule existe aussi dans la conversation.</div>'
+      + field('Sensibilité du micro', R.h.chips('tutorSensitivity', SENS.map(function (x) { return x[0]; }), near[0], SENS.map(function (x) { return x[1]; }), 'rz-tutor-set-sens'))
+      + '<div class="rz-set-help">Plus haute, il entend une voix douce ou lointaine, mais aussi davantage le bruit ambiant ; plus basse, il ignore le bruit, il faut parler plus franchement.</div>'
+      + '<div class="set-card-foot">La conversation en mains libres utilise le même Whisper que l’oral (ci-dessous) et le modèle « Tuteur » des agents.</div></div>';
+  } });
   R.act('rz-tutor-history', function () { R.tts.stopAll(); setScreen('history'); goTutor(); });
   R.act('rz-tutor-open', function (el) {
     var c = chatById(el.getAttribute('data-id'));
@@ -1247,6 +1840,9 @@
     R.save();
     R.render();
   });
+
+  /* Quitter la page Révizator : le moteur se tait et rend le micro. */
+  R.on('pagehide', function () { pauseLive(); });
 
   R.on('loaded', function () {
     flushPendingCards();

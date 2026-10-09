@@ -17,7 +17,7 @@
      R.shim(type, fn(p, emit)), R.fixture(kind, fn(params) | doc | 'revizator/fixtures/x.json')   simulation hors WebView2
      R.on(name, fn) → off, R.emit(name, payload)
        événements : 'loaded', 'saved', 'job' (avancement), 'jobDone' ({ kind, job, params, result, error }),
-       'tts' (événement hôte), 'view' (changement de vue)
+       'tts' (événement hôte), 'view' (changement de vue), 'pagehide' (on quitte la page Révizator)
    État et persistance
      R.data       sujet « en » de learning.json (objet vivant : le modifier puis R.save())
      R.prefs, R.profile   raccourcis vers R.data.prefs / R.data.profile
@@ -107,7 +107,7 @@
   var DEFAULT_PREFS = {
     lessonModel: 'sonnet', lessonEffort: 'medium', genModel: 'sonnet', genEffort: 'low', gradeModel: 'sonnet',
     tutorModel: 'haiku', cardModel: 'haiku', engine: 'auto', voiceUs: 'af_heart', voiceGb: 'bf_emma', speed: 1, retention: 0.9,
-    whisperModel: 'small'
+    whisperModel: 'small', tutorLive: true, tutorSensitivity: 50
   };
   var DEFAULT_PROFILE = { onboarded: false, goal: '', interests: '', startLevel: 'B1', weeklyGoal: 4, defaultMinutes: 20, explain: 'auto' };
 
@@ -1931,7 +1931,7 @@
       var v = VIEWS[R.viewId()];
       if (v && v.onShow) { try { v.onShow(R.ui.params); } catch (e) { /* vue fautive */ } }
     },
-    onHide: function () { R.tts.stopAll(); R.save(true); },
+    onHide: function () { R.tts.stopAll(); R.emit('pagehide'); R.save(true); },
     onFocus: function () { if (loaded && A.currentPage() === 'revizator') R.renderSoon(); }
   });
   if (!A) return;
