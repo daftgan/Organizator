@@ -56,7 +56,7 @@ public sealed class BridgeHost
     private readonly NewsMenu _learnNews;
     private readonly LearningAgent _learnAgent;
     private readonly TextToSpeech _tts;
-    private readonly StreamingAsr _asr;
+    private readonly LiveAsr _asr;
     private readonly PerfMonitor? _perf;
 
     // Dossier actuellement servi sous https://report.organizator/ (voir ArtifactReader.Locate).
@@ -136,7 +136,7 @@ public sealed class BridgeHost
         _tts = new TextToSpeech(store.DataDir, log, HostVersion, sherpa);
         _tts.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("tts", payload));
         // Transcription en direct : texte partiel et telechargements des modeles arrivent au fil de l'eau.
-        _asr = new StreamingAsr(store.DataDir, log, HostVersion, sherpa);
+        _asr = new LiveAsr(store.DataDir, log, HostVersion, sherpa);
         _asr.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("asr", payload));
         _core.WebMessageReceived += OnWebMessageReceived;
     }
@@ -364,7 +364,7 @@ public sealed class BridgeHost
         "speakScript" => await SpeakScriptTtsAsync(payload).ConfigureAwait(true),
         "cancelSpeak" => new JsonObject { ["cancelled"] = _tts.Cancel(Str(payload, "job")) },
         "ttsClearCache" => await Task.Run(_tts.ClearCache).ConfigureAwait(true),
-        // Transcription en direct (sherpa-onnx en flux) : modeles, sessions, paquets de PCM.
+        // Transcription en direct (sherpa-onnx, Parakeet en pseudo-flux) : modele, sessions, paquets de PCM.
         "asrStatus" => await Task.Run(_asr.Status).ConfigureAwait(true),
         "asrDownload" => await _asr.DownloadAsync(Str(payload, "lang")).ConfigureAwait(true),
         "asrRemove" => new JsonObject { ["removed"] = await _asr.RemoveAsync(Str(payload, "lang")).ConfigureAwait(true) },
@@ -756,14 +756,14 @@ public sealed class BridgeHost
 
     // --------------------------------------------------------- transcription en direct
 
-    /// <summary>Le modele de la langue se charge en arriere-plan (libere apres 10 min sans usage).</summary>
+    /// <summary>Le modele (unique, <c>lang</c> ignore) se charge en arriere-plan (libere apres 10 min sans usage).</summary>
     private JsonNode WarmAsr(JsonObject payload)
     {
         _asr.Warm(Str(payload, "lang"));
         return new JsonObject();
     }
 
-    /// <summary>Un paquet de ~100 ms (base64 d'Int16 LE mono 16 kHz) : decode sur le fil dedie, partiel par l'evenement <c>asr</c>.</summary>
+    /// <summary>Un paquet de ~100 ms (base64 d'Int16 LE mono 16 kHz) : ajoute a l'enonce ; partiel recalcule (~600 ms) par l'evenement <c>asr</c>.</summary>
     private JsonNode FeedAsr(JsonObject payload)
     {
         _asr.Feed(Str(payload, "session"), Str(payload, "pcm"));

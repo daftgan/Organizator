@@ -7,7 +7,6 @@ using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using SherpaOnnx;
@@ -15,75 +14,86 @@ using SherpaOnnx;
 namespace Organizator.Services;
 
 /// <summary>
-/// Un modele de reconnaissance en flux (Zipformer transducteur, int8) sur Hugging Face.
-/// <paramref name="Size"/> : taille approximative (Mo annonces avant le telechargement) ; la taille
-/// reelle est celle que le serveur annonce, retenue dans <c>manifest.json</c>.
+/// Le modele de transcription (transducteur NeMo, int8) sur Hugging Face. <paramref name="Langs"/> : langues
+/// annoncees a la page (le modele detecte lui-meme la langue). <paramref name="Size"/> : taille approximative
+/// (octets annonces avant le telechargement) ; la taille reelle est celle que le serveur annonce, retenue
+/// dans <c>manifest.json</c>.
 /// </summary>
-public sealed record AsrModel(string Id, string Label, string Repo, string Revision,
+public sealed record AsrModel(string Id, string Label, string[] Langs, string Repo, string Revision,
     string Encoder, string Decoder, string Joiner, string Tokens, long Size)
 {
     public IEnumerable<string> FileNames => [Tokens, Decoder, Joiner, Encoder];
 }
 
 /// <summary>
-/// Transcription en direct, en local, sur le processeur : sherpa-onnx 1.13.8 (<see cref="OnlineRecognizer"/>)
-/// et des modeles Zipformer transducteurs en flux (int8), anglais et francais. Rien ne sort du poste.
+/// Transcription en direct, en local, sur le processeur : sherpa-onnx 1.13.8 (<see cref="OfflineRecognizer"/>)
+/// et NVIDIA Parakeet TDT 0.6B v3 (int8, anglais, francais et autres langues europeennes, ponctuation et
+/// casse), en pseudo-flux. Rien ne sort du poste.
 ///
 /// <list type="bullet">
 /// <item><description>Le runtime natif est celui de la synthese vocale (<see cref="SherpaRuntime"/>,
-/// telecharge seul si les voix Kokoro ne sont pas installees). Les modeles sont pris fichier par
-/// fichier sur Hugging Face (<see cref="Models"/>, table a corriger si un depot change) sous
-/// <c>&lt;donnees&gt;\asr\&lt;id&gt;\</c> : <c>.part</c> puis renomme, taille annoncee par le serveur,
-/// SHA-256 calcule et journalise (aucune empreinte connue a comparer), puis <c>manifest.json</c>
-/// qui fait foi de l'installation.</description></item>
-/// <item><description>Une instance par langue, chargee a la demande (<c>asrWarm</c>, <c>asrStart</c>),
-/// liberee apres dix minutes sans usage ; une session dormante la recharge d'elle-meme.</description></item>
-/// <item><description>Tout le calcul (chargement, decodage, fin d'enonce) passe par un seul fil dedie,
-/// dans l'ordre d'arrivee : <c>asrFeed</c> rend la main aussitot, <c>asrEnd</c> attend que les paquets
-/// deja recus soient decodes.</description></item>
-/// <item><description>Pas d'endpoint sherpa : la VAD de la page decide de la fin d'enonce. Le texte
-/// partiel part par <see cref="Progress"/> des qu'il change, dix fois par seconde au plus :
-/// <c>{ session, phase: partial, text }</c> ; les telechargements : <c>{ phase: download, lang, received,
-/// total }</c>, <c>downloaded</c>, <c>download-failed { error }</c> ; un echec de decodage :
+/// telecharge seul si les voix Kokoro ne sont pas installees). Le modele est pris fichier par fichier sur
+/// Hugging Face (<see cref="Models"/>, table a corriger si le depot change) sous
+/// <c>&lt;donnees&gt;\asr\parakeet\</c> : <c>.part</c> puis renomme, taille annoncee par le serveur,
+/// SHA-256 calcule et journalise (aucune empreinte connue a comparer), controle de forme, puis
+/// <c>manifest.json</c> qui fait foi de l'installation. Les anciens modeles Zipformer
+/// (<c>asr\en</c>, <c>asr\fr</c>) sont effaces au demarrage.</description></item>
+/// <item><description>Une instance, chargee a la demande (<c>asrWarm</c>, <c>asrStart</c>), liberee apres
+/// dix minutes sans usage ; une session dormante la recharge d'elle-meme (son audio est garde).</description></item>
+/// <item><description>Pseudo-flux : chaque session garde l'audio de l'enonce en cours. Un partiel est le
+/// texte complet de l'enonce, recalcule sur un flux hors ligne neuf au plus toutes les
+/// <see cref="PartialEveryMs"/> ms, et seulement si au moins <see cref="MinNewAudioMs"/> ms d'audio neuf
+/// sont arrives ; un paquet suivi d'autres deja en file ne declenche rien (pas de partiel perime). Au-dela
+/// de <see cref="MaxUtteranceSeconds"/> s, la partie la plus ancienne (coupee au plus calme) est decodee une
+/// fois et figee. <c>asrEnd</c> decode le tout une derniere fois, avec un peu de silence en fin.</description></item>
+/// <item><description>Tout le calcul (chargement, decodage) passe par un seul fil dedie, dans l'ordre
+/// d'arrivee : deux decodages ne se chevauchent jamais ; <c>asrFeed</c> rend la main aussitot,
+/// <c>asrEnd</c> attend que les paquets deja recus soient pris. Evenements par <see cref="Progress"/> :
+/// <c>{ session, phase: partial, text }</c> ; telechargement : <c>{ phase: download, lang: parakeet,
+/// received, total }</c>, <c>downloaded</c>, <c>download-failed { error }</c> ; echec de decodage :
 /// <c>{ session, phase: error, error }</c>.</description></item>
 /// </list>
 /// </summary>
-public sealed class StreamingAsr : IDisposable
+public sealed class LiveAsr : IDisposable
 {
     public const int SampleRate = 16000;
 
     /// <summary>
-    /// Modeles proposes. Noms tires de la documentation de sherpa-onnx, NON verifies depuis la machine de
-    /// developpement (pas d'acces a Hugging Face) : a corriger ici seulement si un fichier est introuvable.
-    /// Tailles approximatives.
+    /// Modele propose (un seul, toutes langues). Noms tires de la documentation de sherpa-onnx, NON verifies
+    /// depuis la machine de developpement (pas d'acces a Hugging Face) : a corriger ici seulement si un
+    /// fichier est introuvable. Taille approximative.
     /// </summary>
     public static readonly IReadOnlyList<AsrModel> Models =
     [
-        new("en", "Anglais (Zipformer en flux, 2023-06-26)", "csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26", "main",
-            Encoder: "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
-            Decoder: "decoder-epoch-99-avg-1-chunk-16-left-128.onnx",
-            Joiner: "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+        new("parakeet", "Parakeet v3 (anglais, français…)", ["en", "fr"],
+            "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8", "main",
+            Encoder: "encoder.int8.onnx",
+            Decoder: "decoder.int8.onnx",
+            Joiner: "joiner.int8.onnx",
             Tokens: "tokens.txt",
-            Size: 71_000_000),
-        new("fr", "Français (Zipformer en flux, 2023-04-14)", "shaojieli/sherpa-onnx-streaming-zipformer-fr-2023-04-14", "main",
-            Encoder: "encoder-epoch-29-avg-9-with-averaged-model.int8.onnx",
-            Decoder: "decoder-epoch-29-avg-9-with-averaged-model.onnx",
-            Joiner: "joiner-epoch-29-avg-9-with-averaged-model.int8.onnx",
-            Tokens: "tokens.txt",
-            Size: 127_000_000),
+            Size: 650_000_000),
     ];
 
+    /// <summary>Anciens dossiers (Zipformer en flux, un par langue), effaces au demarrage.</summary>
+    public static readonly IReadOnlyList<string> ObsoleteDirs = ["en", "fr"];
+
     private const string ManifestName = "manifest.json";
-    private const long MaxFileSize = 600L * 1024 * 1024;
+    private const long MaxFileSize = 1200L * 1024 * 1024;
 
     private static readonly TimeSpan IdleRelease = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan IdleCheck = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan ProgressEvery = TimeSpan.FromMilliseconds(250);
 
-    /// <summary>Au plus un partiel par 100 ms et par session.</summary>
-    public const int PartialEveryMs = 100;
+    /// <summary>Intervalle minimal entre la fin d'un decodage partiel et le debut du suivant (par session).</summary>
+    public const int PartialEveryMs = 600;
 
-    /// <summary>Paquets en attente de decodage au-dela desquels la session est declaree en retard (~10 s d'audio).</summary>
+    /// <summary>Audio neuf requis pour recalculer un partiel.</summary>
+    public const int MinNewAudioMs = 300;
+
+    /// <summary>Audio decode d'un bloc au plus : au-dela, la partie la plus ancienne est figee.</summary>
+    public const int MaxUtteranceSeconds = 30;
+
+    /// <summary>Paquets en attente au-dela desquels la session est declaree en retard (~10 s d'audio).</summary>
     public const int MaxPending = 100;
 
     /// <summary>Paquet le plus long accepte (10 s d'Int16 mono a 16 kHz).</summary>
@@ -91,13 +101,14 @@ public sealed class StreamingAsr : IDisposable
 
     public const int MaxSessions = 4;
 
-    /// <summary>Silence ajoute avant <c>InputFinished</c> : le dernier bloc de l'encodeur (chunk 16, ~0,4 s) est vide.</summary>
-    private const int TailPaddingSamples = SampleRate * 45 / 100;
+    /// <summary>Silence ajoute avant le decodage final : evite que le dernier mot, colle a la fin, se perde.</summary>
+    public const int TailPaddingSamples = SampleRate * 3 / 10;
 
-    // Decodage en flux : deux fils suffisent (blocs de 0,3 s), le reste du CPU sert a l'avatar.
-    private static readonly int Threads = Math.Clamp(Environment.ProcessorCount / 4, 1, 2);
+    // Hors ligne : chaque decodage est un calcul d'un bloc, autant de fils que raisonnable sans affamer l'avatar.
+    public static readonly int Threads = Math.Clamp(Environment.ProcessorCount / 2, 2, 6);
 
-    private static readonly FieldInfo? RecognizerHandle = typeof(OnlineRecognizer).GetField("_handle", BindingFlags.Instance | BindingFlags.NonPublic);
+    private static readonly FieldInfo? RecognizerHandle = typeof(OfflineRecognizer).GetField("_handle", BindingFlags.Instance | BindingFlags.NonPublic);
+    private static readonly CultureInfo French = CultureInfo.GetCultureInfo("fr-FR");
 
     private readonly HostLog _log;
     private readonly SherpaRuntime _runtime;
@@ -115,13 +126,13 @@ public sealed class StreamingAsr : IDisposable
     private readonly Dictionary<string, Engine> _engines = new(StringComparer.Ordinal);
     private bool _disposed;
 
-    public StreamingAsr(string dataDir, HostLog log, string version, SherpaRuntime runtime)
+    public LiveAsr(string dataDir, HostLog log, string version, SherpaRuntime runtime)
         : this(dataDir, log, version, runtime, null)
     {
     }
 
     /// <param name="loader">Chargeur d'instance (essais) ; par defaut, sherpa-onnx.</param>
-    internal StreamingAsr(string dataDir, HostLog log, string version, SherpaRuntime runtime,
+    internal LiveAsr(string dataDir, HostLog log, string version, SherpaRuntime runtime,
         Func<AsrModel, string, IAsrRecognizer>? loader)
     {
         _log = log;
@@ -132,6 +143,7 @@ public sealed class StreamingAsr : IDisposable
         _runtime.RegisterUser("transcription en direct", () => Models.Any(Installed));
         _thread = new Thread(WorkLoop) { IsBackground = true, Name = "Organizator ASR" };
         _thread.Start();
+        Post(RemoveObsolete);
         _idle = new Timer(_ => Post(ReleaseIdle), null, IdleCheck, IdleCheck);
     }
 
@@ -140,23 +152,57 @@ public sealed class StreamingAsr : IDisposable
 
     public string Root => _root;
 
-    public static AsrModel FindModel(string? lang)
+    /// <summary>
+    /// Le modele : <paramref name="key"/> vide, l'id du modele ou une de ses langues (<c>en-US</c> → <c>en</c>).
+    /// <paramref name="strict"/> : une autre valeur est refusee (asrStart) ; sinon ignoree (telechargement,
+    /// suppression, prechargement : un seul modele).
+    /// </summary>
+    public static AsrModel FindModel(string? key, bool strict = true)
     {
-        var id = (lang ?? "").Trim().ToLowerInvariant();
-        if (id.Length > 2 && (id[2] == '-' || id[2] == '_'))
+        var id = (key ?? "").Trim().ToLowerInvariant();
+        if (id.Length == 0)
         {
-            id = id[..2];
+            return Models[0];
         }
 
-        return Models.FirstOrDefault(m => m.Id == id)
-            ?? throw new InvalidOperationException($"Langue de transcription en direct inconnue : {lang} (en ou fr attendu).");
+        var lang = id.Length > 2 && (id[2] == '-' || id[2] == '_') ? id[..2] : id;
+        var found = Models.FirstOrDefault(m => m.Id == id || m.Langs.Contains(lang));
+        if (found is not null || !strict)
+        {
+            return found ?? Models[0];
+        }
+
+        throw new InvalidOperationException($"Langue de transcription en direct non prise en charge : {key} ({string.Join(" ou ", Models.SelectMany(m => m.Langs).Distinct())} attendu).");
     }
 
     private string DirOf(AsrModel model) => Path.Combine(_root, model.Id);
 
+    /// <summary>Les anciens modeles Zipformer (un dossier par langue) ne servent plus : effaces, journalise.</summary>
+    private void RemoveObsolete()
+    {
+        foreach (var name in ObsoleteDirs)
+        {
+            var dir = Path.Combine(_root, name);
+            if (!Directory.Exists(dir))
+            {
+                continue;
+            }
+
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+                _log.Info($"ASR : ancien modele Zipformer {name} supprime ({dir})");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _log.Warn($"ASR : ancien modele Zipformer {name} non supprime : {ex.Message}");
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ etat
 
-    /// <summary><c>{ runtime: { downloaded, version, size }, models: [{ id, label, repo, size, downloaded, downloading, received, total }] }</c></summary>
+    /// <summary><c>{ runtime: { downloaded, version, size }, models: [{ id, label, langs, repo, size, downloaded, downloading, received, total }] }</c></summary>
     public JsonObject Status()
     {
         var models = new JsonArray();
@@ -174,6 +220,7 @@ public sealed class StreamingAsr : IDisposable
             {
                 ["id"] = model.Id,
                 ["label"] = model.Label,
+                ["langs"] = new JsonArray(model.Langs.Select(l => (JsonNode?)JsonValue.Create(l)).ToArray()),
                 ["repo"] = model.Repo,
                 ["size"] = manifest?.Size ?? model.Size,
                 ["downloaded"] = manifest is not null,
@@ -195,8 +242,8 @@ public sealed class StreamingAsr : IDisposable
         };
     }
 
-    /// <summary>Modele de la langue installe (manifeste conforme a la table, fichiers entiers) et runtime present.</summary>
-    public bool IsReady(string lang) => _runtime.Present && Installed(FindModel(lang));
+    /// <summary>Modele installe (manifeste conforme a la table, fichiers entiers) et runtime present.</summary>
+    public bool IsReady(string? lang = null) => _runtime.Present && Installed(FindModel(lang, strict: false));
 
     private bool Installed(AsrModel model) => ReadManifest(model) is not null;
 
@@ -259,14 +306,14 @@ public sealed class StreamingAsr : IDisposable
     }
 
     /// <summary>
-    /// Telecharge le modele d'une langue (et le runtime s'il manque) ; un seul telechargement par langue,
-    /// partage. Rend <c>{ ok: true }</c>, ou <c>{ ok: false, error }</c> (deja annonce par
-    /// <c>download-failed</c>) : la page retombe alors sur Whisper.
+    /// Telecharge le modele (et le runtime s'il manque) ; <paramref name="key"/> ignore (un seul modele).
+    /// Un seul telechargement a la fois, partage. Rend <c>{ ok: true }</c>, ou <c>{ ok: false, error }</c>
+    /// (deja annonce par <c>download-failed</c>) : la page retombe alors sur Whisper.
     /// </summary>
-    public async Task<JsonObject> DownloadAsync(string? lang)
+    public async Task<JsonObject> DownloadAsync(string? key)
     {
-        var model = FindModel(lang);
-        if (IsReady(model.Id))
+        var model = FindModel(key, strict: false);
+        if (_runtime.Present && Installed(model))
         {
             return new JsonObject { ["ok"] = true };
         }
@@ -427,12 +474,12 @@ public sealed class StreamingAsr : IDisposable
     }
 
     /// <summary>
-    /// Interrompt le telechargement de la langue, ou supprime son modele (sessions ouvertes : elles
-    /// echoueront au prochain paquet) ; le runtime part aussi si plus personne n'en a besoin.
+    /// Interrompt le telechargement, ou supprime le modele (<paramref name="key"/> ignore ; sessions
+    /// ouvertes : elles echoueront au prochain decodage) ; le runtime part aussi si plus personne n'en a besoin.
     /// </summary>
-    public async Task<bool> RemoveAsync(string? lang)
+    public async Task<bool> RemoveAsync(string? key)
     {
-        var model = FindModel(lang);
+        var model = FindModel(key, strict: false);
         Download? download;
         lock (_lock)
         {
@@ -460,7 +507,7 @@ public sealed class StreamingAsr : IDisposable
             return false;
         }
 
-        // L'instance et les flux se liberent sur le fil de decodage, avant l'effacement des fichiers.
+        // L'instance se libere sur le fil de decodage, avant l'effacement des fichiers.
         await RunAsync(() =>
         {
             ReleaseEngine(model.Id, "supprime");
@@ -483,15 +530,23 @@ public sealed class StreamingAsr : IDisposable
     {
         public required string Id { get; init; }
         public required AsrModel Model { get; init; }
-        public IAsrStream? Stream;
-        public readonly PartialThrottle Throttle = new(PartialEveryMs);
-        public int Generation;
-        public int Pending;
+        public required string Lang { get; init; }
+
+        // Fil de decodage seulement.
+        public readonly UtteranceAudio Audio = new(MaxUtteranceSeconds * SampleRate);
+        public readonly PartialCadence Cadence = new(PartialEveryMs, MinNewAudioMs * SampleRate / 1000);
+        public readonly List<string> Frozen = [];
+        public string Sent = "";
         public string? Error;
         public bool Closed;
+        public int Generation;
+        public int TickGeneration;
+        public Timer? Tick;
+
+        // Tout fil.
+        public int Pending;
+        public int Ending;
         public long LastUse = Environment.TickCount64;
-        public Timer? Flush;
-        public int FlushGeneration;
     }
 
     private sealed class Engine
@@ -500,11 +555,11 @@ public sealed class StreamingAsr : IDisposable
         public long LastUse = Environment.TickCount64;
     }
 
-    /// <summary>Charge l'instance de la langue en arriere-plan ; sans effet si le modele n'est pas installe.</summary>
-    public void Warm(string? lang)
+    /// <summary>Charge l'instance en arriere-plan ; sans effet si le modele n'est pas installe.</summary>
+    public void Warm(string? key)
     {
-        var model = FindModel(lang);
-        if (!IsReady(model.Id))
+        var model = FindModel(key, strict: false);
+        if (!_runtime.Present || !Installed(model))
         {
             return;
         }
@@ -523,13 +578,13 @@ public sealed class StreamingAsr : IDisposable
         });
     }
 
-    /// <summary>Ouvre une session : modele charge et flux pret, ou erreur lisible (la page retombe sur Whisper).</summary>
+    /// <summary>Ouvre une session : modele charge, ou erreur lisible (la page retombe sur Whisper).</summary>
     public async Task<string> StartAsync(string? lang)
     {
         var model = FindModel(lang);
         if (!Installed(model))
         {
-            throw new InvalidOperationException($"Le modèle de transcription en direct ({model.Id}) n'est pas téléchargé.");
+            throw new InvalidOperationException("Le modèle de transcription en direct (Parakeet) n'est pas téléchargé.");
         }
 
         if (!_runtime.Present)
@@ -537,13 +592,8 @@ public sealed class StreamingAsr : IDisposable
             throw new InvalidOperationException("Moteur de transcription absent : retéléchargez le modèle de transcription en direct.");
         }
 
-        var session = new Session { Id = Guid.NewGuid().ToString("N")[..12], Model = model };
-        await RunAsync(() =>
-        {
-            var engine = EngineFor(model);
-            session.Stream = engine.Recognizer.CreateStream();
-            return 0;
-        }).ConfigureAwait(false);
+        var session = new Session { Id = Guid.NewGuid().ToString("N")[..12], Model = model, Lang = (lang ?? "").Trim() };
+        await RunAsync(() => EngineFor(model)).ConfigureAwait(false);
 
         Session? evicted = null;
         lock (_lock)
@@ -568,7 +618,7 @@ public sealed class StreamingAsr : IDisposable
     }
 
     /// <summary>
-    /// Un paquet de PCM (base64 d'Int16 LE mono 16 kHz), decode sur le fil dedie ; rend la main aussitot.
+    /// Un paquet de PCM (base64 d'Int16 LE mono 16 kHz), ajoute a l'enonce sur le fil dedie ; rend la main aussitot.
     /// </summary>
     public void Feed(string? sessionId, string? pcm)
     {
@@ -589,23 +639,40 @@ public sealed class StreamingAsr : IDisposable
         Post(() => FeedOnThread(session, samples));
     }
 
-    /// <summary>Fin d'enonce : decode ce qui reste et rend le texte final ; la session repart a zero.</summary>
-    public Task<string> EndAsync(string? sessionId)
+    /// <summary>Fin d'enonce : decode le tout et rend le texte final ; la session repart a zero.</summary>
+    public async Task<string> EndAsync(string? sessionId)
     {
         var session = SessionOf(sessionId);
         Volatile.Write(ref session.LastUse, Environment.TickCount64);
-        return RunAsync(() => EndOnThread(session));
+        // Les partiels encore en file n'ont plus lieu d'etre : le final arrive.
+        Interlocked.Increment(ref session.Ending);
+        try
+        {
+            return await RunAsync(() => EndOnThread(session)).ConfigureAwait(false);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref session.Ending);
+        }
     }
 
     /// <summary>Abandonne l'enonce en cours (bruit) : l'audio recu est oublie.</summary>
-    public Task ResetAsync(string? sessionId)
+    public async Task ResetAsync(string? sessionId)
     {
         var session = SessionOf(sessionId);
-        return RunAsync(() =>
+        Interlocked.Increment(ref session.Ending);
+        try
         {
-            Restart(session);
-            return 0;
-        });
+            await RunAsync(() =>
+            {
+                Restart(session);
+                return 0;
+            }).ConfigureAwait(false);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref session.Ending);
+        }
     }
 
     /// <summary>Ferme la session (inconnue : sans effet).</summary>
@@ -620,6 +687,7 @@ public sealed class StreamingAsr : IDisposable
             }
         }
 
+        Interlocked.Increment(ref session.Ending);
         Post(() => Close(session));
     }
 
@@ -636,38 +704,107 @@ public sealed class StreamingAsr : IDisposable
         throw new InvalidOperationException("Session de transcription inconnue ou fermée : rouvrez-la (asrStart).");
     }
 
+    /// <summary>Essais : rend la main quand tout ce qui est en file est fait.</summary>
+    internal Task Idle() => RunAsync(() => 0);
+
     // --------------------------------------------------------- fil de decodage
 
     private void FeedOnThread(Session session, float[] samples)
     {
-        Interlocked.Decrement(ref session.Pending);
+        var more = Interlocked.Decrement(ref session.Pending) > 0;
         if (session.Closed || session.Error is not null)
+        {
+            return;
+        }
+
+        session.Audio.Append(samples);
+        try
+        {
+            // Enonce trop long : la partie la plus ancienne est decodee une fois et figee.
+            if (session.Audio.Count > session.Audio.Max)
+            {
+                FreezeOldest(session);
+            }
+
+            // Un paquet deja en file : il fera le partiel, celui-ci serait perime.
+            if (!more)
+            {
+                Partial(session);
+            }
+        }
+        catch (Exception ex)
+        {
+            Fail(session, ex);
+        }
+    }
+
+    /// <summary>
+    /// Recalcule le partiel s'il est du ; sinon, s'il y a assez d'audio neuf, le prevoit pour l'heure ou il le
+    /// sera (l'audio peut cesser d'arriver avant : la page attend le silence pour conclure).
+    /// </summary>
+    private void Partial(Session session)
+    {
+        if (Volatile.Read(ref session.Ending) > 0)
+        {
+            return;
+        }
+
+        var now = Environment.TickCount64;
+        if (!session.Cadence.Due(now, session.Audio.Count))
+        {
+            if (session.Cadence.HasNewAudio(session.Audio.Count))
+            {
+                session.TickGeneration = session.Generation;
+                session.Tick ??= new Timer(_ => Post(() => TickOnThread(session)), null, Timeout.Infinite, Timeout.Infinite);
+                session.Tick.Change(Math.Max(1, session.Cadence.DueIn(now)), Timeout.Infinite);
+            }
+
+            return;
+        }
+
+        var text = Join(session.Frozen, Transcribe(session, session.Audio.ToArray(), padding: 0));
+        session.Cadence.Decoded(session.Audio.Count, Environment.TickCount64);
+        if (text != session.Sent && Volatile.Read(ref session.Ending) == 0)
+        {
+            session.Sent = text;
+            Emit(new JsonObject { ["session"] = session.Id, ["phase"] = "partial", ["text"] = text });
+        }
+    }
+
+    private void TickOnThread(Session session)
+    {
+        // Enonce fini, abandonne ou session fermee depuis : plus rien a recalculer ; un paquet en file le fera.
+        if (session.Closed || session.Error is not null || session.TickGeneration != session.Generation || Volatile.Read(ref session.Pending) > 0)
         {
             return;
         }
 
         try
         {
-            var stream = StreamOf(session);
-            stream.Accept(samples);
-            var text = NormalizeText(stream.Decode(), session.Model.Id, final: false);
-            var now = Environment.TickCount64;
-            if (session.Throttle.Offer(text, now, out var emit))
-            {
-                EmitPartial(session, emit!);
-            }
-            else if (session.Throttle.HasPending)
-            {
-                ScheduleFlush(session, session.Throttle.DueIn(now));
-            }
+            Partial(session);
         }
         catch (Exception ex)
         {
-            session.Error = Readable(ex, "Transcription en direct impossible");
-            _log.Warn($"ASR : session {session.Id} : {session.Error}");
-            Emit(new JsonObject { ["session"] = session.Id, ["phase"] = "error", ["error"] = session.Error });
-            DropStream(session);
+            Fail(session, ex);
         }
+    }
+
+    private void Fail(Session session, Exception ex)
+    {
+        session.Error = Readable(ex, "Transcription en direct impossible");
+        _log.Warn($"ASR : session {session.Id} : {session.Error}");
+        Emit(new JsonObject { ["session"] = session.Id, ["phase"] = "error", ["error"] = session.Error });
+    }
+
+    private void FreezeOldest(Session session)
+    {
+        var cut = UtteranceAudio.QuietestCut(session.Audio, SampleRate);
+        var head = session.Audio.Take(cut);
+        var watch = Stopwatch.StartNew();
+        var text = Transcribe(session, head, padding: TailPaddingSamples);
+        session.Frozen.Add(text);
+        session.Cadence.Rebase(cut);
+        _log.Info(string.Create(French, $"ASR : enonce long, {cut / (double)SampleRate:0.0} s figees en {watch.ElapsedMilliseconds} ms"));
     }
 
     private string EndOnThread(Session session)
@@ -685,113 +822,61 @@ public sealed class StreamingAsr : IDisposable
 
         try
         {
-            var raw = session.Stream?.Finish() ?? "";
-            var text = NormalizeText(raw, session.Model.Id, final: true);
+            var audio = session.Audio.ToArray();
+            var seconds = (audio.Length + session.Cadence.FrozenSamples) / (double)SampleRate;
+            var watch = Stopwatch.StartNew();
+            var tail = audio.Length > 0 ? Transcribe(session, audio, TailPaddingSamples) : "";
+            var text = Join(session.Frozen, tail);
+            if (seconds > 0)
+            {
+                var frozen = session.Frozen.Count > 0 ? $" (+{session.Frozen.Count} bloc(s) fige(s))" : "";
+                _log.Info(string.Create(French, $"Parakeet : {seconds:0.0} s d'audio en {watch.ElapsedMilliseconds} ms{frozen}"));
+            }
+
             Restart(session);
             return text;
         }
         catch (Exception ex)
         {
-            DropStream(session);
-            session.Generation++;
-            session.Throttle.Reset();
+            Restart(session);
             var message = Readable(ex, "Transcription en direct impossible");
             _log.Warn($"ASR : fin d'enonce de la session {session.Id} : {message}");
             throw new InvalidOperationException(message);
         }
     }
 
-    /// <summary>Flux neuf (l'ancien, fini ou abandonne, est libere), compteur d'enonce avance.</summary>
-    private void Restart(Session session)
+    /// <summary>Enonce oublie : audio, partie figee, cadence, dernier partiel, erreur.</summary>
+    private static void Restart(Session session)
     {
-        DropStream(session);
         session.Generation++;
-        session.Throttle.Reset();
+        session.Tick?.Change(Timeout.Infinite, Timeout.Infinite);
+        session.Audio.Clear();
+        session.Frozen.Clear();
+        session.Cadence.Reset();
+        session.Sent = "";
         session.Error = null;
-        if (session.Closed)
-        {
-            return;
-        }
-
-        try
-        {
-            StreamOf(session);
-        }
-        catch (Exception ex)
-        {
-            // Le prochain paquet redira l'erreur.
-            _log.Warn($"ASR : session {session.Id} : flux non recree : {ex.Message}");
-        }
     }
 
-    private IAsrStream StreamOf(Session session)
+    /// <summary>Un decodage complet sur un flux neuf (un flux hors ligne ne se decode qu'une fois).</summary>
+    private string Transcribe(Session session, float[] audio, int padding)
     {
-        if (session.Stream is { } stream)
-        {
-            if (_engines.TryGetValue(session.Model.Id, out var loaded))
-            {
-                loaded.LastUse = Environment.TickCount64;
-            }
-
-            return stream;
-        }
-
-        // Session dormante (instance liberee) : rechargee d'elle-meme.
         var engine = EngineFor(session.Model);
-        session.Stream = engine.Recognizer.CreateStream();
-        return session.Stream;
-    }
+        engine.LastUse = Environment.TickCount64;
+        if (padding > 0)
+        {
+            Array.Resize(ref audio, audio.Length + padding);
+        }
 
-    private void DropStream(Session session)
-    {
-        var stream = session.Stream;
-        session.Stream = null;
-        try
-        {
-            stream?.Dispose();
-        }
-        catch (Exception ex)
-        {
-            _log.Warn($"ASR : liberation du flux {session.Id} : {ex.Message}");
-        }
+        return NormalizeText(engine.Recognizer.Transcribe(audio));
     }
 
     private void Close(Session session)
     {
         session.Closed = true;
-        session.Generation++;
-        session.Flush?.Dispose();
-        session.Flush = null;
-        DropStream(session);
+        Restart(session);
+        session.Tick?.Dispose();
+        session.Tick = null;
     }
-
-    private void ScheduleFlush(Session session, long dueMs)
-    {
-        session.FlushGeneration = session.Generation;
-        session.Flush ??= new Timer(_ => Post(() => FlushOnThread(session)), null, Timeout.Infinite, Timeout.Infinite);
-        session.Flush.Change(Math.Max(1, dueMs), Timeout.Infinite);
-    }
-
-    private void FlushOnThread(Session session)
-    {
-        // Enonce fini ou abandonne depuis : le partiel en attente est perime.
-        if (session.Closed || session.FlushGeneration != session.Generation)
-        {
-            return;
-        }
-
-        if (session.Throttle.Flush(Environment.TickCount64, out var text))
-        {
-            EmitPartial(session, text!);
-        }
-        else if (session.Throttle.HasPending)
-        {
-            ScheduleFlush(session, session.Throttle.DueIn(Environment.TickCount64));
-        }
-    }
-
-    private void EmitPartial(Session session, string text)
-        => Emit(new JsonObject { ["session"] = session.Id, ["phase"] = "partial", ["text"] = text });
 
     private Engine EngineFor(AsrModel model)
     {
@@ -804,7 +889,7 @@ public sealed class StreamingAsr : IDisposable
         var dir = DirOf(model);
         if (!Installed(model))
         {
-            throw new InvalidOperationException($"Le modèle de transcription en direct ({model.Id}) n'est pas téléchargé ou est incomplet : retéléchargez-le.");
+            throw new InvalidOperationException("Le modèle de transcription en direct (Parakeet) n'est pas téléchargé ou est incomplet : retéléchargez-le.");
         }
 
         var watch = Stopwatch.StartNew();
@@ -828,25 +913,12 @@ public sealed class StreamingAsr : IDisposable
         }
     }
 
-    /// <summary>Libere l'instance de la langue, et d'abord les flux des sessions qui s'en servent (rechargee au besoin).</summary>
+    /// <summary>Libere l'instance (rechargee au besoin ; les sessions gardent leur audio).</summary>
     private void ReleaseEngine(string id, string why)
     {
         if (!_engines.Remove(id, out var engine))
         {
             return;
-        }
-
-        Session[] sessions;
-        lock (_lock)
-        {
-            sessions = _sessions.Values.Where(s => s.Model.Id == id).ToArray();
-        }
-
-        foreach (var session in sessions)
-        {
-            DropStream(session);
-            session.Generation++;
-            session.Throttle.Reset();
         }
 
         try
@@ -935,6 +1007,7 @@ public sealed class StreamingAsr : IDisposable
 
         foreach (var session in sessions)
         {
+            Interlocked.Increment(ref session.Ending);
             Post(() => Close(session));
         }
 
@@ -966,30 +1039,29 @@ public sealed class StreamingAsr : IDisposable
         return SherpaRecognizer.Create(model, native, Threads);
     }
 
-    /// <summary>Le modele, avec des chemins deja verifies ; public pour les essais hors Windows.</summary>
+    /// <summary>Le modele, avec des chemins deja verifies ; interne pour les essais hors Windows.</summary>
     internal sealed class SherpaRecognizer : IAsrRecognizer
     {
-        private readonly OnlineRecognizer _recognizer;
+        private readonly OfflineRecognizer _recognizer;
 
-        private SherpaRecognizer(OnlineRecognizer recognizer) => _recognizer = recognizer;
+        private SherpaRecognizer(OfflineRecognizer recognizer) => _recognizer = recognizer;
 
         public static SherpaRecognizer Create(AsrModel model, string dir, int threads)
         {
-            var config = new OnlineRecognizerConfig();
+            var config = new OfflineRecognizerConfig();
             config.FeatConfig.SampleRate = SampleRate;
             config.FeatConfig.FeatureDim = 80;
             config.ModelConfig.Transducer.Encoder = Path.Combine(dir, model.Encoder);
             config.ModelConfig.Transducer.Decoder = Path.Combine(dir, model.Decoder);
             config.ModelConfig.Transducer.Joiner = Path.Combine(dir, model.Joiner);
             config.ModelConfig.Tokens = Path.Combine(dir, model.Tokens);
+            config.ModelConfig.ModelType = "nemo_transducer";
             config.ModelConfig.NumThreads = threads;
             config.ModelConfig.Provider = "cpu";
             config.ModelConfig.Debug = 0;
             config.DecodingMethod = "greedy_search";
-            // La VAD de la page decide de la fin d'enonce.
-            config.EnableEndpoint = 0;
 
-            var recognizer = new OnlineRecognizer(config);
+            var recognizer = new OfflineRecognizer(config);
             // Un reglage refuse laisse un objet sans pointeur natif : le moindre appel tuerait le processus.
             if (RecognizerHandle?.GetValue(recognizer) is HandleRef handle && handle.Handle == IntPtr.Zero)
             {
@@ -1001,9 +1073,7 @@ public sealed class StreamingAsr : IDisposable
             try
             {
                 // Le tout premier decodage coute plus cher (chauffe) : on le fait a blanc.
-                using var warm = result.CreateStream();
-                warm.Accept(new float[SampleRate / 2]);
-                warm.Finish();
+                result.Transcribe(new float[SampleRate / 2]);
             }
             catch
             {
@@ -1014,42 +1084,22 @@ public sealed class StreamingAsr : IDisposable
             return result;
         }
 
-        public IAsrStream CreateStream()
+        public string Transcribe(float[] samples)
         {
-            var stream = _recognizer.CreateStream();
-            if (stream.Handle == IntPtr.Zero)
+            var created = _recognizer.CreateStream();
+            if (created.Handle == IntPtr.Zero)
             {
+                GC.SuppressFinalize(created);
                 throw new InvalidOperationException("Flux de transcription impossible à créer.");
             }
 
-            return new SherpaStream(_recognizer, stream);
+            using var stream = created;
+            stream.AcceptWaveform(SampleRate, samples);
+            _recognizer.Decode(stream);
+            return stream.Result.Text ?? "";
         }
 
         public void Dispose() => _recognizer.Dispose();
-    }
-
-    private sealed class SherpaStream(OnlineRecognizer recognizer, OnlineStream stream) : IAsrStream
-    {
-        public void Accept(float[] samples) => stream.AcceptWaveform(SampleRate, samples);
-
-        public string Decode()
-        {
-            while (recognizer.IsReady(stream))
-            {
-                recognizer.Decode(stream);
-            }
-
-            return recognizer.GetResult(stream).Text ?? "";
-        }
-
-        public string Finish()
-        {
-            stream.AcceptWaveform(SampleRate, new float[TailPaddingSamples]);
-            stream.InputFinished();
-            return Decode();
-        }
-
-        public void Dispose() => stream.Dispose();
     }
 
     // ------------------------------------------------------------------ outils purs
@@ -1091,63 +1141,15 @@ public sealed class StreamingAsr : IDisposable
         return samples;
     }
 
-    private static readonly Dictionary<string, string> EnglishI = new(StringComparer.Ordinal)
-    {
-        ["i"] = "I", ["i'm"] = "I'm", ["i've"] = "I've", ["i'll"] = "I'll", ["i'd"] = "I'd",
-    };
-
     /// <summary>
-    /// Texte du modele → texte lisible : espaces resserres ; tout en MAJUSCULES (modeles anglais) →
-    /// minuscules ; en anglais, « i » → « I » ; premiere lettre en majuscule ; point final seulement
-    /// pour le texte final, s'il ne finit pas deja par une ponctuation.
+    /// Texte du modele → texte de l'enonce : espaces resserres, rien d'autre (Parakeet ponctue et met la
+    /// casse lui-meme).
     /// </summary>
-    public static string NormalizeText(string? raw, string lang, bool final)
-    {
-        var words = (raw ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        if (words.Length == 0)
-        {
-            return "";
-        }
+    public static string NormalizeText(string? raw)
+        => string.Join(' ', (raw ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
-        var text = string.Join(' ', words);
-        var letters = text.Where(char.IsLetter).ToArray();
-        if (letters.Length > 0 && letters.All(char.IsUpper))
-        {
-            text = text.ToLowerInvariant();
-        }
-
-        if (lang == "en")
-        {
-            var parts = text.Split(' ');
-            for (var i = 0; i < parts.Length; i++)
-            {
-                if (EnglishI.TryGetValue(parts[i], out var fixedWord))
-                {
-                    parts[i] = fixedWord;
-                }
-            }
-
-            text = string.Join(' ', parts);
-        }
-
-        var first = 0;
-        while (first < text.Length && !char.IsLetter(text[first]))
-        {
-            first++;
-        }
-
-        if (first < text.Length)
-        {
-            text = text[..first] + char.ToUpper(text[first], CultureInfo.InvariantCulture) + text[(first + 1)..];
-        }
-
-        if (final && !".!?…".Contains(text[^1]))
-        {
-            text += ".";
-        }
-
-        return text;
-    }
+    private static string Join(List<string> frozen, string tail)
+        => string.Join(' ', frozen.Append(tail).Where(t => t.Length > 0));
 
     /// <summary>
     /// Forme des fichiers, a defaut d'empreinte connue : <c>tokens.txt</c> en lignes « symbole rang »,
@@ -1226,7 +1228,7 @@ public sealed class StreamingAsr : IDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine("[Organizator] StreamingAsr.Progress : " + ex.Message);
+            Debug.WriteLine("[Organizator] LiveAsr.Progress : " + ex.Message);
         }
     }
 
@@ -1246,83 +1248,132 @@ public sealed class StreamingAsr : IDisposable
     }
 }
 
-/// <summary>Une instance de reconnaissance en flux (une langue).</summary>
+/// <summary>Le modele charge : un decodage complet d'un enonce (appels sur le fil de decodage seulement).</summary>
 internal interface IAsrRecognizer : IDisposable
 {
-    IAsrStream CreateStream();
-}
-
-/// <summary>Un enonce en cours : appels sur le fil de decodage seulement.</summary>
-internal interface IAsrStream : IDisposable
-{
-    void Accept(float[] samples);
-
-    /// <summary>Decode ce qui est pret ; rend le texte brut de l'enonce jusque-la.</summary>
-    string Decode();
-
-    /// <summary>Fin d'enonce : silence de fin, InputFinished, dernier decodage ; texte brut final.</summary>
-    string Finish();
+    /// <summary>Texte brut de l'audio (16 kHz mono, [-1, 1)), decode sur un flux neuf.</summary>
+    string Transcribe(float[] samples);
 }
 
 /// <summary>
-/// Limite les partiels : un texte change part aussitot si le dernier envoi date d'au moins
-/// <c>intervalMs</c>, sinon il attend (<see cref="HasPending"/>, <see cref="DueIn"/>, <see cref="Flush"/>) ;
-/// seul le plus recent compte. Un texte identique au dernier envoye ne repart pas.
+/// Cadence des partiels d'une session : un recalcul est du si au moins <c>minNewSamples</c> echantillons sont
+/// arrives depuis le dernier et si <c>everyMs</c> se sont ecoules depuis la fin du dernier decodage (le
+/// processeur reste libre entre deux).
 /// </summary>
-public sealed class PartialThrottle(int intervalMs)
+public sealed class PartialCadence(int everyMs, int minNewSamples)
 {
-    private string _sent = "";
-    private string? _pending;
-    private long _lastAt = long.MinValue / 2;
+    private long _lastEnd = long.MinValue / 2;
+    private int _decoded;
 
-    public bool HasPending => _pending is not null;
+    /// <summary>Echantillons figes (decodes une fois, retires du tampon) depuis le debut de l'enonce.</summary>
+    public long FrozenSamples { get; private set; }
 
-    public bool Offer(string text, long nowMs, out string? emit)
+    public bool Due(long nowMs, int samples) => HasNewAudio(samples) && nowMs - _lastEnd >= everyMs;
+
+    public bool HasNewAudio(int samples) => samples - _decoded >= minNewSamples;
+
+    /// <summary>Delai avant que l'intervalle soit ecoule (0 : deja).</summary>
+    public long DueIn(long nowMs) => Math.Max(0, _lastEnd + everyMs - nowMs);
+
+    public void Decoded(int samples, long endMs)
     {
-        emit = null;
-        if (text == _sent)
-        {
-            _pending = null;
-            return false;
-        }
-
-        if (nowMs - _lastAt >= intervalMs)
-        {
-            return Send(text, nowMs, out emit);
-        }
-
-        _pending = text;
-        return false;
+        _decoded = samples;
+        _lastEnd = endMs;
     }
 
-    public long DueIn(long nowMs) => Math.Max(0, _lastAt + intervalMs - nowMs);
-
-    public bool Flush(long nowMs, out string? emit)
+    /// <summary>Les <paramref name="removed"/> premiers echantillons ont ete figes et retires du tampon.</summary>
+    public void Rebase(int removed)
     {
-        emit = null;
-        if (_pending is null || nowMs - _lastAt < intervalMs)
-        {
-            return false;
-        }
-
-        var text = _pending;
-        _pending = null;
-        return text != _sent && Send(text, nowMs, out emit);
+        _decoded = Math.Max(0, _decoded - removed);
+        FrozenSamples += removed;
     }
 
     public void Reset()
     {
-        _sent = "";
-        _pending = null;
-        _lastAt = long.MinValue / 2;
+        _decoded = 0;
+        _lastEnd = long.MinValue / 2;
+        FrozenSamples = 0;
+    }
+}
+
+/// <summary>Audio de l'enonce en cours (tampon qui grandit, retrait par la tete).</summary>
+public sealed class UtteranceAudio(int max)
+{
+    private float[] _buffer = new float[16000];
+
+    /// <summary>Au-dela, la tete est figee.</summary>
+    public int Max { get; } = max;
+
+    public int Count { get; private set; }
+
+    public float this[int index] => _buffer[index];
+
+    public void Append(float[] samples)
+    {
+        if (Count + samples.Length > _buffer.Length)
+        {
+            Array.Resize(ref _buffer, Math.Max(_buffer.Length * 2, Count + samples.Length));
+        }
+
+        samples.CopyTo(_buffer, Count);
+        Count += samples.Length;
     }
 
-    private bool Send(string text, long nowMs, out string? emit)
+    public float[] ToArray() => _buffer.AsSpan(0, Count).ToArray();
+
+    /// <summary>Rend les <paramref name="count"/> premiers echantillons et les retire du tampon.</summary>
+    public float[] Take(int count)
     {
-        _sent = text;
-        _pending = null;
-        _lastAt = nowMs;
-        emit = text;
-        return true;
+        count = Math.Clamp(count, 0, Count);
+        var head = _buffer.AsSpan(0, count).ToArray();
+        _buffer.AsSpan(count, Count - count).CopyTo(_buffer);
+        Count -= count;
+        return head;
+    }
+
+    public void Clear()
+    {
+        Count = 0;
+        if (_buffer.Length > 16000 * 8)
+        {
+            // Un long enonce ne garde pas son tampon.
+            _buffer = new float[16000];
+        }
+    }
+
+    /// <summary>
+    /// Ou couper un enonce trop long : au milieu de la fenetre de 200 ms la plus calme (pas de 50 ms) entre la
+    /// moitie de <see cref="Max"/> et <see cref="Max"/> moins 5 s, pour ne pas trancher un mot ; a egalite, la
+    /// plus tardive.
+    /// </summary>
+    public static int QuietestCut(UtteranceAudio audio, int sampleRate)
+    {
+        var window = sampleRate / 5;
+        var step = sampleRate / 20;
+        var from = audio.Max / 2;
+        var to = Math.Min(audio.Count, audio.Max) - 5 * sampleRate - window;
+        if (to <= from)
+        {
+            return Math.Min(audio.Count, audio.Max / 2);
+        }
+
+        var best = from;
+        var bestEnergy = double.MaxValue;
+        for (var start = from; start <= to; start += step)
+        {
+            double energy = 0;
+            for (var i = start; i < start + window; i++)
+            {
+                energy += audio[i] * audio[i];
+            }
+
+            if (energy <= bestEnergy)
+            {
+                bestEnergy = energy;
+                best = start;
+            }
+        }
+
+        return best + window / 2;
     }
 }

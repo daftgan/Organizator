@@ -18,7 +18,7 @@ public sealed class SherpaHttpException(HttpStatusCode status, string message) :
 
 /// <summary>
 /// Runtime natif de sherpa-onnx 1.13.8, partage par la synthese vocale (<see cref="TextToSpeech"/>, Kokoro)
-/// et la transcription en direct (<see cref="StreamingAsr"/>).
+/// et la transcription en direct (<see cref="LiveAsr"/>).
 ///
 /// <list type="bullet">
 /// <item><description>Les deux DLL natives (onnxruntime 1.28.2 et sherpa-onnx-c-api, 21 Mo) sont extraites
