@@ -60,9 +60,9 @@
   var V = {
     open: false, root: null, lastFocus: null, eng: null,
     phase: 'starting', statusText: '', muted: false,
-    drawer: '', notice: null,
+    drawer: '', notice: null, notices: {},
     entry: null, history: [],
-    caption: '', captionDim: false, you: '',
+    caption: '', captionDim: false, you: '', youLive: false, youFinal: '',
     voices: null, voicesDefault: '', customModel: false,
     raf: 0, restartTimer: 0
   };
@@ -89,6 +89,148 @@
     return Math.round(bytes / 1048576) + ' Mo';
   }
 
+  /* ══ Transcription en direct : les modèles en flux (partagé avec le Tuteur) ══
+     L'état des modèles sherpa-onnx de l'hôte (`asrStatus`), leur téléchargement (`asrDownload`, progression
+     par l'évènement `asr`) et leur suppression (`asrRemove`). Les lignes de réglage (modelsHtml) portent
+     data-asr-models : chaque changement les réécrit sur place, où qu'elles soient (overlay, Réglages). */
+
+  var BARGE = [
+    { id: 'words', label: 'Quand je dis quelques mots', hint: 'conseillé' },
+    { id: 'voice', label: 'Dès que je parle', hint: '' },
+    { id: 'off', label: 'Jamais', hint: '' }
+  ];
+  var BARGE_HELP = {
+    words: 'L’interlocuteur baisse la voix dès qu’il vous entend, et ne s’arrête que si vous dites vraiment quelque chose : une toux, un bruit ou l’écho de sa propre voix ne le coupent pas.',
+    voice: 'Il se tait au premier son de votre voix : réactif, mais un bruit franc peut aussi le couper.',
+    off: 'Il finit toujours sa phrase ; Espace (ou « Faire taire ») le coupe quand même.'
+  };
+  var ASR_LABELS = { en: 'Anglais', fr: 'Français' };
+
+  var ASR = { st: null, asked: false, failed: '', dl: {}, err: {}, subs: [] };
+
+  function asrNotify() {
+    var html = asrModelsInner();
+    Array.prototype.forEach.call(document.querySelectorAll('[data-asr-models]'), function (el) {
+      if (el.getAttribute('data-html') !== html) { el.innerHTML = html; el.setAttribute('data-html', html); }
+    });
+    ASR.subs.slice().forEach(function (fn) { try { fn(ASR.st); } catch (e) { /* abonné fautif */ } });
+  }
+
+  function asrRefresh() {
+    ASR.asked = true;
+    /* Par le moteur quand il sait le faire : un seul état, partagé avec ses avis. */
+    var p = typeof OV.asrStatus === 'function' ? OV.asrStatus(true).then(function (r) { if (!r) throw new Error('indisponible'); return r; })
+      : bridge.call('asrStatus', {}, 15000);
+    return p.then(function (r) {
+      ASR.st = r || { models: [] };
+      ASR.failed = '';
+      (ASR.st.models || []).forEach(function (m) {
+        if (m.downloading && !ASR.dl[m.id]) ASR.dl[m.id] = { received: m.received || 0, total: m.total || m.size || 0 };
+        if (!m.downloading && ASR.dl[m.id] && ASR.dl[m.id].done) delete ASR.dl[m.id];
+      });
+      asrNotify();
+      return ASR.st;
+    }, function (e) {
+      ASR.failed = (e && e.message) || 'indisponible';
+      asrNotify();
+      return null;
+    });
+  }
+
+  function asrModels() {
+    var list = (ASR.st && ASR.st.models) || [];
+    return ['en', 'fr'].map(function (id) {
+      var m = list.filter(function (x) { return x && x.id === id; })[0];
+      return m ? m : null;
+    }).filter(Boolean);
+  }
+
+  function asrModel(lang) { return asrModels().filter(function (m) { return m.id === lang; })[0] || null; }
+
+  function asrDownload(lang) {
+    if (ASR.dl[lang] && !ASR.dl[lang].done) return Promise.resolve(false);
+    var m = asrModel(lang);
+    ASR.dl[lang] = { received: 0, total: (m && m.size) || 0 };
+    delete ASR.err[lang];
+    asrNotify();
+    var p = typeof OV.downloadAsr === 'function' ? OV.downloadAsr(lang) : bridge.call('asrDownload', { lang: lang }, 3600000);
+    return p.then(function (r) {
+      /* L'hôte rend { ok: false, error } plutôt qu'une exception (404 : « modèle introuvable sur Hugging Face : … »). */
+      if (r && r.ok === false) throw new Error(r.error || 'téléchargement impossible');
+      if (ASR.err[lang]) { delete ASR.dl[lang]; return asrRefresh().then(function () { return false; }); }
+      delete ASR.dl[lang];
+      return asrRefresh().then(function () { return true; });
+    }, function (e) {
+      delete ASR.dl[lang];
+      ASR.err[lang] = (e && e.message) || 'téléchargement impossible';
+      asrNotify();
+      return false;
+    });
+  }
+
+  function asrRemove(lang) {
+    return bridge.call('asrRemove', { lang: lang }, 30000).then(function () {
+      delete ASR.err[lang];
+      return asrRefresh();
+    }, function (e) {
+      app.toast('Suppression impossible : ' + ((e && e.message) || 'erreur inconnue'));
+    });
+  }
+
+  function asrPct(d) { return d && d.total ? clamp(Math.round(d.received / d.total * 100), 0, 100) : 0; }
+
+  function asrModelsInner() {
+    if (!ASR.st && !ASR.failed) return '<div class="asr-note">Lecture de l’état des modèles…</div>';
+    if (ASR.failed) return '<div class="asr-note">Transcription en direct indisponible dans cette fenêtre : Whisper transcrit chaque phrase quand vous vous taisez.</div>';
+    var models = asrModels();
+    if (!models.length) return '<div class="asr-note">Aucun modèle de transcription en direct proposé par l’application.</div>';
+    var rows = models.map(function (m) {
+      var d = ASR.dl[m.id], err = ASR.err[m.id];
+      var name = ASR_LABELS[m.id] || m.label || m.id;
+      var state;
+      if (d) {
+        var pct = asrPct(d);
+        state = '<span class="asr-prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-label="Téléchargement du modèle ' + esc(name.toLowerCase()) + '"><i style="width:' + pct + '%"></i></span>'
+          + '<span class="wm-state">' + (d.total ? pct + ' %' : 'Téléchargement…') + '</span>';
+      } else if (m.downloaded) {
+        state = '<span class="wm-state is-ok">✓ Prêt</span>'
+          + '<button type="button" class="btn btn-ghost wm-btn" data-act="asr-remove" data-lang="' + esc(m.id) + '" title="Libérer ' + esc(fmtSize(m.size)) + ' sur le disque">Supprimer</button>';
+      } else {
+        state = '<button type="button" class="btn btn-secondary wm-btn" data-act="asr-download" data-lang="' + esc(m.id) + '">Télécharger</button>';
+      }
+      return '<div class="wm-row asr-row" data-lang="' + esc(m.id) + '"><span class="wm-text"><span class="wm-name">' + esc(name)
+        + (m.size ? ' <span class="wm-size">' + esc(fmtSize(m.size)) + '</span>' : '') + '</span>'
+        + '<span class="wm-note">' + (err ? '<span class="asr-err">Échec : ' + esc(err) + '</span>'
+          : (m.downloaded ? 'Vos phrases s’écrivent pendant que vous parlez.' : (d ? 'Téléchargement en cours ; vous pouvez continuer à parler (Whisper prend le relais).' : 'Pas encore sur ce poste : Whisper transcrit à la fin de chaque phrase.'))) + '</span></span>'
+        + '<span class="wm-side">' + state + '</span></div>';
+    }).join('');
+    var rt = ASR.st.runtime;
+    return rows + (rt && rt.downloaded === false ? '<div class="asr-note">Le moteur de reconnaissance (sherpa-onnx) se télécharge avec le premier modèle.</div>' : '');
+  }
+
+  /* Les lignes de modèles, à placer dans un réglage ; l'état est demandé à l'hôte à la première vue. */
+  function asrModelsHtml() {
+    if (!ASR.asked) setTimeout(asrRefresh, 0);
+    var html = asrModelsInner();
+    return '<div class="asr-models" data-asr-models data-html="' + esc(html) + '">' + html + '</div>';
+  }
+
+  bridge.on('asr', function (ev) {
+    if (!ev || ev.session || !ev.lang) return;
+    if (ev.phase === 'download') {
+      ASR.dl[ev.lang] = { received: Number(ev.received) || 0, total: Number(ev.total) || (ASR.dl[ev.lang] && ASR.dl[ev.lang].total) || 0 };
+      delete ASR.err[ev.lang];
+      asrNotify();
+    } else if (ev.phase === 'downloaded') {
+      delete ASR.dl[ev.lang];
+      asrRefresh().then(function () { asrReady(ev.lang); });
+    } else if (ev.phase === 'download-failed') {
+      delete ASR.dl[ev.lang];
+      ASR.err[ev.lang] = ev.error || 'téléchargement impossible';
+      asrNotify();
+    }
+  });
+
   /* Les réglages de la conversation, bornés : l'hôte peut être plus ancien que la page. */
   function cfg() {
     var s = S();
@@ -102,10 +244,19 @@
       instructions: String(s.voiceInstructions || ''),
       web: s.voiceWeb !== false,
       whisperModel: String(s.voiceWhisperModel || 'base'),
-      sensitivity: clamp(s.voiceSensitivity == null ? 50 : parseInt(s.voiceSensitivity, 10) || 0, 0, 100),
+      sensitivity: clamp(s.voiceSensitivity == null ? 40 : parseInt(s.voiceSensitivity, 10) || 0, 0, 100),
+      bargeIn: bargeOf(s.voiceBargeIn != null ? s.voiceBargeIn : storedBarge()),
       language: s.voiceTopic === 'anglais' ? 'en' : (s.whisperLanguage || 'fr')
     };
   }
+
+  function bargeOf(v) { return BARGE.some(function (b) { return b.id === v; }) ? v : 'words'; }
+
+  /* « Couper la parole » n'existe pas dans les réglages de l'hôte (saveSettings n'envoie que les champs qu'il
+     connaît) : gardé dans les réglages de la page et, pour survivre au redémarrage, dans le stockage local. */
+  var BARGE_KEY = 'organizator.voice.bargeIn';
+  function storedBarge() { try { return localStorage.getItem(BARGE_KEY); } catch (e) { return null; } }
+  function storeBarge(v) { try { localStorage.setItem(BARGE_KEY, v); } catch (e) { /* stockage refusé */ } }
 
   function setSettings(patch) { app.setSettings(patch); }
 
@@ -115,7 +266,7 @@
   function engineSettings(c) {
     var en = c.topic === 'anglais';
     return {
-      language: c.language, whisperModel: c.whisperModel, sensitivity: c.sensitivity,
+      language: c.language, whisperModel: c.whisperModel, sensitivity: c.sensitivity, bargeIn: c.bargeIn, liveAsr: true,
       tts: { kokoroVoice: en ? KOKORO_EN.voice : '', accent: en ? KOKORO_EN.accent : '', speed: 1, sapiVoice: c.voice, sapiRate: c.rate },
       conversation: {
         start: { model: c.model, effort: c.effort, persona: c.persona, topic: c.topic, instructions: c.instructions, web: c.web },
@@ -127,19 +278,30 @@
 
   /* ══ Ouverture et fermeture ═══════════════════════════════════════════ */
 
+  /* Sensibilité recalibrée par le moteur (défaut 40) : l'ancien défaut 50 de l'hôte suit, une seule fois. */
+  var SENS_KEY = 'organizator.voice.sensV';
+  function migrateSensitivity() {
+    try {
+      if (localStorage.getItem(SENS_KEY)) return;
+      localStorage.setItem(SENS_KEY, '2');
+    } catch (e) { return; }
+    if (S().voiceSensitivity == null || +S().voiceSensitivity === 50) setSettings({ voiceSensitivity: 40 });
+  }
+
   function openVoice() {
     if (V.open) return;
+    migrateSensitivity();
     V.open = true;
     V.lastFocus = document.activeElement;
-    V.phase = 'starting'; V.statusText = ''; V.muted = false; V.drawer = ''; V.notice = null;
-    V.history = []; V.entry = null; V.caption = ''; V.captionDim = false; V.you = '';
+    V.phase = 'starting'; V.statusText = ''; V.muted = false; V.drawer = ''; V.notice = null; V.notices = {};
+    V.history = []; V.entry = null; V.caption = ''; V.captionDim = false; V.you = ''; V.youLive = false; V.youFinal = '';
     buildDom();
     document.documentElement.classList.add('vc-open');
     window.addEventListener('keydown', onKey, true);
     V.eng = OV.create(Object.assign(engineSettings(cfg()), {
       container: q('.vc-avatar'), avatar: {},
       onPhase: onPhase, onSentence: onSentence, onReply: onReply, onReplyDone: onReplyDone,
-      onUserUtterance: onUserUtterance, onNotice: onNotice, onError: onError
+      onUserUtterance: onUserUtterance, onPartial: onPartial, onNotice: onNotice, onError: onError
     }));
     loadVoices();
     startConversation(false);
@@ -164,7 +326,7 @@
   function startConversation(restart) {
     if (!V.eng) return;
     var c = cfg();
-    V.entry = null; V.caption = ''; V.you = '';
+    V.entry = null; V.caption = ''; V.you = ''; V.youLive = false; V.youFinal = '';
     if (restart) V.history.push({ role: 'sep', text: 'Nouvelle conversation · ' + topicOf(c.topic).label });
     V.eng.setOptions(engineSettings(c));
     V.eng.start();
@@ -207,24 +369,47 @@
     renderTexts(); renderHistory(); renderControls();
   }
 
+  /* Ce que dit l'utilisateur, en direct (transcription en flux) : le sous-titre « Vous » se remplit, puis
+     se fige à l'envoi (onUserUtterance) ; effacé (bruit écarté), il revient à la dernière phrase envoyée. */
+  function onPartial(text) {
+    if (!V.open) return;
+    text = String(text || '').replace(/\s+/g, ' ').trim();
+    V.youLive = !!text;
+    V.you = text || V.youFinal;
+    renderTexts();
+  }
+
   function onUserUtterance(text) {
-    V.you = text;
+    V.you = V.youFinal = text;
+    V.youLive = false;
     V.history.push({ role: 'user', text: text });
     renderTexts(); renderHistory();
     return true;
   }
 
+  /* Les avis du moteur, par groupe : le plus important est affiché (l'invitation à télécharger le modèle
+     en direct, non bloquante, passe après le micro, Whisper et la conversation). */
+  var NOTICE_ORDER = ['mic', 'whisper', 'conversation', 'tts', 'asr'];
+  function topNotice() {
+    var k = Object.keys(V.notices).filter(function (g) { return V.notices[g]; });
+    k.sort(function (a, b) { return (NOTICE_ORDER.indexOf(a) + 1 || 4.5) - (NOTICE_ORDER.indexOf(b) + 1 || 4.5); });
+    return k.length ? V.notices[k[0]] : null;
+  }
+
   function onNotice(n, info) {
     if (!n) {
-      if (V.notice && V.notice.group === (info && info.kind)) { V.notice = null; renderNotice(); }
-      if (info && info.kind === 'whisper') syncWhisper();
+      var g0 = info && info.kind;
+      if (g0 && V.notices[g0]) { delete V.notices[g0]; V.notice = topNotice(); renderNotice(); }
+      if (g0 === 'whisper') syncWhisper();
+      if (g0 === 'asr') asrRefresh();
       return;
     }
     if (n.kind === 'whisper-unknown') n = Object.assign({}, n, { text: n.text.replace(/\.$/, '') + ' : choisissez-en un dans ⚙.' });
     var flash = n.flash;
-    V.notice = n;
+    V.notices[n.group || n.kind || 'other'] = n;
+    V.notice = topNotice();
     renderNotice();
-    if (flash) flashNotice();
+    if (flash && V.notice === n) flashNotice();
     if (n.group === 'whisper' && V.drawer === 'settings') renderSettings();
   }
 
@@ -305,6 +490,7 @@
     var you = q('.vc-you');
     if (you) {
       you.hidden = !V.you;
+      you.classList.toggle('live', V.youLive);
       var t = you.querySelector('.vc-you-text');
       if (t) t.textContent = V.you;
     }
@@ -402,7 +588,7 @@
       + '<div class="vc-avatar"></div>'
       + '<div class="vc-status"><span class="vc-status-dot"></span><span class="vc-status-text"></span></div>'
       + '<p class="vc-caption" aria-live="polite"></p>'
-      + '<p class="vc-you" aria-live="polite" hidden><span class="vc-you-label">Vous</span><span class="vc-you-text"></span></p>'
+      + '<p class="vc-you" aria-live="polite" hidden><span class="vc-you-label">Vous</span><span class="vc-you-text"></span><span class="vc-you-dots" aria-hidden="true"><i></i><i></i><i></i></span></p>'
       + '<div class="vc-notice" role="alert" hidden></div>'
       + '<div class="vc-controls">'
       + '<button type="button" class="vc-ctl" data-act="voice-mute" aria-pressed="false"></button>'
@@ -506,6 +692,17 @@
           + (m.id === 'base' ? ' — conseillé, le plus rapide' : '') + (m.downloaded ? '' : ' · à télécharger (' + fmtSize(m.size) + ')') + '</option>';
       }).join('') + '</select>',
       'Distinct de celui de la dictée (' + esc(s.whisperModel || 'small') + ') : ici, chaque phrase doit être transcrite en moins d’une seconde.', 'vc-whisper'));
+
+    h.push(fieldHtml('Transcription en direct', asrModelsHtml(),
+      'Avec le modèle de la langue (' + (c.language === 'en' ? 'anglais' : 'français') + ' pour ce sujet), votre phrase s’écrit pendant que vous parlez et part dès que vous vous taisez. Tout reste sur ce poste.'));
+
+    h.push('<div class="vc-field"><div class="vc-label" id="vc-barge-l">Couper la parole</div>'
+      + '<div class="vc-seg" role="radiogroup" aria-labelledby="vc-barge-l">' + BARGE.map(function (b) {
+        var on = b.id === c.bargeIn;
+        return '<button type="button" class="vc-seg-btn' + (on ? ' on' : '') + '" data-act="voice-barge" data-value="' + b.id + '" role="radio" aria-checked="' + (on ? 'true' : 'false') + '">'
+          + esc(b.label) + (b.hint ? ' <span class="vc-seg-hint">' + esc(b.hint) + '</span>' : '') + '</button>';
+      }).join('') + '</div>'
+      + '<div class="vc-help" data-out="barge">' + esc(BARGE_HELP[c.bargeIn]) + '</div></div>');
 
     h.push(fieldHtml('Sensibilité du micro',
       '<div class="vc-row"><input class="vc-range" id="vc-sens" type="range" min="0" max="100" step="1" data-voice="sensitivity" value="' + c.sensitivity + '">'
@@ -641,11 +838,42 @@
       restartSoon();
     },
     'voice-listen': testVoice,
+    'voice-barge': function (el) {
+      var v = bargeOf(el.getAttribute('data-value'));
+      setSettings({ voiceBargeIn: v });
+      storeBarge(v);
+      if (V.eng) V.eng.setOptions({ bargeIn: v });
+      Array.prototype.forEach.call(V.root.querySelectorAll('[data-act="voice-barge"]'), function (b) {
+        var on = b.getAttribute('data-value') === v;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+      });
+      var help = q('[data-out="barge"]');
+      if (help) help.textContent = BARGE_HELP[v];
+    },
+    'asr-download': function (el) {
+      var lang = el.getAttribute('data-lang');
+      asrDownload(lang).then(function (ok) { if (ok) asrReady(lang); });
+    },
+    'asr-remove': function (el) { asrRemove(el.getAttribute('data-lang')); },
     'voice-notice-act': function () {
       var n = V.notice;
       if (n && n.action && typeof n.action.run === 'function') n.action.run();
     }
   });
+
+  /* Un modèle en flux vient d'arriver (les moteurs ouverts le reprennent d'eux-mêmes) : les abonnés le savent. */
+  function asrReady(lang) {
+    ASR.subs.slice().forEach(function (fn) { try { fn(ASR.st, lang); } catch (err) { /* abonné fautif */ } });
+  }
+
+  /* Partagé avec le Tuteur (revizator/tutor.js) : les modèles en flux et le choix « Couper la parole ». */
+  window.OrganizatorLiveAsr = {
+    modelsHtml: asrModelsHtml, refresh: asrRefresh, download: asrDownload, remove: asrRemove,
+    status: function () { return ASR.st; }, model: asrModel,
+    bargeOptions: BARGE, bargeHelp: BARGE_HELP, barge: bargeOf,
+    subscribe: function (fn) { ASR.subs.push(fn); return function () { var i = ASR.subs.indexOf(fn); if (i >= 0) ASR.subs.splice(i, 1); }; }
+  };
 
   window.OrganizatorVoiceOverlay = {
     open: function () { app.onReady(openVoice); },

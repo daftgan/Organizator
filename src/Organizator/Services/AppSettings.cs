@@ -113,7 +113,10 @@ public sealed class AppSettings
     [JsonPropertyName("voiceWhisperModel")] public string VoiceWhisperModel { get; set; } = "base";
 
     /// <summary>Conversation vocale : sensibilite de la detection de parole, de 0 a 100.</summary>
-    [JsonPropertyName("voiceSensitivity")] public int VoiceSensitivity { get; set; } = 50;
+    [JsonPropertyName("voiceSensitivity")] public int VoiceSensitivity { get; set; } = 40;
+
+    /// <summary>Conversation vocale : quand couper la parole a l'avatar (words = quand on dit quelques mots, voice = des qu'on parle, off = jamais).</summary>
+    [JsonPropertyName("voiceBargeIn")] public string VoiceBargeIn { get; set; } = "words";
 
     [JsonPropertyName("window")] public WindowPlacement? Window { get; set; }
 
@@ -155,6 +158,7 @@ public sealed class AppSettings
         VoiceWeb = VoiceWeb,
         VoiceWhisperModel = VoiceWhisperModel,
         VoiceSensitivity = VoiceSensitivity,
+        VoiceBargeIn = VoiceBargeIn,
         Window = Window is null
             ? null
             : new WindowPlacement
@@ -234,5 +238,6 @@ public sealed class AppSettings
             ? WhisperTranscriber.SanitizeModel(VoiceWhisperModel)
             : "base";
         VoiceSensitivity = Math.Clamp(VoiceSensitivity, 0, 100);
+        VoiceBargeIn = VoiceBargeIn is "voice" or "off" ? VoiceBargeIn : "words";
     }
 }

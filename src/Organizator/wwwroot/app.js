@@ -45,7 +45,7 @@
     /* Mode Conversation (voice.js) : interlocuteur à voix et avatar. Base pour Whisper : chaque phrase
        dite doit être transcrite en moins d'une seconde. */
     voiceModel: 'sonnet', voiceEffort: 'low', voiceVoice: '', voiceRate: 1, voicePersona: 'Alma', voiceTopic: 'libre',
-    voiceInstructions: '', voiceWeb: true, voiceWhisperModel: 'base', voiceSensitivity: 50
+    voiceInstructions: '', voiceWeb: true, voiceWhisperModel: 'base', voiceSensitivity: 40, voiceBargeIn: 'words'
   };
 
   /* Agents disponibles. `short` sert dans les listes, `example` dans le champ de modèle libre. */
@@ -335,7 +335,8 @@
       voiceModel: S.settings.voiceModel, voiceEffort: S.settings.voiceEffort, voiceVoice: S.settings.voiceVoice,
       voiceRate: S.settings.voiceRate, voicePersona: S.settings.voicePersona, voiceTopic: S.settings.voiceTopic,
       voiceInstructions: S.settings.voiceInstructions, voiceWeb: S.settings.voiceWeb,
-      voiceWhisperModel: S.settings.voiceWhisperModel, voiceSensitivity: S.settings.voiceSensitivity
+      voiceWhisperModel: S.settings.voiceWhisperModel, voiceSensitivity: S.settings.voiceSensitivity,
+      voiceBargeIn: S.settings.voiceBargeIn
     })['catch'](function (e) { toast('Réglages non sauvegardés : ' + e.message); });
     return setInFlight;
   }

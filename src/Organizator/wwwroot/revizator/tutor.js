@@ -2,7 +2,9 @@
    Révizator — le tuteur vocal (module U3)
    Une conversation en anglais. Deux façons de la mener :
      · mains libres (par défaut, R.prefs.tutorLive) : le moteur vocal partagé (voice-engine.js,
-       window.OrganizatorVoice) écoute en continu, détecte la fin de phrase, transcrit (Whisper local),
+       window.OrganizatorVoice) écoute en continu, détecte la fin de phrase, transcrit (en direct par le
+       modèle en flux s'il est téléchargé — la bulle de l'apprenant se remplit pendant qu'il parle —, sinon
+       Whisper local ; les mesures Whisper arrivent alors après coup, onUtteranceDetail),
        envoie à une session Claude persistante en mode tuteur (voiceStart mode 'tutor') et lit la réponse
        phrase par phrase (Kokoro, sinon SAPI) ; on peut couper la parole au tuteur. Avatar en tête du chat.
        Traduction, aide et reformulation arrivent avec la phase « meta » de chaque réponse ;
@@ -31,7 +33,8 @@
      tutor.voiceOff        true : les réponses ne sont pas lues d'office
      capsules[]  { id, at, prompt, url, text, metrics: { seconds, speechSeconds, wpm, articulationWpm, words, pauses, longPauses, unsure } }
    Actions : rz-tutor-* ; saisie : rz-tutor-text (Entrée envoie), rz-tutor-voice ; micros : rzv-mic, rzv-cap.
-   Préférences (R.prefs) : tutorLive (mains libres, défaut true), tutorSensitivity (0..100, défaut 50).
+   Préférences (R.prefs) : tutorLive (mains libres, défaut true), tutorSensitivity (0..100, défaut 40),
+     tutorBargeIn ('words' | 'voice' | 'off', défaut 'words' : couper la parole au tuteur).
    ═══════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
@@ -663,7 +666,8 @@
 
   var L = {
     eng: null, chatId: '', stage: null, phase: 'idle', phaseText: '', caption: '', notices: {}, error: '', muted: false,
-    turns: {}, sentAt: 0, meter: null, hold: {}, sapi: null, sapiAsked: false
+    turns: {}, sentAt: 0, meter: null, hold: {}, sapi: null, sapiAsked: false,
+    partial: '', draft: null, byId: {}, waiting: [], test: null, testTimer: 0, setMeter: 0
   };
   var GREETING = '(The learner has just joined. Open the conversation in character: greet them briefly and ask your first question.)';
   var RESUMING = '(The learner is back after a short pause. Answer their last message, in character.)';
@@ -679,7 +683,9 @@
   function livePref() { return !R.isLoaded() || R.prefs.tutorLive !== false; }
   function liveMode() { return livePref() && liveAvailable(); }
   function liveOn(chat) { return !!L.eng && !!chat && L.chatId === chat.id; }
-  function sensitivity() { return R.clamp(Math.round(num(R.prefs.tutorSensitivity, 50)), 0, 100); }
+  function sensitivity() { return R.clamp(Math.round(num(R.prefs.tutorSensitivity, 40)), 0, 100); }
+  function liveAsr() { return window.OrganizatorLiveAsr || null; }
+  function bargeIn() { var v = R.prefs.tutorBargeIn; return v === 'voice' || v === 'off' ? v : 'words'; }
 
   /* Une voix SAPI anglaise (repli quand Kokoro manque) : l'accent du scénario, puis n'importe quel anglais. */
   function askSapi() {
@@ -765,7 +771,7 @@
     var html = '';
     if (n && n.text) {
       var act = n.kind === 'error' ? null : noticeAction(n);
-      var prog = n.kind === 'whisper-missing' && n.progress >= 0 ? ' Téléchargement : ' + n.progress + ' %.' : '';
+      var prog = n.progress >= 0 && !/\d+ %/.test(n.text) ? ' Téléchargement : ' + n.progress + ' %.' : '';
       html = '<span>' + esc(n.text + prog) + '</span>' + (act ? '<button type="button" class="btn btn-primary" data-act="rz-tutor-live-notice">' + esc(act.label) + '</button>' : '')
         + (n.kind === 'error' ? '<button type="button" class="btn btn-secondary" data-act="rz-tutor-live-resume">' + R.icon('replay') + ' Relancer</button>' : '');
     } else if (held && chat && !chat.summary) {
@@ -797,6 +803,8 @@
     L.eng = null;
     stopMeter();
     L.phase = 'idle'; L.phaseText = ''; L.caption = ''; L.notices = {}; L.muted = false; L.turns = {};
+    L.byId = {}; L.waiting = [];
+    setDraft('');
     if (e) { try { if (typeof e.destroy === 'function') e.destroy(); else e.stop(); } catch (err) { /* déjà arrêté */ } }
     if (L.stage) updateStage();
   }
@@ -833,7 +841,7 @@
     try {
       eng = window.OrganizatorVoice.create({
         container: mountOf(), avatar: { size: 112 }, language: 'en', whisperModel: R.prefs.whisperModel || 'small',
-        sensitivity: sensitivity(), keepAudio: true, detail: true, tts: ttsOf(chat),
+        sensitivity: sensitivity(), keepAudio: true, detail: true, tts: ttsOf(chat), liveAsr: true, bargeIn: bargeIn(),
         conversation: {
           start: {
             mode: 'tutor', model: R.prefs.tutorModel || 'haiku', effort: '', name: 'Tuteur · ' + clean(chat.scenario && chat.scenario.title, 80),
@@ -843,6 +851,8 @@
         },
         texts: { noiseResume: NOISE },
         onUserUtterance: function (text, info) { return mine() ? liveUser(text, info || {}) : false; },
+        onPartial: function (text) { if (mine()) setDraft(text); },
+        onUtteranceDetail: function (id, stt, x) { liveDetail(id, stt || {}, x || {}); },
         onSentence: function (text, info) { if (mine()) liveSentence(text, info || {}); },
         onReply: function (r) { if (mine()) liveReply(r || {}); },
         onMeta: function (meta, info) { if (mine()) liveMeta(meta || {}, info || {}); },
@@ -900,15 +910,56 @@
   function liveChat() { var c = chatById(L.chatId); return c && !c.summary ? c : null; }
   function liveKey(chat, idx) { return chat.id + ':' + idx; }
 
+  /* La phrase en train d'être dite (transcription en flux) : une bulle « en cours » au bout du fil, tenue
+     hors du rendu (comme l'avatar) et mise à jour sur place ; '' l'efface (bruit écarté). Elle se fige
+     quand la phrase part : liveUser crée alors la vraie réplique. */
+  function draftEl() {
+    if (L.draft) return L.draft;
+    var el = document.createElement('div');
+    el.className = 'rzv-turn is-user is-draft';
+    el.innerHTML = '<span class="rzv-ava is-me" aria-hidden="true">Vous</span><div class="rzv-col"><div class="rzv-bubble">'
+      + '<div class="rzv-said" lang="en"></div>'
+      + '<div class="rzv-umeta"><span class="rzv-umeta-k rzv-live-k"><span class="rzv-dots" aria-hidden="true"><i></i><i></i><i></i></span>en direct</span></div>'
+      + '</div></div>';
+    L.draft = el;
+    return el;
+  }
+  function placeDraft(host) {
+    if (!L.partial) { if (L.draft && L.draft.parentNode) L.draft.parentNode.removeChild(L.draft); return; }
+    var thread = (host || document).querySelector('.rzv-s-chat .rzv-thread');
+    if (!thread) return;
+    var el = draftEl(), fresh = el.parentNode !== thread || thread.lastElementChild !== el;
+    var said = el.querySelector('.rzv-said');
+    if (said.textContent !== L.partial) said.textContent = L.partial;
+    if (fresh) {
+      thread.appendChild(el);
+      var sec = thread.closest('.rzv-chat');
+      if (sec && sec.getBoundingClientRect) {
+        var y = window.scrollY + sec.getBoundingClientRect().bottom - window.innerHeight + 24;
+        if (y > window.scrollY + 4) { try { window.scrollTo({ top: y, behavior: 'smooth' }); } catch (e) { window.scrollTo(0, y); } }
+      }
+    }
+  }
+  function setDraft(text) {
+    L.partial = clean(text, 1500);
+    if (L.partial && !liveChat()) L.partial = '';
+    placeDraft(null);
+  }
+
   function liveUser(text, info) {
     var chat = liveChat();
     text = clean(text, 1500);
-    if (!chat || !text) return false;
+    L.partial = '';
+    if (!chat || !text) { placeDraft(null); return false; }
     var stt = info.stt || {};
     var turn = {
       role: 'user', text: text, at: Date.now(), recast: null, url: String(info.url || stt.url || ''),
       unsure: unsureWords(stt.words), seconds: round1(info.seconds), wpm: Math.round(num(stt.wpm, 0)), sttMs: Math.round(num(stt.ms, 0)), live: true
     };
+    /* Transcription en flux : le texte part tout de suite à Claude ; Whisper mesure ensuite (mots douteux,
+       débit, réécoute) et onUtteranceDetail complète cette réplique — son texte, lui, reste celui envoyé. */
+    if (info.source === 'stream') turn.src = 'stream';
+    if (info.id != null && !info.stt) { L.byId[info.id] = turn; L.waiting.push(turn); }
     chat.turns.push(turn);
     chat.closed = false;
     L.sentAt = Date.now();
@@ -917,6 +968,23 @@
     R.save();
     R.render();
     return undefined;
+  }
+
+  function liveDetail(id, stt, x) {
+    var turn = L.byId[id];
+    if (!turn) return;
+    delete L.byId[id];
+    L.waiting = L.waiting.filter(function (t) { return t !== turn; });
+    var url = String(x.url || stt.url || '');
+    if (url) turn.url = url;
+    var unsure = unsureWords(stt.words);
+    if (unsure.length || Array.isArray(stt.words)) turn.unsure = unsure;
+    if (!(turn.seconds > 0)) turn.seconds = round1(num(stt.duration, 0));
+    if (num(stt.wpm, 0) > 0) turn.wpm = Math.round(stt.wpm);
+    else if (!turn.wpm && turn.seconds > 0) turn.wpm = Math.round(R.text.count(turn.text) / turn.seconds * 60);
+    if (num(stt.ms, 0) > 0) turn.sttMs = Math.round(stt.ms);
+    R.save();
+    if (R.viewId() === 'tutor') R.render();
   }
 
   function sendLiveText(chat, text, el) {
@@ -1157,7 +1225,8 @@
     var meta = t.typed
       ? '<span class="rzv-umeta-k">' + R.icon('pen') + 'écrit</span>'
       : '<span class="rzv-umeta-k">' + R.icon('mic') + esc(clock(t.seconds)) + (t.wpm ? ' · ' + esc(t.wpm) + ' mots/min' : '') + '</span>'
-        + (t.sttMs ? '<span class="rzv-lat" title="Temps de transcription (Whisper, sur ce poste)">transcrit en ' + esc(secs(t.sttMs)) + '</span>' : '');
+        + (t.sttMs ? '<span class="rzv-lat" title="Temps de transcription (Whisper, sur ce poste)">' + (t.src === 'stream' ? 'mesuré en ' : 'transcrit en ') + esc(secs(t.sttMs)) + '</span>' : '')
+        + (L.waiting.indexOf(t) >= 0 ? '<span class="rzv-lat is-wait" title="Whisper mesure votre phrase (mots douteux, débit) : la réponse n’attend pas">' + R.icon('mic') + 'mesure…</span>' : '');
     return '<div class="rzv-turn is-user' + (T.newKey === k ? ' is-new' : '') + '"><span class="rzv-ava is-me" aria-hidden="true">Vous</span><div class="rzv-col"><div class="rzv-bubble">'
       + '<div class="rzv-said" lang="en">' + markUnsure(t.text, t.unsure) + '</div>'
       + '<div class="rzv-umeta">' + meta + (url ? R.h.player(pkey, { small: true, speeds: false, label: 'Me réécouter', source: function () { return R.audio(url, { key: pkey }); } }) : '') + '</div>'
@@ -1360,7 +1429,7 @@
       + sc.phrases.map(function (ph) { return '<button type="button" class="rz-phrase rzv-phrase" data-act="rz-tutor-phrase" data-text="' + esc(ph) + '" title="Écouter" lang="en">' + R.icon('speak') + esc(ph) + '</button>'; }).join('')
       + '</div></section>'
       + '<section class="rz-card rzv-opts">' + (liveMode()
-        ? '<div class="rzv-note">Mains libres : le micro reste ouvert pendant la conversation ; le son est transcrit sur ce poste (Whisper), seule la transcription part vers le tuteur. La sensibilité du micro se règle dans ⚙ › Révizator.</div>'
+        ? '<div class="rzv-note">Mains libres : le micro reste ouvert pendant la conversation ; le son est transcrit sur ce poste (en direct avec le modèle anglais, sinon Whisper), seule la transcription part vers le tuteur. Sensibilité du micro, coupure de parole et transcription en direct se règlent dans ⚙ › Révizator.</div>'
         : '<label class="rzv-toggle"><input type="checkbox" data-role="rz-tutor-voice"' + (tutorData().voiceOff ? '' : ' checked') + '><span>Lire les réponses à voix haute</span></label>')
       + '<div class="rzv-note">Whisper peut lisser vos fautes : la transcription montre ce qu’il a compris ; les mots soulignés sont ceux dont il doute.</div>'
       + (avg ? '<div class="rzv-note">Temps de réponse moyen du tuteur : ' + esc(secs(avg)) + '.</div>' : '') + '</section>'
@@ -1567,6 +1636,7 @@
         ensureLive();
         updateStage();
       }
+      placeDraft(host);
       if (T.toTop) { T.toTop = false; T.toEnd = false; window.scrollTo(0, 0); }
       /* Une nouvelle réplique : la page descend jusqu'au pupitre (jamais vers le haut). */
       if (T.toEnd) {
@@ -1798,29 +1868,123 @@
     R.save();
     R.render();
   });
-  R.act('rz-tutor-set-sens', function (el) {
-    R.prefs.tutorSensitivity = R.clamp(Math.round(num(el.getAttribute('data-value'), 50)), 0, 100);
-    if (L.eng) try { L.eng.setOptions({ sensitivity: sensitivity() }); } catch (e) { /* moteur arrêté */ }
+  R.act('rz-tutor-set-barge', function (el) {
+    var v = el.getAttribute('data-value');
+    R.prefs.tutorBargeIn = v === 'voice' || v === 'off' ? v : 'words';
+    if (L.eng) try { L.eng.setOptions({ bargeIn: bargeIn() }); } catch (e) { /* moteur arrêté */ }
     R.save();
     R.render();
   });
+  /* Le curseur : la valeur part au moteur à chaque cran, sans rendu (le vumètre la suit en direct). */
+  R.input('rz-tutor-sens', function (el) {
+    R.prefs.tutorSensitivity = R.clamp(Math.round(num(el.value, 40)), 0, 100);
+    var out = document.querySelector('[data-rzv-sens-out]');
+    if (out) out.textContent = String(R.prefs.tutorSensitivity);
+    [L.eng, L.test].forEach(function (e) { if (e) try { e.setOptions({ sensitivity: sensitivity() }); } catch (err) { /* moteur arrêté */ } });
+    R.save();
+  });
+  R.act('rz-tutor-sens-test', function () { if (L.test) stopMicTest(); else startMicTest(); });
+
+  /* ── Vumètre des réglages ──
+     Le niveau du micro et le seuil de déclenchement (eng.state().micDb / threshold, sur -80 … -10 dB) du
+     moteur en marche (la conversation mains libres, l'overlay) ; sinon « Tester le micro » ouvre un moteur
+     sans conversation ni transcription, 30 s au plus. Le tout s'arrête quand les réglages se ferment. */
+  function meterEngine() {
+    var OV = window.OrganizatorVoice;
+    var a = OV && typeof OV.active === 'function' ? OV.active() : null;
+    return a || L.test || null;
+  }
+  function startMicTest() {
+    var OV = window.OrganizatorVoice;
+    if (L.test || !OV || typeof OV.create !== 'function' || (typeof OV.active === 'function' && OV.active())) return;
+    try {
+      L.test = OV.create({
+        container: null, avatar: false, language: 'en', whisperModel: R.prefs.whisperModel || 'small', sensitivity: sensitivity(),
+        conversation: null, liveAsr: false, bargeIn: 'off',
+        onUserUtterance: function () { return false; }, onNotice: noop, onError: noop, onPhase: noop
+      });
+      var p = L.test.start();
+      Promise.resolve(p).then(noop, function (e) { R.toast('Micro indisponible : ' + clean(e && e.message, 200)); stopMicTest(); });
+    } catch (e) {
+      L.test = null;
+      R.toast('Micro indisponible : ' + clean(e && e.message, 200));
+    }
+    clearTimeout(L.testTimer);
+    L.testTimer = setTimeout(stopMicTest, 30000);
+    sensMeterSoon();
+    sensMeterFrame();
+  }
+  function stopMicTest() {
+    clearTimeout(L.testTimer);
+    var e = L.test;
+    L.test = null;
+    if (e) try { e.destroy(); } catch (err) { /* déjà arrêté */ }
+    sensMeterFrame();
+  }
+  function sensMeterSoon() {
+    if (L.setMeter) return;
+    L.setMeter = setInterval(sensMeterFrame, 80);
+  }
+  function sensMeterFrame() {
+    var box = document.querySelector('[data-rzv-sens-meter]');
+    if (!box) { clearInterval(L.setMeter); L.setMeter = 0; if (L.test) stopMicTest(); return; }
+    var e = meterEngine(), st = null;
+    if (e) try { st = e.state(); } catch (err) { st = null; }
+    var on = !!(st && st.micDb != null && st.micDb > -100 && !st.muted);
+    var pos = function (db) { return R.clamp((num(db, -80) + 80) / 70, 0, 1); };
+    var lv = box.querySelector('.rzv-sens-lvl'), th = box.querySelector('.rzv-sens-thr');
+    box.classList.toggle('is-off', !on);
+    if (lv) {
+      lv.style.transform = 'scaleX(' + (on ? pos(st.micDb) : 0).toFixed(3) + ')';
+      lv.classList.toggle('is-hot', on && st.micDb > st.threshold);
+    }
+    if (th) { th.hidden = !(st && st.threshold != null); if (st && st.threshold != null) th.style.left = (pos(st.threshold) * 100).toFixed(1) + '%'; }
+    var state = document.querySelector('[data-rzv-sens-state]');
+    if (state) {
+      var txt = on ? 'Parlez : la barre doit franchir le trait. Si elle le passe sans que vous parliez (ventilateur, clavier), baissez la sensibilité.'
+        : (L.test ? 'Ouverture du micro…' : 'Le vumètre s’anime pendant une conversation, ou le temps d’un essai.');
+      var t = state.querySelector('span');
+      if (t && t.textContent !== txt) t.textContent = txt;
+      var b = state.querySelector('[data-act="rz-tutor-sens-test"]');
+      if (b) {
+        var other = !L.test && !!meterEngine();
+        b.hidden = other;
+        var lab = L.test ? 'Arrêter l’essai' : 'Tester le micro';
+        if (b.textContent !== lab) b.textContent = lab;
+      }
+    }
+  }
 
   /* Réglages › Révizator : la section du tuteur. */
-  var SENS = [[25, 'Basse · pièce bruyante'], [50, 'Normale'], [75, 'Haute · voix douce']];
+  var BARGE_LABELS = { words: 'Quand je dis quelques mots (conseillé)', voice: 'Dès que je parle', off: 'Jamais' };
+  var BARGE_HELP = {
+    words: 'Le tuteur baisse la voix dès qu’il vous entend, et ne s’arrête que si vous dites vraiment quelque chose : une toux, un bruit ou l’écho de sa propre voix ne le coupent pas.',
+    voice: 'Il se tait au premier son de votre voix : réactif, mais un bruit franc peut aussi le couper.',
+    off: 'Il finit toujours sa phrase ; Espace (« Faire taire ») le coupe quand même.'
+  };
   R.settingsSection({ id: 'tutor', order: 30, html: function () {
     var app = window.organizatorApp;
     var field = function (label, ctl) { return app && app.setFieldHtml ? app.setFieldHtml(label, ctl) : '<div class="set-field"><div class="set-field-label">' + esc(label) + '</div><div class="set-field-control">' + ctl + '</div></div>'; };
     var on = R.prefs.tutorLive !== false;
     var sw = app && app.switchHtml ? app.switchHtml(on, 'rz-tutor-set-live', 'Tuteur mains libres')
       : '<button type="button" class="switch' + (on ? ' on' : '') + '" data-act="rz-tutor-set-live" role="switch" aria-checked="' + on + '" aria-label="Tuteur mains libres"></button>';
-    var sens = sensitivity();
-    var near = SENS.reduce(function (a, b) { return Math.abs(b[0] - sens) < Math.abs(a[0] - sens) ? b : a; });
-    return '<div class="set-card"><div class="set-card-head"><span class="set-card-title">Tuteur</span></div>'
+    var sens = sensitivity(), barge = bargeIn(), asr = liveAsr();
+    setTimeout(function () { sensMeterSoon(); sensMeterFrame(); }, 0);
+    return '<div class="set-card rzv-set"><div class="set-card-head"><span class="set-card-title">Tuteur</span></div>'
       + field('Tuteur mains libres', sw)
       + '<div class="rz-set-help">Le tuteur écoute en continu, répond phrase par phrase et se tait dès que vous parlez. Désactivé : tour par tour (Espace pour parler, encore pour terminer). La bascule existe aussi dans la conversation.</div>'
-      + field('Sensibilité du micro', R.h.chips('tutorSensitivity', SENS.map(function (x) { return x[0]; }), near[0], SENS.map(function (x) { return x[1]; }), 'rz-tutor-set-sens'))
-      + '<div class="rz-set-help">Plus haute, il entend une voix douce ou lointaine, mais aussi davantage le bruit ambiant ; plus basse, il ignore le bruit, il faut parler plus franchement.</div>'
-      + '<div class="set-card-foot">La conversation en mains libres utilise le même Whisper que l’oral (ci-dessous) et le modèle « Tuteur » des agents.</div></div>';
+      + field('Couper la parole', R.h.chips('tutorBargeIn', ['words', 'voice', 'off'], barge, ['words', 'voice', 'off'].map(function (k) { return BARGE_LABELS[k]; }), 'rz-tutor-set-barge'))
+      + '<div class="rz-set-help">' + esc(BARGE_HELP[barge]) + '</div>'
+      + field('Sensibilité du micro', '<input class="rzv-sens-range" type="range" min="0" max="100" step="1" value="' + sens + '" data-role="rz-tutor-sens" data-focus-key="rz-tutor-sens" aria-label="Sensibilité du micro">'
+        + '<output class="rzv-sens-out" data-rzv-sens-out>' + sens + '</output>')
+      + '<div class="rzv-sens-meter is-off" data-rzv-sens-meter aria-hidden="true"><i class="rzv-sens-lvl"></i><b class="rzv-sens-thr" hidden></b></div>'
+      + '<div class="rzv-sens-state" data-rzv-sens-state><span>Le vumètre s’anime pendant une conversation, ou le temps d’un essai.</span>'
+      + '<button type="button" class="btn btn-ghost wm-btn" data-act="rz-tutor-sens-test">Tester le micro</button></div>'
+      + '<div class="rz-set-help">Plus haute, il entend une voix douce ou lointaine, mais aussi davantage le bruit ambiant ; plus basse, il ignore le bruit, il faut parler plus franchement. 40 convient à la plupart des pièces.</div>'
+      + '<div class="rzv-set-sub">Transcription en direct</div>'
+      + (asr ? asr.modelsHtml() : '<div class="asr-note">Indisponible dans cette fenêtre : Whisper transcrit chaque phrase quand vous vous taisez.</div>')
+      + '<div class="rz-set-help">Avec le modèle anglais, votre phrase s’écrit pendant que vous parlez et part au tuteur dès que vous vous taisez ; Whisper mesure ensuite, sans faire attendre, les mots douteux et le débit. Le modèle français sert à la conversation en français. Tout reste sur ce poste.</div>'
+      + '<div class="set-card-foot">Sans modèle en direct, la conversation utilise le même Whisper que l’oral (ci-dessous) ; les réponses viennent du modèle « Tuteur » des agents.</div></div>';
   } });
   R.act('rz-tutor-history', function () { R.tts.stopAll(); setScreen('history'); goTutor(); });
   R.act('rz-tutor-open', function (el) {
