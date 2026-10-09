@@ -53,7 +53,8 @@
   /* Événement de l'hôte local (WebView2 ou shim) : avec un serveur Révizator, ceux qu'il émet aussi
      viennent de lui seul — sauf ceux d'un travail que l'hôte fait lui-même (transcription d'un fichier). */
   function emit(name, payload) {
-    if (remote && REMOTE_EVENTS[name] && !(payload && payload.job && localJobs[payload.job])) return;
+    if (remote && REMOTE_EVENTS[name] && !(payload && payload.job && localJobs[payload.job])
+      && !(name === 'whisper' && payload && !payload.job && payload.model && localModels[payload.model])) return;
     emitRaw(name, payload);
   }
 
@@ -129,8 +130,10 @@
   var SILENCE_MS = 50000;             /* le serveur envoie un ping toutes les 20 s : au-delà, la liaison est morte */
   var OFFLINE = 'Serveur Révizator injoignable';
   var remote = null, remoteKey = '';
-  /* Transcriptions lancées sur l'hôte local malgré le serveur (fichier de ce PC) : leurs événements passent. */
+  /* Transcriptions lancées sur l'hôte local malgré le serveur (fichier de ce PC, dictée d'une tâche) :
+     leurs événements passent, comme ceux des modèles Whisper téléchargés pour la dictée. */
   var localJobs = Object.create(null);
+  var localModels = Object.create(null);
 
   function escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
@@ -337,9 +340,15 @@
   }
 
   /* Un fichier joint (dépôt, collage) ou un enregistrement de ce PC (transcribe avec `path`) n'existe
-     que sur l'hôte local : ces appels y restent, avec leurs événements. */
+     que sur l'hôte local : ces appels y restent, avec leurs événements. De même pour ce qui porte
+     `local: true` (la dictée des tâches et ses modèles Whisper) : le texte des tâches ne quitte pas le PC. */
   function routeRemote(type, payload, files) {
     if (!REMOTE_TYPES[type] || (files && files.length)) return false;
+    if (payload && payload.local === true) {
+      if (payload.job) localJobs[payload.job] = 1;
+      if (payload.model && /^whisper(Download|Warm)$/.test(type)) localModels[payload.model] = 1;
+      return false;
+    }
     if (type === 'transcribe' && payload && payload.path) {
       if (payload.job) localJobs[payload.job] = 1;
       return false;

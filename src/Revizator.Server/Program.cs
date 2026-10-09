@@ -4,10 +4,9 @@ using Revizator.Server;
 
 // revizator-server : sans argument, lance le serveur ; sinon ligne de commande (jetons, import).
 // Voir docs/REVIZATOR-SERVER.md, § 3.
-var config = ServerConfig.FromEnvironment();
-
 try
 {
+    var config = ServerConfig.FromEnvironment();
     return args.Length == 0 ? await ServeAsync(config) : Command(config, args);
 }
 catch (InvalidOperationException ex)
@@ -92,7 +91,8 @@ static int Command(ServerConfig config, string[] args)
                   revizator-server import <dossier>        importe learning.json et learning/ depuis une copie
                                                            du dossier %LOCALAPPDATA%\Organizator\ du PC
                 Variables : REVIZATOR_DATA, REVIZATOR_PORT, REVIZATOR_PUBLIC_URL, REVIZATOR_ALLOWED_ORIGINS,
-                            REVIZATOR_CLAUDE, CLAUDE_CODE_OAUTH_TOKEN (voir docs/REVIZATOR-SERVER.md).
+                            REVIZATOR_TRUSTED_PROXIES, REVIZATOR_CLAUDE, CLAUDE_CODE_OAUTH_TOKEN
+                            (voir docs/REVIZATOR-SERVER.md).
                 """);
             return 2;
     }
@@ -104,6 +104,8 @@ static async Task<int> ServeAsync(ServerConfig config)
     var log = new HostLog(config.DataDir);
     log.Mirror = line => Console.WriteLine(line);
     log.Info($"Revizator serveur {ServerConfig.Version} : donnees {config.DataDir}, page {config.WwwRoot}, port {config.Port}");
+    log.Info("Proxys de confiance (X-Forwarded-*) : "
+        + (config.TrustedProxies.Count == 0 ? "aucun" : string.Join(", ", config.TrustedProxies)));
 
     // Lance depuis une session Claude Code, le serveur transmettrait ses marqueurs a chaque claude -p.
     var scrubbed = InheritedEnvironment.Scrub();
@@ -129,8 +131,8 @@ static async Task<int> ServeAsync(ServerConfig config)
 
     var app = builder.Build();
     using var bridge = new ServerBridge(config, log);
-    var hub = new WsHub(bridge, log);
-    var routes = new HttpRoutes(config, new TokenStore(config.DataDir), new FailureLimiter(), bridge, hub, log);
+    var hub = new WsHub(bridge, log, app.Lifetime.ApplicationStopping);
+    var routes = new HttpRoutes(config, new TokenStore(config.DataDir), new FailureLimiter(config.TrustedProxies), bridge, hub, log);
     log.Info(bridge.HasClaude ? "Claude Code present" : "Claude Code introuvable : les generations de Revizator echoueront (REVIZATOR_CLAUDE ?)");
 
     app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });

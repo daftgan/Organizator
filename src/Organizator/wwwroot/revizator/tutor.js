@@ -1983,7 +1983,7 @@
       + '<div class="rz-set-help">Plus haute, il entend une voix douce ou lointaine, mais aussi davantage le bruit ambiant ; plus basse, il ignore le bruit, il faut parler plus franchement. 40 convient à la plupart des pièces.</div>'
       + '<div class="rzv-set-sub">Transcription en direct</div>'
       + (asr ? asr.modelsHtml() : '<div class="asr-note">Indisponible dans cette fenêtre : Whisper transcrit chaque phrase quand vous vous taisez.</div>')
-      + '<div class="rz-set-help">Un seul modèle pour l’anglais et le français, plus précis que Whisper et robuste aux accents : votre phrase s’écrit pendant que vous parlez et part au tuteur, ponctuée, dès que vous vous taisez ; Whisper mesure ensuite, sans faire attendre, les mots douteux et le débit. Tout reste sur ce poste.</div>'
+      + '<div class="rz-set-help">Un seul modèle pour l’anglais et le français, plus précis que Whisper et robuste aux accents : votre phrase s’écrit pendant que vous parlez et part au tuteur, ponctuée, dès que vous vous taisez ; Whisper mesure ensuite, sans faire attendre, les mots douteux et le débit. ' + (bridge.mode === 'server' || (bridge.remote && bridge.remote()) ? 'Tout se passe sur le serveur Révizator.' : 'Tout reste sur ce poste.') + '</div>'
       + '<div class="set-card-foot">Sans modèle en direct, la conversation utilise le même Whisper que l’oral (ci-dessous) ; les réponses viennent du modèle « Tuteur » des agents.</div></div>';
   } });
   R.act('rz-tutor-history', function () { R.tts.stopAll(); setScreen('history'); goTutor(); });

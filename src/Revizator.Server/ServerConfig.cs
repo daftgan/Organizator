@@ -23,6 +23,54 @@ public sealed class ServerConfig
     /// <summary>Dossier des fichiers de la page (copie de src/Organizator/wwwroot, a cote de l'executable).</summary>
     public required string WwwRoot { get; init; }
 
+    /// <summary>
+    /// Adresses du reverse proxy (NPM) : seules leurs connexions font foi pour <c>X-Forwarded-For</c> et
+    /// <c>X-Forwarded-Proto</c>. Par defaut le reseau prive et local ; vide (<c>none</c>) : aucune.
+    /// </summary>
+    public required IReadOnlyList<System.Net.IPNetwork> TrustedProxies { get; init; }
+
+    /// <summary>Reseaux prives et locaux : valeur par defaut de <c>REVIZATOR_TRUSTED_PROXIES</c>.</summary>
+    public const string PrivateNetworks = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,fc00::/7,fe80::/10";
+
+    /// <summary>
+    /// Liste d'adresses ou de reseaux (<c>192.168.1.11</c>, <c>172.16.0.0/12</c>), separes par des virgules ;
+    /// <c>private</c> pour le reseau prive, <c>none</c> pour aucun. Une entree illisible arrete le serveur
+    /// plutot que d'etre ignoree en silence.
+    /// </summary>
+    public static IReadOnlyList<System.Net.IPNetwork> ParseNetworks(string value)
+    {
+        var list = new List<System.Net.IPNetwork>();
+        foreach (var raw in value.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var entry = raw.Trim();
+            if (entry.Equals("none", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (entry.Equals("private", StringComparison.OrdinalIgnoreCase))
+            {
+                list.AddRange(ParseNetworks(PrivateNetworks));
+                continue;
+            }
+
+            if (!entry.Contains('/') && System.Net.IPAddress.TryParse(entry, out var single))
+            {
+                list.Add(new System.Net.IPNetwork(single, single.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 32 : 128));
+                continue;
+            }
+
+            if (!System.Net.IPNetwork.TryParse(entry, out var network))
+            {
+                throw new InvalidOperationException("REVIZATOR_TRUSTED_PROXIES : adresse ou reseau illisible : " + entry);
+            }
+
+            list.Add(network);
+        }
+
+        return list;
+    }
+
     public static ServerConfig FromEnvironment()
     {
         static string Read(string name, string fallback)
@@ -44,6 +92,7 @@ public sealed class ServerConfig
             PublicUrl = Read("REVIZATOR_PUBLIC_URL", "http://localhost:" + port).TrimEnd('/'),
             AllowedOrigins = origins,
             WwwRoot = Path.GetFullPath(Read("REVIZATOR_WWWROOT", Path.Combine(AppContext.BaseDirectory, "wwwroot"))),
+            TrustedProxies = ParseNetworks(Read("REVIZATOR_TRUSTED_PROXIES", "private")),
         };
     }
 }

@@ -1089,7 +1089,8 @@
         return s;
       }, function (e) {
         TTS.busy = false; R.ui.ttsDl = { error: e.message };
-        R.toast('Téléchargement des voix impossible : ' + e.message);
+        /* L'hôte préfixe déjà son message (« Téléchargement des voix impossible : réseau… ») : pas de doublon. */
+        R.toast(/^Téléchargement des voix impossible/.test(e.message) ? e.message : 'Téléchargement des voix impossible : ' + e.message);
         R.renderSoon();
         throw e;
       });
@@ -1738,18 +1739,24 @@
     return h.join('');
   }
 
+  /* Page servie par le serveur Révizator (téléphone) : les voix « système » sont celles de l'appareil, pas de
+     Windows. Les voix naturelles tournent sur le serveur dès qu'il y en a un (aussi depuis Organizator). */
+  function onServer() { return bridge.mode === 'server'; }
+  function kokoroWhere() { return onServer() || (bridge.remote && bridge.remote()) ? 'sur le serveur Révizator' : 'sur ce poste'; }
+
   function voiceStatusHtml(onboard) {
     var st = TTS.status;
     var dl = R.ui.ttsDl;
     var h = [];
     if (st && st.ready) {
-      h.push('<div class="rz-voice-ok">' + R.icon('check') + ' Voix naturelles installées — américaines et britanniques, sur ce poste.</div>');
+      h.push('<div class="rz-voice-ok">' + R.icon('check') + ' Voix naturelles installées — américaines et britanniques, ' + kokoroWhere() + '.</div>');
     } else if (R.tts.downloading()) {
       var m = st && st.model || {};
       var rec = (dl && dl.received) || m.received || 0, tot = (dl && dl.total) || m.total || 0;
       h.push('<div class="rz-voice-dl" data-rz-ttsdl>' + ttsDlInner(rec, tot) + '</div>');
     } else {
-      h.push('<p class="rz-voice-p">Les voix de Windows (américaines) marchent tout de suite, mais sonnent robotiques. Des <b>voix naturelles</b> américaines et britanniques tournent sur ce poste, comme la dictée : environ 375 Mo à télécharger une fois.</p>');
+      h.push('<p class="rz-voice-p">' + (onServer() ? 'Les voix de l’appareil marchent tout de suite, mais sonnent souvent robotiques.' : 'Les voix de Windows (américaines) marchent tout de suite, mais sonnent robotiques.')
+        + ' Des <b>voix naturelles</b> américaines et britanniques tournent ' + kokoroWhere() + ', comme la dictée : environ 375 Mo à télécharger une fois.</p>');
       h.push('<div class="rz-voice-actions"><button type="button" class="btn btn-secondary" data-act="rz-tts-download"' + (bridge.isShim && !window.__fakeTts ? ' disabled title="Indisponible dans le navigateur"' : '') + '>Télécharger les voix (375 Mo)</button>'
         + '<button type="button" class="btn btn-ghost" data-act="rz-tts-try">' + R.icon('speak') + ' Essayer</button></div>');
       if (dl && dl.error) h.push('<div class="rz-err-line">' + esc(dl.error) + '</div>');
@@ -1826,7 +1833,7 @@
     h.push('<div class="set-card"><div class="set-card-head"><span class="set-card-title">Voix</span></div>');
     h.push('<div class="rz-set-voice">' + voiceStatusHtml(false) + '</div>');
     var eng = engine();
-    h.push(A.setFieldHtml('Moteur', '<div class="seg2">' + [['auto', 'Automatique'], ['kokoro', 'Voix naturelles'], ['system', 'Voix Windows']].map(function (o) {
+    h.push(A.setFieldHtml('Moteur', '<div class="seg2">' + [['auto', 'Automatique'], ['kokoro', 'Voix naturelles'], ['system', onServer() ? 'Voix de l’appareil' : 'Voix Windows']].map(function (o) {
       return '<button type="button" class="' + (p.engine === o[0] ? 'on' : '') + '" data-act="rz-set-engine" data-value="' + o[0] + '">' + esc(o[1]) + '</button>';
     }).join('') + '</div>'));
     var st = TTS.status;
@@ -1844,7 +1851,7 @@
     h.push(A.setFieldHtml('Débit', '<div class="seg2">' + [0.85, 0.9, 1, 1.1].map(function (v) {
       return '<button type="button" class="' + (Math.abs(p.speed - v) < 0.01 ? 'on' : '') + '" data-act="rz-set-speed" data-value="' + v + '">' + String(v).replace('.', ',') + '×</button>';
     }).join('') + '</div>'));
-    var foot = eng === 'kokoro' ? 'Voix naturelles en service.' : (eng === 'system' ? 'Voix Windows en service (' + TTS.sysVoices.length + ' voix anglaises sur ce poste). Pour d’autres accents : Paramètres Windows › Heure et langue › Voix.' : 'Aucune voix anglaise disponible : les textes restent affichés.');
+    var foot = eng === 'kokoro' ? 'Voix naturelles en service.' : (eng === 'system' ? (onServer() ? 'Voix de l’appareil en service (' + TTS.sysVoices.length + ' voix anglaises).' : 'Voix Windows en service (' + TTS.sysVoices.length + ' voix anglaises sur ce poste). Pour d’autres accents : Paramètres Windows › Heure et langue › Voix.') : 'Aucune voix anglaise disponible : les textes restent affichés.');
     if (st && st.ready) foot += ' Le modèle pèse ' + esc(A.fmtSize(st.model && st.model.size || 0)) + ' ; environ 1 Go de mémoire par accent pendant l’usage, libéré après 5 minutes.';
     h.push('<div class="set-card-foot">' + esc(foot) + (st && (st.ready || (st.model && st.model.downloaded)) ? ' <button type="button" class="btn btn-ghost" data-act="rz-tts-remove">Supprimer les voix</button>' : '') + '</div>');
     h.push('</div>');
@@ -1931,7 +1938,7 @@
     });
     R.act('rz-tts-download', function () { R.tts.download()['catch'](function () { /* dit par le toast */ }); });
     R.act('rz-tts-remove', function () {
-      R.tts.remove().then(function () { R.toast('Voix naturelles supprimées : Révizator reprend les voix Windows.'); R.render(); },
+      R.tts.remove().then(function () { R.toast('Voix naturelles supprimées : Révizator reprend les voix ' + (onServer() ? 'de l’appareil' : 'Windows') + '.'); R.render(); },
         function (e) { R.toast('Suppression impossible : ' + e.message); });
     });
     R.act('rz-tts-try', function (el) {

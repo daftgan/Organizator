@@ -53,7 +53,10 @@ public sealed class HttpRoutes
         var response = context.Response;
         var path = request.Path.Value ?? "/";
         response.Headers["X-Content-Type-Options"] = "nosniff";
+        // Jamais de Referer : une page ou un media ouvert sous /t/<jeton>/ ne transmet pas son adresse.
         response.Headers["Referrer-Policy"] = "no-referrer";
+        // Aucune page d'ici dans un cadre d'un autre site (le CSP des pages HTML le redit).
+        response.Headers["X-Frame-Options"] = "DENY";
 
         // CORS : seulement pour les origines autorisees, et seulement la ou la page d'Organizator lit.
         var corsPath = path == "/api/health" || path.StartsWith("/learn/", StringComparison.Ordinal)
@@ -175,7 +178,7 @@ public sealed class HttpRoutes
     private bool Authorize(HttpContext context, string? token, out string? device)
     {
         device = null;
-        var ip = FailureLimiter.ClientIp(context);
+        var ip = _limiter.ClientIp(context);
         if (_limiter.Blocked(ip))
         {
             context.Items["rz-blocked"] = true;
@@ -186,7 +189,7 @@ public sealed class HttpRoutes
         if (device is null)
         {
             _limiter.Fail(ip);
-            _log.Warn($"Jeton refuse ({ip}, {context.Request.Path})");
+            _log.Warn($"Jeton refuse ({ip}, {Redacted(context.Request.Path.Value)})");
             return false;
         }
 
@@ -222,8 +225,23 @@ public sealed class HttpRoutes
         return device;
     }
 
-    private static bool IsHttps(HttpRequest request)
-        => request.IsHttps || string.Equals(request.Headers["X-Forwarded-Proto"].ToString().Split(',')[0].Trim(), "https", StringComparison.OrdinalIgnoreCase);
+    /// <summary>Le chemin pour le journal, sans le jeton de <c>/t/&lt;jeton&gt;/</c> (meme faux : il peut differer d'un vrai d'un caractere).</summary>
+    private static string Redacted(string? path)
+    {
+        path ??= "";
+        if (!path.StartsWith("/t/", StringComparison.Ordinal))
+        {
+            return path;
+        }
+
+        var slash = path.IndexOf('/', 3);
+        return "/t/…" + (slash < 0 ? "" : path[slash..]);
+    }
+
+    /// <summary>Requete en HTTPS : directe, ou annoncee par <c>X-Forwarded-Proto</c> d'un proxy de confiance.</summary>
+    private bool IsHttps(HttpContext context)
+        => context.Request.IsHttps || (_limiter.FromTrustedProxy(context)
+            && string.Equals(context.Request.Headers["X-Forwarded-Proto"].ToString().Split(',')[0].Trim(), "https", StringComparison.OrdinalIgnoreCase));
 
     /// <summary><c>/pair?token=…</c> : pose le cookie de l'appareil et renvoie vers la page.</summary>
     private async Task PairAsync(HttpContext context)
@@ -232,6 +250,7 @@ public sealed class HttpRoutes
         if (!Authorize(context, token, out var device))
         {
             context.Response.ContentType = "text/html; charset=utf-8";
+            context.Response.Headers.ContentSecurityPolicy = PagePolicy(context.Request);
             context.Response.StatusCode = context.Items.ContainsKey("rz-blocked") ? StatusCodes.Status429TooManyRequests : StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsync(Page("Lien d'appairage invalide",
                 "Ce lien n'est pas (ou plus) valable. Créez-en un nouveau sur le serveur : <code>revizator-server token new &lt;appareil&gt;</code>.")).ConfigureAwait(false);
@@ -241,13 +260,13 @@ public sealed class HttpRoutes
         context.Response.Cookies.Append(CookieName, token, new CookieOptions
         {
             HttpOnly = true,
-            Secure = IsHttps(context.Request),
+            Secure = IsHttps(context),
             SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax,
             MaxAge = CookieLifetime,
             Path = "/",
             IsEssential = true,
         });
-        _log.Info($"Appareil appaire : {device} ({FailureLimiter.ClientIp(context)})");
+        _log.Info($"Appareil appaire : {device} ({_limiter.ClientIp(context)})");
         NoCache(context.Response);
         context.Response.Redirect("/", permanent: false);
     }
@@ -258,6 +277,7 @@ public sealed class HttpRoutes
         var response = context.Response;
         NoCache(response);
         response.ContentType = "text/html; charset=utf-8";
+        response.Headers.ContentSecurityPolicy = PagePolicy(context.Request);
         var cookie = context.Request.Cookies[CookieName];
         if (string.IsNullOrEmpty(cookie) || !Authorize(context, cookie, out _))
         {
@@ -313,6 +333,24 @@ public sealed class HttpRoutes
         return html;
     }
 
+    /// <summary>
+    /// CSP de la page : scripts, styles, polices et images d'ici seulement (aucun script en ligne : un texte
+    /// genere ou un flux RSS injecte dans la page ne s'execute pas) ; <c>blob:</c> pour le module audio de
+    /// la detection de voix et les enregistrements ; medias https (podcasts de la BBC lus directement) ;
+    /// WebSocket du meme hote ecrit en toutes lettres (Safari ancien ne le deduit pas de <c>'self'</c>) ;
+    /// jamais dans un cadre.
+    /// </summary>
+    private static string PagePolicy(HttpRequest request)
+    {
+        var host = request.Host.Value ?? "";
+        var ws = host.Length > 0 && host.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or ':' or '[' or ']')
+            ? " wss://" + host + " ws://" + host
+            : "";
+        return "default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+            + "media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'" + ws + "; worker-src 'self' blob:; "
+            + "frame-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+    }
+
     private static string Page(string title, string body)
         => "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             + "<title>Révizator</title><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
@@ -347,7 +385,7 @@ public sealed class HttpRoutes
         else
         {
             var origin = context.Request.Headers.Origin.ToString().TrimEnd('/');
-            if (origin.Length > 0 && !SameOrigin(context.Request, origin) && !_config.AllowedOrigins.Contains(origin))
+            if (origin.Length > 0 && !SameOrigin(context, origin) && !_config.AllowedOrigins.Contains(origin))
             {
                 _log.Warn($"WebSocket refuse : origine {origin}");
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
@@ -361,26 +399,27 @@ public sealed class HttpRoutes
             }
         }
 
+        // Jeton revoque (ou remplace) pendant que la connexion est ouverte : elle est fermee (voir WsHub).
+        var token = query.Length > 0 ? query : context.Request.Cookies[CookieName];
         using var socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-        await _hub.RunAsync(socket, device!, context.RequestAborted).ConfigureAwait(false);
+        await _hub.RunAsync(socket, device!, () => _tokens.Validate(token) is not null, context.RequestAborted).ConfigureAwait(false);
     }
 
-    private bool SameOrigin(HttpRequest request, string origin)
+    /// <summary>
+    /// Vrai si <paramref name="origin"/> est ce serveur : l'adresse publique, ou le schema et l'hote de la
+    /// requete (<c>Host</c>, que NPM transmet tel quel ; <c>X-Forwarded-Host</c>, que le client peut forger,
+    /// n'est pas lu). Le schema compte : une page en http ne parle pas au WebSocket d'une page en https.
+    /// </summary>
+    private bool SameOrigin(HttpContext context, string origin)
     {
-        if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+        if (string.Equals(origin, _config.PublicUrl, StringComparison.OrdinalIgnoreCase))
         {
-            return false;
+            return true;
         }
 
-        var host = request.Headers["X-Forwarded-Host"].ToString().Split(',')[0].Trim();
-        if (host.Length == 0)
-        {
-            host = request.Host.Value ?? "";
-        }
-
-        var originHost = uri.IsDefaultPort ? uri.Host : uri.Host + ":" + uri.Port;
-        return string.Equals(originHost, host, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(origin, _config.PublicUrl, StringComparison.OrdinalIgnoreCase);
+        var host = context.Request.Host.Value ?? "";
+        var scheme = IsHttps(context) ? "https" : "http";
+        return host.Length > 0 && string.Equals(origin, scheme + "://" + host, StringComparison.OrdinalIgnoreCase);
     }
 
     // ------------------------------------------------------------------ fichiers
@@ -404,7 +443,9 @@ public sealed class HttpRoutes
             return;
         }
 
-        NoCache(context.Response);
+        // Donnees personnelles : aucun cache partage, et jamais interpretees comme un document actif.
+        context.Response.Headers.CacheControl = "private, no-cache";
+        context.Response.Headers.ContentSecurityPolicy = "default-src 'none'; sandbox";
         await SendFileAsync(context, file).ConfigureAwait(false);
     }
 

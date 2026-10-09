@@ -193,18 +193,30 @@ public sealed class TokenStore
 /// <summary>
 /// Limite des essais de jeton : 10 echecs par minute et par adresse au plus, au-dela 429. L'adresse est
 /// celle du client vu par le reverse proxy (NPM) : derniere entree de <c>X-Forwarded-For</c> quand la
-/// connexion vient d'une adresse privee (le proxy), l'adresse de la connexion sinon.
+/// connexion vient d'un proxy de confiance (<c>REVIZATOR_TRUSTED_PROXIES</c>, par defaut le reseau
+/// prive), l'adresse de la connexion sinon. Une adresse IPv6 compte pour son /64 entier (un client en a
+/// des milliards). Le menage des adresses oubliees se fait au plus toutes les 10 s, et la table est videe
+/// si elle deborde : elle ne peut ni grossir sans fin ni couter un parcours complet a chaque echec.
 /// </summary>
 public sealed class FailureLimiter
 {
     private const int MaxFailures = 10;
+    private const int MaxAddresses = 20000;
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan PruneEvery = TimeSpan.FromSeconds(10);
 
     private readonly ConcurrentDictionary<string, Queue<DateTime>> _failures = new();
+    private readonly IReadOnlyList<IPNetwork> _trusted;
+    private long _nextPrune;
+
+    public FailureLimiter(IReadOnlyList<IPNetwork> trustedProxies)
+    {
+        _trusted = trustedProxies;
+    }
 
     public bool Blocked(string ip)
     {
-        if (!_failures.TryGetValue(ip, out var queue))
+        if (!_failures.TryGetValue(Key(ip), out var queue))
         {
             return false;
         }
@@ -218,27 +230,42 @@ public sealed class FailureLimiter
 
     public void Fail(string ip)
     {
-        var queue = _failures.GetOrAdd(ip, _ => new Queue<DateTime>());
+        Prune();
+        var queue = _failures.GetOrAdd(Key(ip), _ => new Queue<DateTime>());
         lock (queue)
         {
             Trim(queue);
             queue.Enqueue(DateTime.UtcNow);
         }
+    }
 
-        // Menage des adresses oubliees, de temps en temps.
-        if (_failures.Count > 1000)
+    /// <summary>Menage des adresses sans echec recent, au plus toutes les 10 s ; table videe si elle deborde.</summary>
+    private void Prune()
+    {
+        var now = DateTime.UtcNow.Ticks;
+        var next = Interlocked.Read(ref _nextPrune);
+        if (now < next || Interlocked.CompareExchange(ref _nextPrune, now + PruneEvery.Ticks, next) != next)
         {
-            foreach (var pair in _failures)
+            return;
+        }
+
+        foreach (var pair in _failures)
+        {
+            lock (pair.Value)
             {
-                lock (pair.Value)
+                Trim(pair.Value);
+                if (pair.Value.Count == 0)
                 {
-                    Trim(pair.Value);
-                    if (pair.Value.Count == 0)
-                    {
-                        _failures.TryRemove(pair.Key, out _);
-                    }
+                    _failures.TryRemove(pair.Key, out _);
                 }
             }
+        }
+
+        // Des milliers d'adresses en echec dans la minute : une attaque repartie, que cette limite ne
+        // freine de toute facon pas (les jetons de 256 bits s'en chargent). On repart de zero.
+        if (_failures.Count > MaxAddresses)
+        {
+            _failures.Clear();
         }
     }
 
@@ -251,44 +278,47 @@ public sealed class FailureLimiter
         }
     }
 
-    /// <summary>Adresse du client : voir la description de la classe.</summary>
-    public static string ClientIp(HttpContext context)
+    /// <summary>Cle de la table : l'adresse IPv4, ou le /64 d'une adresse IPv6.</summary>
+    private static string Key(string ip)
     {
-        var remote = context.Connection.RemoteIpAddress;
-        if (remote is not null && remote.IsIPv4MappedToIPv6)
+        if (IPAddress.TryParse(ip, out var address) && address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
         {
-            remote = remote.MapToIPv4();
+            var bytes = address.GetAddressBytes();
+            Array.Clear(bytes, 8, 8);
+            return new IPAddress(bytes) + "/64";
         }
 
-        if (remote is null || IsPrivate(remote))
+        return ip;
+    }
+
+    /// <summary>Vrai si la connexion vient d'un proxy de confiance : ses en-tetes X-Forwarded-* font foi.</summary>
+    public bool FromTrustedProxy(HttpContext context)
+    {
+        var remote = Remote(context);
+        return remote is not null && _trusted.Any(network => network.Contains(remote));
+    }
+
+    /// <summary>Adresse du client : voir la description de la classe.</summary>
+    public string ClientIp(HttpContext context)
+    {
+        var remote = Remote(context);
+        if (remote is not null && _trusted.Any(network => network.Contains(remote)))
         {
+            // Derniere entree : celle qu'ajoute le proxy (les precedentes viennent du client, forgeables).
             var forwarded = context.Request.Headers["X-Forwarded-For"].ToString();
             var last = forwarded.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
             if (last is not null && IPAddress.TryParse(last, out var parsed))
             {
-                return parsed.ToString();
+                return (parsed.IsIPv4MappedToIPv6 ? parsed.MapToIPv4() : parsed).ToString();
             }
         }
 
         return remote?.ToString() ?? "?";
     }
 
-    private static bool IsPrivate(IPAddress address)
+    private static IPAddress? Remote(HttpContext context)
     {
-        if (IPAddress.IsLoopback(address))
-        {
-            return true;
-        }
-
-        if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
-        {
-            return address.IsIPv6LinkLocal || address.IsIPv6SiteLocal || address.IsIPv6UniqueLocal;
-        }
-
-        var b = address.GetAddressBytes();
-        return b[0] == 10
-            || (b[0] == 172 && b[1] >= 16 && b[1] <= 31)
-            || (b[0] == 192 && b[1] == 168)
-            || (b[0] == 169 && b[1] == 254);
+        var remote = context.Connection.RemoteIpAddress;
+        return remote is not null && remote.IsIPv4MappedToIPv6 ? remote.MapToIPv4() : remote;
     }
 }

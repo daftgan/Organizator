@@ -334,13 +334,21 @@ public sealed class ServerBridge : IDisposable
             throw new InvalidOperationException("Reglages invalides : " + ex.Message);
         }
 
+        // Le reglage « serveur Revizator » n'a de sens que sur le PC : aucun jeton ne se garde ici.
+        incoming.RevizatorServerUrl = "";
+        incoming.RevizatorServerToken = "";
         _store.SaveSettings(incoming);
         return new JsonObject();
     }
 
+    /// <summary>
+    /// Trace de la page : niveau reduit a quelques lettres (un saut de ligne y forgerait une fausse ligne du
+    /// journal) et message borne (un message de 32 Mo par appel remplirait le journal et la console).
+    /// </summary>
     private JsonNode LogFromWeb(JsonObject payload)
     {
-        _log.FromWeb(Str(payload, "level"), Str(payload, "message"));
+        var level = new string((Str(payload, "level") ?? "").Where(char.IsAsciiLetter).Take(12).ToArray());
+        _log.FromWeb(level, Clip(Str(payload, "message") ?? "", 4000));
         return new JsonObject();
     }
 

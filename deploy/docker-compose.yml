@@ -24,6 +24,7 @@ services:
     environment:
       REVIZATOR_PUBLIC_URL: ${REVIZATOR_PUBLIC_URL:-https://revizator.daft-lab.fr}
       REVIZATOR_ALLOWED_ORIGINS: ${REVIZATOR_ALLOWED_ORIGINS:-https://app.organizator}
+      REVIZATOR_TRUSTED_PROXIES: ${REVIZATOR_TRUSTED_PROXIES:-private}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       TZ: ${TZ:-Europe/Paris}
     volumes:

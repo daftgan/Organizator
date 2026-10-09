@@ -9,7 +9,9 @@ namespace Revizator.Server;
 
 /// <summary>
 /// Connexions WebSocket du pont (§ 4) : une file d'envoi par connexion (les evenements ne bloquent jamais
-/// l'emetteur), <c>{ event: 'ping' }</c> toutes les 20 s, messages de 32 Mo au plus.
+/// l'emetteur), <c>{ event: 'ping' }</c> toutes les 20 s, messages de 32 Mo au plus. Le jeton de chaque
+/// connexion est reverifie a chaque message et a chaque ping : <c>token revoke</c> coupe aussi les
+/// connexions deja ouvertes (code 1008).
 /// </summary>
 public sealed class WsHub
 {
@@ -21,12 +23,22 @@ public sealed class WsHub
     private readonly ConcurrentDictionary<Connection, byte> _connections = new();
     private readonly Timer _ping;
 
-    public WsHub(ServerBridge bridge, HostLog log)
+    public WsHub(ServerBridge bridge, HostLog log, CancellationToken stopping)
     {
         _bridge = bridge;
         _log = log;
         _bridge.Broadcast = (message, except) => Send(message, except as Connection);
-        _ping = new Timer(_ => Send(new JsonObject { ["event"] = "ping" }, null), null, PingEvery, PingEvery);
+        _ping = new Timer(_ => Ping(), null, PingEvery, PingEvery);
+        // Arret du serveur (docker stop) : Kestrel attendrait 30 s que les WebSocket se ferment d'eux-memes,
+        // pendant lesquels les pages se croiraient connectees. On les ferme tout de suite (1001) : elles
+        // passent hors ligne et se reconnectent au serveur suivant.
+        stopping.Register(() =>
+        {
+            foreach (var connection in _connections.Keys)
+            {
+                _ = CloseAsync(connection.Socket, WebSocketCloseStatus.EndpointUnavailable, "Serveur arrete.");
+            }
+        });
     }
 
     public int Count => _connections.Count;
@@ -35,6 +47,8 @@ public sealed class WsHub
     {
         public required WebSocket Socket { get; init; }
         public required string Device { get; init; }
+        public required Func<bool> StillValid { get; init; }
+        public int Revoked;
         public Channel<string> Outbox { get; } = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     }
 
@@ -50,10 +64,52 @@ public sealed class WsHub
         }
     }
 
-    /// <summary>Sert une connexion jusqu'a sa fermeture.</summary>
-    public async Task RunAsync(WebSocket socket, string device, CancellationToken stopping)
+    /// <summary>Ping de toutes les connexions ; celles dont le jeton a ete revoque sont fermees.</summary>
+    private void Ping()
     {
-        var connection = new Connection { Socket = socket, Device = device };
+        foreach (var connection in _connections.Keys)
+        {
+            if (!Valid(connection))
+            {
+                continue;
+            }
+
+            connection.Outbox.Writer.TryWrite("{\"event\":\"ping\"}");
+        }
+    }
+
+    /// <summary>Faux (et connexion fermee, file close) si le jeton de la connexion n'est plus valable.</summary>
+    private bool Valid(Connection connection)
+    {
+        bool valid;
+        try
+        {
+            valid = connection.StillValid();
+        }
+        catch (Exception)
+        {
+            valid = false;
+        }
+
+        if (valid)
+        {
+            return true;
+        }
+
+        // La boucle d'ecriture, seule a envoyer, vide la file puis ferme (1008) : pas d'envoi concurrent.
+        if (Interlocked.Exchange(ref connection.Revoked, 1) == 0)
+        {
+            _log.Warn($"WebSocket ferme : jeton revoque ({connection.Device})");
+            connection.Outbox.Writer.TryComplete();
+        }
+
+        return false;
+    }
+
+    /// <summary>Sert une connexion jusqu'a sa fermeture ; <paramref name="stillValid"/> dit si son jeton vaut encore.</summary>
+    public async Task RunAsync(WebSocket socket, string device, Func<bool> stillValid, CancellationToken stopping)
+    {
+        var connection = new Connection { Socket = socket, Device = device, StillValid = stillValid };
         _connections[connection] = 0;
         _log.Info($"WebSocket ouvert ({device}, {_connections.Count} connexion(s))");
         using var closing = CancellationTokenSource.CreateLinkedTokenSource(stopping);
@@ -119,6 +175,12 @@ public sealed class WsHub
                 continue;
             }
 
+            if (!Valid(connection))
+            {
+                // Rien n'est traite ; la boucle d'ecriture ferme la connexion.
+                continue;
+            }
+
             // Appel sans attendre la reponse : la partie synchrone du gestionnaire passe dans l'ordre de
             // reception (asrFeed), le reste avance en parallele, comme sous WebView2.
             var pending = _bridge.HandleAsync(text, connection);
@@ -142,6 +204,13 @@ public sealed class WsHub
             }
 
             await connection.Socket.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, true, ct).ConfigureAwait(false);
+        }
+
+        if (Volatile.Read(ref connection.Revoked) == 1)
+        {
+            await CloseAsync(connection.Socket, WebSocketCloseStatus.PolicyViolation, "Jeton revoque.").ConfigureAwait(false);
+            // La lecture en attente se termine (en erreur) : RunAsync fait le menage.
+            connection.Socket.Abort();
         }
     }
 

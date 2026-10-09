@@ -1193,7 +1193,7 @@
     var run = S.ui.transcribing[attId];
     if (!run) return;
     delete S.ui.transcribing[attId];
-    bridge.call('cancelTranscribe', { job: run.job })['catch'](function () { /* déjà finie */ });
+    bridge.call('cancelTranscribe', { job: run.job, local: true })['catch'](function () { /* déjà finie */ });
     if (!quiet) render();
   }
 
@@ -1262,7 +1262,7 @@
   }
 
   function refreshWhisper() {
-    return bridge.call('whisperStatus', {}).then(function (st) {
+    return bridge.call('whisperStatus', { local: true }).then(function (st) {
       S.env.whisper = st;
       if (S.ui.settingsOpen && settingsTab() === 'voice') renderDialogs();
     })['catch'](function () { /* l'état affiché reste celui du démarrage */ });
@@ -1272,7 +1272,7 @@
     if (S.ui.whisperDl[id]) return;
     S.ui.whisperDl[id] = { received: 0, total: 0 };
     renderDialogs();
-    bridge.call('whisperDownload', { model: id }, 3600000).then(function (st) {
+    bridge.call('whisperDownload', { model: id, local: true }, 3600000).then(function (st) {
       delete S.ui.whisperDl[id];
       if (st && st.models) S.env.whisper = st;
       renderDialogs();
@@ -1284,7 +1284,7 @@
   }
 
   function removeWhisper(id) {
-    bridge.call('whisperRemove', { model: id }, 60000).then(function () {
+    bridge.call('whisperRemove', { model: id, local: true }, 60000).then(function () {
       delete S.ui.whisperDl[id];
       return refreshWhisper();
     }, function (e) { toast('Suppression impossible : ' + e.message); });
@@ -1384,7 +1384,7 @@
       selStart: field.selectionStart, selEnd: field.selectionEnd, chunks: [], startedAt: Date.now(), level: 0
     };
     /* Le modèle se télécharge (premier usage) ou se charge pendant qu'on parle. */
-    bridge.call('whisperWarm', { model: S.settings.whisperModel })['catch'](function () { /* redit à la transcription */ });
+    bridge.call('whisperWarm', { model: S.settings.whisperModel, local: true })['catch'](function () { /* redit à la transcription */ });
     renderDictate();
     md.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
       .then(function (stream) {
@@ -1452,7 +1452,7 @@
     var d = dict;
     if (!d) return;
     d.cancelled = true;
-    if (d.phase === 'transcribing') bridge.call('cancelTranscribe', { job: d.job })['catch'](function () { /* déjà finie */ });
+    if (d.phase === 'transcribing') bridge.call('cancelTranscribe', { job: d.job, local: true })['catch'](function () { /* déjà finie */ });
     if (d.recorder && d.recorder.state !== 'inactive') { try { d.recorder.stop(); } catch (e) { /* déjà arrêté */ } }
     endDictation(d);
   }
@@ -1470,7 +1470,7 @@
     if (!blob.size || Date.now() - d.startedAt < 400) { endDictation(d); toast('Rien d’enregistré.'); return; }
     wav16k(blob).then(readBase64).then(function (data) {
       if (d.cancelled) return null;
-      return bridge.call('transcribe', { job: d.job, data: data, model: S.settings.whisperModel, language: d.lang || S.settings.whisperLanguage }, 3600000);
+      return bridge.call('transcribe', { job: d.job, local: true, data: data, model: S.settings.whisperModel, language: d.lang || S.settings.whisperLanguage }, 3600000);
     }).then(function (r) {
       if (r && !d.cancelled) insertDictation(d, r.text);
     }, function (e) {

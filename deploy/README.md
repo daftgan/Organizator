@@ -206,14 +206,23 @@ docker exec revizator claude -p "Réponds seulement OK" --model haiku   # OK (le
 |---|---|---|
 | Details | Domain Names | `revizator.daft-lab.fr` |
 | | Scheme / Forward Hostname / Port | `http` / `192.168.1.30` / `8080` |
-| | Cache Assets | **non** |
+| | Cache Assets | **non** (sinon NPM garde et ressert les fichiers privés `/learn`, `/t/…` sans jeton) |
 | | Block Common Exploits | oui |
 | | Websockets Support | **oui** (indispensable : tout passe par `/api/ws`) |
 | SSL | SSL Certificate | Request a new SSL Certificate (Let's Encrypt), ou ton certificat `*.daft-lab.fr` |
 | | Force SSL, HTTP/2 Support | oui |
 
 HTTPS est obligatoire pour le téléphone : micro (`getUserMedia`), installation sur l'écran d'accueil et
-cookie sécurisé. Le serveur lit `X-Forwarded-For` / `X-Forwarded-Proto` posés par NPM.
+cookie sécurisé. Le serveur lit `X-Forwarded-For` / `X-Forwarded-Proto` posés par NPM, et seulement
+quand la connexion vient d'une adresse de `REVIZATOR_TRUSTED_PROXIES` (défaut `private` : tout le réseau
+privé). Pour durcir : `REVIZATOR_TRUSTED_PROXIES=192.168.1.11` (NPM seul), puis vérifier dans
+`docker logs revizator` qu'un appairage depuis la 4G affiche l'adresse publique du téléphone
+(`Appareil appaire : telephone (<IP publique>)`) ; s'il affiche `192.168.1.11` ou `172.x`, revenir à
+`private` (Docker ne voit pas NPM sous sa propre adresse).
+
+Les jetons passent dans l'adresse (`/pair?token=`, `/api/ws?token=` du PC, médias `/t/<jeton>/`) : le
+journal d'accès de NPM (`/data/logs/proxy-host-*_access.log`) les contient. Garder NPM et ses journaux
+fermés au reste du réseau ; en cas de doute, `revizator-server token new <appareil>` remplace un jeton.
 
 Vérifier depuis n'importe où : `curl -s https://revizator.daft-lab.fr/api/health`, et
 `https://revizator.daft-lab.fr/` dans un navigateur → « Appareil non appairé » (normal : pas de jeton).

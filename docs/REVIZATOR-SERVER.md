@@ -33,8 +33,9 @@ Une seule source de vérité : le dossier de données du serveur. Le PC et le t�
   pas de copie, pas de bibliothèque intermédiaire. Une correction profite aux deux.
 - Ce qui dépend de Windows (recherche de `claude.exe`, DLL natives win-x64 de Whisper et sherpa-onnx,
   décodage Media Foundation de NAudio, voix SAPI, WMI…) est isolé : branche
-  `OperatingSystem.IsWindows()` dans le fichier partagé quand c'est court, sinon une implémentation
-  propre au serveur dans `src/Revizator.Server/Platform/` (par exemple le décodage audio par `ffmpeg`).
+  `OperatingSystem.IsWindows()` dans le fichier partagé quand c'est court (c'est le cas de tout ce qui a
+  été fait, décodage audio par `ffmpeg` compris), sinon une implémentation propre au serveur dans
+  `src/Revizator.Server/Platform/`.
 - **L'hôte WPF doit se comporter exactement comme avant sous Windows.** Vérification sous Linux :
   `dotnet build src/Organizator/Organizator.csproj -c Release -p:EnableWindowsTargeting=true` doit
   rester sans erreur (le SDK Microsoft.NET.Sdk.WindowsDesktop est installé dans cet environnement).
@@ -58,6 +59,10 @@ Une seule source de vérité : le dossier de données du serveur. Le PC et le t�
     recopie le journal sur la console (`docker logs`).
   - bibliothèques natives : Whisper.net (`libwhisper.so`, `libggml*.so`) a besoin de `libgomp1` dans
     l'image.
+  - le `.csproj` copie aussi `src/Organizator/wwwroot` tel quel sous `wwwroot/` dans la sortie et la
+    publication ; les `.so` de Whisper.net vont sous `runtimes/linux-x64/`, ceux de sherpa-onnx sous
+    `sherpa/linux-x64/` ; QRCoder dessine le QR code d'appairage. Version du serveur : `<Version>` du
+    `.csproj` (1.0.0), rendue par `/api/health` et reprise par `revizator-server.js`.
 
 ## 3. Serveur HTTP
 
@@ -69,6 +74,7 @@ Configuration par variables d'environnement :
 | `REVIZATOR_PORT` | `8080` | port HTTP (TLS assuré par le reverse proxy) |
 | `REVIZATOR_PUBLIC_URL` | `http://localhost:8080` | adresse publique, pour les liens d'appairage |
 | `REVIZATOR_ALLOWED_ORIGINS` | `https://app.organizator` | origines autorisées en CORS (la page d'Organizator dans WebView2) |
+| `REVIZATOR_TRUSTED_PROXIES` | `private` | adresses ou réseaux (`192.168.1.11`, `172.16.0.0/12`, séparés par des virgules ; `private` = réseaux privés et locaux, `none` = aucun) dont `X-Forwarded-For` et `X-Forwarded-Proto` font foi ; une valeur illisible empêche le démarrage |
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | jeton de `claude setup-token`, lu par Claude Code |
 | `REVIZATOR_CLAUDE` | `claude` (dans le `PATH`) | chemin de l'exécutable Claude Code |
 | `REVIZATOR_WWWROOT` | `wwwroot/` à côté de l'exécutable | dossier de la page (développement : `src/Organizator/wwwroot`) |
@@ -79,7 +85,8 @@ Routes :
 |---|---|---|
 | `GET /api/health` | non | `{ ok, version }` |
 | `GET /pair?token=…` | jeton | pose le cookie `rz_token` (HttpOnly, Secure si HTTPS, SameSite=Lax, 400 jours) et redirige vers `/` |
-| `GET /` , `/index.html` | cookie | `wwwroot/index.html` avec deux injections (ci-dessous) ; sans cookie valide : petite page « appareil non appairé » |
+| `GET /` , `/index.html` | cookie | `wwwroot/index.html` avec deux injections (ci-dessous) ; sans cookie valide : petite page « appareil non appairé » (401, ou 429 au-delà de la limite d'essais) |
+| `GET /revizator-server.js` | non | généré : `window.REVIZATOR_SERVER = { mode: 'revizator', version, wsUrl: '/api/ws' }` |
 | `GET /<fichier de wwwroot>` | non | fichiers statiques de la page (aucune donnée personnelle) |
 | `GET /api/ws` | cookie ou `?token=` | WebSocket du pont (§ 4) |
 | `GET /learn/…`, `GET /t/<jeton>/learn/…` | cookie / jeton dans le chemin | dossier `learning/` (ce que sert `learn.organizator`) |
@@ -88,20 +95,41 @@ Routes :
 - Injections dans `index.html` servi par le serveur : avant `<script src="bridge.js">`, la ligne
   `<script src="revizator-server.js"></script>` (fichier **généré** par le serveur :
   `window.REVIZATOR_SERVER = { mode: 'revizator', version: '…', wsUrl: '/api/ws' };`) ; avant
-  `</head>` : `<link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="…">
-  <link rel="apple-touch-icon" href="icons/icon-192.png"><link rel="stylesheet" href="mobile.css">`.
-  L'hôte WPF, lui, sert `index.html` tel quel.
+  `</head>` : `<link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#f5ead8">
+  <link rel="apple-touch-icon" href="icons/icon-192.png"><link rel="icon" type="image/png"
+  href="icons/icon-192.png"><link rel="stylesheet" href="mobile.css">`. L'hôte WPF, lui, sert
+  `index.html` tel quel.
+- Autres réponses : seules `GET` et `HEAD` sont servies (sinon 405, sauf le WebSocket et le `OPTIONS` du
+  CORS, qui rend 204) ; tout autre chemin sous `/api/` ou `/pair/` rend 404.
 - Les fichiers de `wwwroot` sont ceux de `src/Organizator/wwwroot` (copiés dans la sortie du build du
   serveur, ou embarqués), jamais modifiés à l'exécution.
-- Statique : aucun chemin ne sort de son dossier racine (`..`, chemins absolus, liens symboliques
-  refusés) ; `Cache-Control: no-cache` sur `index.html`, `revizator-server.js` et `sw.js`.
+- Statique : aucun chemin ne sort de son dossier racine (`..`, chemins absolus, liens symboliques,
+  segments vides ou cachés — commençant par un point —, `\ : %` et caractères de contrôle refusés) ; `Cache-Control: no-cache` sur `index.html`, `revizator-server.js` et `sw.js`.
 - CORS : seulement pour `REVIZATOR_ALLOWED_ORIGINS`, sur `/learn`, `/tts`, `/t/…` et `/api/health`.
+- En-têtes de sécurité : sur toute réponse `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`
+  (une page ou un média sous `/t/<jeton>/` ne transmet jamais son adresse) et `X-Frame-Options: DENY` ; sur
+  la page (et la page « non appairé ») un CSP : `default-src 'self'; script-src 'self' blob:` (aucun script
+  en ligne ni gestionnaire `on…=` : un texte généré ou un flux RSS injecté ne s'exécute pas ; `blob:` pour
+  le module audio de la détection de voix), `style-src 'self' 'unsafe-inline'`, `img-src 'self' data:
+  blob:`, `media-src 'self' data: blob: https:` (podcasts lus directement), `connect-src 'self'
+  wss://<hôte> ws://<hôte>`, `worker-src 'self' blob:`, `object-src 'none'`, `base-uri 'none'`,
+  `frame-ancestors 'none'`, plus `font-src 'self' data:`, `frame-src 'self'` (lecteur d'artefacts),
+  `manifest-src 'self'` et `form-action 'self'`. La page ne doit donc jamais dépendre d'un script en ligne. Fichiers de
+  `/learn`, `/tts`, `/t/…` : `Cache-Control: private, no-cache` et `Content-Security-Policy: default-src
+  'none'; sandbox`. NPM ne doit pas mettre en cache (« Cache Assets » : non) : son cache ignore
+  `Cache-Control` et resservirait ces fichiers sans jeton.
 - Jetons : `tokens.json` dans le dossier de données, chaque jeton = 32 octets aléatoires en base64url,
   stocké **haché** (SHA-256) avec un nom d'appareil et sa date de création ; comparaison à temps
-  constant ; 10 échecs par minute et par IP au plus (au-delà : 429). En-tête `X-Forwarded-For` pris en
-  compte (le serveur est derrière NPM) : sa **dernière** entrée (celle qu'ajoute NPM), et seulement quand
-  la connexion vient d'une adresse privée ou locale (le proxy). Au-delà de la limite, même un bon jeton
-  reçoit 429 jusqu'à la fin de la minute. `tokens.json` est relu dès qu'il change : `token new` et
+  constant ; 10 échecs par minute et par IP au plus (au-delà : 429 ; une adresse IPv6 compte pour son
+  /64). En-tête `X-Forwarded-For` pris en compte (le serveur est derrière NPM) : sa **dernière** entrée
+  (celle qu'ajoute NPM), et seulement quand la connexion vient d'une adresse de
+  `REVIZATOR_TRUSTED_PROXIES` ; de même `X-Forwarded-Proto` (cookie `Secure`, contrôle d'origine du
+  WebSocket). Au-delà de la limite, même un bon jeton reçoit 429 jusqu'à la fin de la minute. La table
+  des échecs est nettoyée au plus toutes les 10 s et vidée au-delà de 20 000 adresses (pas de croissance
+  sans fin, pas de parcours complet à chaque échec). Les jetons refusés ne sont jamais journalisés (le
+  chemin `/t/<jeton>/…` est écrit `/t/…/…`). Les jetons passent dans des adresses (`/pair?token=`,
+  `?token=` du WebSocket du PC, `/t/<jeton>/`) : le journal d'accès de NPM les contient (limite assumée,
+  documentée dans `deploy/README.md`). `tokens.json` est relu dès qu'il change : `token new` et
   `token revoke` valent aussitôt pour le serveur qui tourne. `token new` sur un nom existant remplace
   son jeton.
 - Ligne de commande (même exécutable) :
@@ -154,12 +182,25 @@ Précisions de la mise en œuvre :
   `<type>` » (la page ne doit donc pas appeler `badge`, `getUsage`, `getArticle`, `refreshModels`… en
   mode serveur : ils échouent) ;
 - `learnLoad` et `learnSave` rendent en plus `rev` (même compteur que `learnChanged`) ; le compteur
-  repart de 0 au démarrage du serveur ;
+  part de l'heure du démarrage du serveur en millisecondes (et non de 0) : une page ouverte avant un
+  redémarrage ne retombe jamais par hasard sur son ancien numéro ;
+- `learnSave` accepte `baseRev` (le `rev` que la page a lu ou écrit en dernier) : si un autre appareil a
+  écrit depuis, rien n'est écrit et la réponse est `{ conflict: true, rev }` (voir § 6). Sans `baseRev`,
+  l'écriture est inconditionnelle (comme sous WebView2). Lecture et écriture de `learning.json` passent
+  une à la fois ;
 - `transcribe` avec un `path` est refusé (il n'y a pas de pièces jointes sur le serveur) ;
 - `perf` est accepté et ignoré ; `log` va au journal ;
-- WebSocket ouvert avec le cookie : l'en-tête `Origin`, s'il est présent, doit être l'hôte du serveur
-  (ou une origine de `REVIZATOR_ALLOWED_ORIGINS`), sinon 403 ; avec `?token=`, l'origine est libre ;
+- WebSocket ouvert avec le cookie : l'en-tête `Origin`, s'il est présent, doit être ce serveur — égal à
+  `REVIZATOR_PUBLIC_URL`, ou au schéma (`https` si la requête l'est, directement ou par `X-Forwarded-Proto`
+  d'un proxy de confiance) et à l'en-tête `Host` de la requête (`X-Forwarded-Host` n'est pas lu) — ou une
+  origine de `REVIZATOR_ALLOWED_ORIGINS`, sinon 403 ; avec `?token=`, l'origine est libre ;
+- le jeton d'une connexion est revérifié à chaque message et à chaque ping : un jeton révoqué (ou
+  remplacé par `token new`) ferme aussi les connexions déjà ouvertes (code 1008, au plus 20 s) ;
+- `log` : niveau réduit à 12 lettres, message coupé à 4 000 caractères (pas de fausse ligne de journal) ;
+  `saveSettings` ne garde jamais `revizatorServerUrl` ni `revizatorServerToken` (réglages du PC) ;
 - un message au-delà de 32 Mo ferme la connexion (code 1009) ; les messages binaires sont ignorés ;
+- à l'arrêt du serveur (`docker stop`, SIGTERM), les WebSocket sont fermés tout de suite (code 1001) : sans
+  cela Kestrel les garderait jusqu'à 30 s et les pages se croiraient encore connectées ;
 - la partie synchrone de chaque gestionnaire s'exécute dans l'ordre de réception (les `asrFeed`
   restent ordonnés), le reste en parallèle, comme sous WebView2.
 
@@ -182,12 +223,19 @@ Trois cas, décidés au chargement :
    **Exceptions** (ce qui n'existe que sur le PC) : un appel avec des fichiers joints
    (`bridge.call(…, files)`) et un `transcribe` qui porte un `path` (enregistrement joint à une tâche),
    ainsi que le `cancelTranscribe` de ce travail, restent sur l'hôte local, et les événements de l'hôte
-   dont le `job` est celui d'un tel travail passent.
+   dont le `job` est celui d'un tel travail passent. De même pour tout appel dont le `payload` porte
+   `local: true` : `app.js` le met sur la dictée des tâches (`transcribe`, `cancelTranscribe`) et sur les
+   modèles Whisper de l'onglet Dictée (`whisperStatus`, `whisperDownload`, `whisperRemove`,
+   `whisperWarm`) ; les événements `whisper` de ces travaux (même `job`) et de ces téléchargements (même
+   `model`, sans `job`) passent. Le texte des tâches ne quitte donc jamais le PC.
    Les réglages ne sont connus qu'après `getState` : `app.js` appelle
    `bridge.configureRemote({ url, token })` juste après, avant le démarrage des pages, et Révizator le
    rappelle quand le réglage change (Réglages › Révizator › Serveur Révizator : adresse, jeton masqué,
    « Tester la connexion » = `bridge.testRemote` : `GET /api/health` puis ouverture du WebSocket avec le
-   jeton → connecté / injoignable / jeton refusé, et « Enregistrer »). `configureRemote` émet
+   jeton → `online` / `unreachable` / `refused`, ou `invalid` pour une adresse illisible, affichés
+   « Connecté » (avec la version du serveur), « Injoignable », « Jeton refusé » ; et « Enregistrer »).
+   « Jeton refusé » veut dire : `/api/health` répond mais le WebSocket refuse ; un proxy qui bloquerait les
+   WebSocket donnerait le même message, ou « Injoignable » s'il ne répond pas en 8 s. `configureRemote` émet
    `remoteChanging` (avant la bascule : une sauvegarde en attente part encore à l'ancien destinataire)
    puis `remoteChanged` ; Révizator relit alors tout chez le nouveau. Le réglage n'est montré que dans
    WebView2 (dans le shim, seulement avec `window.__shimRemote = true`, pour les essais).
@@ -219,8 +267,9 @@ Actif quand `window.REVIZATOR_SERVER.mode === 'revizator'` (ou `?mode=revizator`
 tests) :
 
 - la page Révizator est la seule : pas d'onglet File, pas de file de tâches, pas de cartes de quotas ni
-  d'articles, pas de cloche ni de remarques ; l'en-tête garde le titre, l'avancement de la semaine, la
-  connexion et les réglages ;
+  d'articles, pas de cloche ni de remarques ; l'en-tête garde le titre (« Révizator », aussi titre de
+  l'onglet), l'avancement de la semaine, le niveau et les réglages (l'état de la liaison est le bandeau
+  de la page Révizator, § 5.1) ;
 - Réglages : seulement l'onglet Révizator (et ce qui concerne la voix et la dictée) ;
 - rien de ce qui touche aux tâches n'est appelé (`saveData`, `getSessions`, `getUsage`, …).
 
@@ -256,17 +305,33 @@ l'onglet Révizator puis l'onglet Dictée (sans « Transcrire les enregistrement
 
 `learning.json` est écrit en entier par la page (`learnSave`). Après chaque `learnSave` réussi, le
 serveur envoie `{ event: 'learnChanged', payload: { rev, at } }` aux **autres** connexions (`rev` :
-compteur incrémenté à chaque écriture). Dans `revizator/core.js`, à la réception : si rien n'attend
-d'être sauvegardé, la page relit `learnLoad` et se redessine (sans interrompre une séance en cours :
-elle attend la fin de la séance ou le retour à l'accueil) ; sinon, sa propre sauvegarde l'emporte
-(dernier écrit gagnant). « Séance en cours » = toute vue autre que l'accueil et Progrès (séance,
-exercices, bilans, cartes, tuteur) : la relecture attend que l'on revienne à l'une de ces deux vues, et
-elle est abandonnée si, entre-temps, une modification attend d'être sauvegardée. Limite assumée et documentée : faire réviser ses cartes sur deux appareils
-**au même moment** peut perdre les réponses de l'un des deux.
+compteur incrémenté à chaque écriture, § 4).
+
+**Relecture** (`revizator/core.js`) : à la réception de `learnChanged`, si rien n'attend d'être
+sauvegardé, la page relit `learnLoad` et se redessine, sans interrompre une séance en cours. « Séance en
+cours » = toute vue autre que l'accueil et Progrès (séance, exercices, bilans, cartes, tuteur) : la
+relecture attend que l'on revienne à l'une de ces deux vues, et elle est abandonnée si, entre-temps,
+une modification attend d'être sauvegardée (c'est alors l'écriture ci-dessous qui réconcilie).
+
+**Écriture conditionnelle et fusion à trois** (cas 2 et 3, c'est-à-dire dès que `bridge.remote()` n'est
+pas nul) : la page garde la dernière version lue ou écrite (`base` : son `rev` et son texte) et envoie
+`learnSave` avec `baseRev`. Si le serveur répond `{ conflict: true }`, la page relit la version du
+serveur et la fusionne avec la sienne (`merge3`) : ce qu'un seul côté a changé est gardé ; quand les
+deux ont changé, les objets se fusionnent clé par clé, les listes d'objets à `id` (cartes, cours, séries…)
+élément par élément, les autres listes (journaux comme `reviewLog`) gardent les éléments du serveur plus
+ceux ajoutés ici ; une même valeur changée des deux côtés : celle de la page qui écrit l'emporte. Puis
+elle renvoie (trois essais au plus, ensuite un message « sauvegarde différée » et un nouvel essai à la
+modification suivante). La fusion modifie l'objet en place : une vue ouverte (révision de cartes) garde
+ses objets. Vérifié : le téléphone modifie le profil pendant que le PC révise des cartes, les deux
+modifications sont gardées sur disque.
+
+Limite restante : deux appareils qui changent **la même valeur** (la même carte révisée des deux côtés
+au même moment) : la dernière écriture gagne pour cette valeur. Hors serveur (WebView2 seul, shim),
+l'écriture reste inconditionnelle, comme avant.
 
 ## 7. Déploiement (`deploy/`)
 
-- `deploy/Dockerfile` : construction multi-étapes (SDK .NET 8 → `mcr.microsoft.com/dotnet/aspnet:8.0`),
+- `deploy/Dockerfile` : construction multi-étapes (SDK .NET 8 → `mcr.microsoft.com/dotnet/aspnet:8.0-noble`),
   `ffmpeg`, Claude Code (installeur natif) dans le `PATH`, DLL natives linux-x64 de sherpa-onnx et de
   Whisper.net, utilisateur non root, volume `/data`, port 8080, `HEALTHCHECK` sur `/api/health`.
 - `deploy/docker-compose.yml` : prêt pour une stack Komodo, `restart: unless-stopped`, volume
@@ -293,9 +358,45 @@ elle est abandonnée si, entre-temps, une modification attend d'être sauvegard�
     `REVIZATOR_PORT`) ;
   - compose : `pull_policy: build` (image locale `revizator-server:local`, jamais tirée d'un registre :
     Deploy dans Komodo reconstruit), `init: true` (tini récolte les processus de `claude`), port
-    `8080:8080`, journaux `json-file` limités ; `PUBLIC_URL`, `ALLOWED_ORIGINS`,
-    `CLAUDE_CODE_OAUTH_TOKEN` et `TZ` interpolés depuis `.env` (écrit par Komodo à partir de
+    `8080:8080`, journaux `json-file` limités ; `REVIZATOR_PUBLIC_URL`, `REVIZATOR_ALLOWED_ORIGINS`,
+    `REVIZATOR_TRUSTED_PROXIES`, `CLAUDE_CODE_OAUTH_TOKEN` et `TZ` interpolés depuis `.env` (écrit par Komodo à partir de
     l'« Environment » de la stack) ; `deploy/.env` est ignoré par git ;
   - `.dockerignore` à la racine : seul `src/` entre dans le contexte ;
   - import : `docker compose stop`, `docker compose run --rm --no-deps revizator import /data/import-pc`,
     `docker compose start`.
+
+## 8. État des vérifications
+
+Construit et vérifié dans le cloud (Linux, sans réseau vers les sites des modèles ni vers claude.ai) :
+
+- builds : `Revizator.Server`, et l'hôte WPF par `dotnet build src/Organizator/Organizator.csproj -c
+  Release -p:EnableWindowsTargeting=true`, sans erreur ni avertissement ;
+- `node tools/revizator-server-smoke.mjs <url> <jeton>` : santé, CORS, refus sans jeton, appairage et
+  cookie, page et injections, `learnLoad` / `learnSave` / `learnChanged` entre deux connexions, types
+  refusés, `learnGenerate` (avec un faux `claude` qui imite la sortie stream-json), `/learn` par cookie
+  et par `/t/<jeton>/`, traversées de chemin ;
+- parcours complet dans Chromium (Playwright) contre le vrai serveur : un « téléphone » 390×844 et un
+  « PC » 1400×900 appairés, premier lancement, série d'exercices, cartes révisées des deux côtés,
+  fusion d'écritures concurrentes, relecture différée, service worker, serveur coupé puis relancé ;
+  cas 3 (Organizator réglé sur le serveur) par le shim avec `window.__shimRemote` ;
+- image Docker construite et lancée (`healthy`, UID 1654, script de fumée dans le conteneur, `token new`
+  par `docker exec`, import), avec un faux `claude` ;
+- revue de sécurité adverse (authentification, traversées, WebSocket, révocation, limiteur, en-têtes) :
+  défauts trouvés corrigés et inscrits aux § 3 et 4.
+
+Non vérifié : Claude Code réel, les modèles Kokoro, Parakeet et Whisper (seuls leurs échecs propres
+l'ont été) et les flux RSS, `voiceStart` et le micro, WebView2 réel sous Windows (cas 3), Nginx Proxy
+Manager et `wss`, Komodo, un vrai téléphone (iOS Safari, installation de la PWA, clavier virtuel). La
+liste de contrôle de `deploy/FINALISER.md` reprend ces points sur le serveur.
+
+Points connus :
+
+- **iPhone** : l'application ajoutée à l'écran d'accueil peut ne pas retrouver le cookie posé dans
+  Safari, et la page « appareil non appairé » n'a pas de champ pour coller un jeton ; à vérifier sur le
+  téléphone (signalé dans `deploy/README.md` et `deploy/FINALISER.md`).
+- **Jetons dans les adresses** (§ 3) : présents dans le journal d'accès de NPM ; les éviter demanderait de
+  passer le jeton par `Sec-WebSocket-Protocol` dans `bridge.js`.
+- **`WebFetch`** (cours, conversation vocale) peut être poussé par un flux RSS vers le réseau local :
+  isoler le réseau du conteneur est recommandé.
+- Un appareil appairé n'a pas de limite de connexions ni de file d'envoi (32 Mo par message) : acceptable
+  tant que seuls les appareils de l'utilisateur sont appairés.
