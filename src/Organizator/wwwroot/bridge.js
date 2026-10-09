@@ -4,9 +4,23 @@
      call(type, payload, timeoutMs, files) -> Promise   requête/réponse corrélées par id, 15 s par défaut ;
                                       `files` (File[]) : l'hôte en reçoit les chemins
      on(event, handler)  -> off()     événements poussés par l'hôte
-     isShim                           vrai hors WebView2
-   Hors WebView2 (navigateur ordinaire), un shim complet prend le relais :
-   persistance localStorage, sessions simulées, pickFolder via prompt().
+     isShim                           vrai hors WebView2 et hors serveur Révizator
+     mode                             'webview' | 'server' | 'shim'
+     configureRemote({ url, token })  serveur Révizator d'Organizator (cas 3 ci-dessous) ; url vide : tout local
+     remote() -> { url, state } | null ; connection() -> état de la liaison ou null
+     testRemote({ url, token }) -> Promise<{ state: 'online'|'unreachable'|'refused'|'invalid', version, error }>
+   Trois transports, décidés au chargement (docs/REVIZATOR-SERVER.md § 5.1) :
+     1. WebView2 (window.chrome.webview) : postMessage vers l'hôte WPF ;
+     2. page servie par le serveur Révizator (window.REVIZATOR_SERVER) : tout passe par son WebSocket ;
+     3. Organizator avec un serveur Révizator réglé (configureRemote) : les messages de Révizator
+        (REMOTE_TYPES) partent au serveur, le reste reste sur l'hôte ; les événements learn, tts, asr,
+        voice, whisper et learnChanged viennent du serveur, ceux de l'hôte du même nom sont ignorés.
+   Cas 2 et 3 : reconnexion (1 s, 2 s, 5 s puis toutes les 10 s), événement 'connection'
+   ({ state: 'online'|'offline'|'connecting', ou 'local' quand le serveur est retiré }), URL des
+   hôtes virtuels traduites dans les deux sens.
+   Ailleurs (navigateur ordinaire), un shim complet prend le relais :
+   persistance localStorage, sessions simulées, pickFolder via prompt() ; configureRemote y marche
+   aussi (essais du cas 3 dans un navigateur).
    ═══════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
@@ -28,12 +42,19 @@
     };
   }
 
-  function emit(name, payload) {
+  function emitRaw(name, payload) {
     var list = handlers.get(name);
     if (!list) return;
     list.slice().forEach(function (fn) {
       try { fn(payload); } catch (e) { console.error('[bridge] handler ' + name, e); }
     });
+  }
+
+  /* Événement de l'hôte local (WebView2 ou shim) : avec un serveur Révizator, ceux qu'il émet aussi
+     viennent de lui seul — sauf ceux d'un travail que l'hôte fait lui-même (transcription d'un fichier). */
+  function emit(name, payload) {
+    if (remote && REMOTE_EVENTS[name] && !(payload && payload.job && localJobs[payload.job])) return;
+    emitRaw(name, payload);
   }
 
   /* ── Transport WebView2 ─────────────────────────────────────────────── */
@@ -84,6 +105,282 @@
         try { m = JSON.parse(m); } catch (e) { return; }
       }
       settle(m);
+    });
+  }
+
+  /* ── Serveur Révizator (cas 2 et 3) ─────────────────────────────────────
+     Même protocole que WebView2, en JSON texte sur un WebSocket. Les services rendent des URL sous les
+     hôtes virtuels de WebView2 : la page les lit sous <base>/learn/ et <base>/tts/ (base = origine du
+     serveur, ou https://<serveur>/t/<jeton> depuis Organizator), et renvoie toujours les hôtes
+     virtuels — learning.json et les documents restent portables entre le PC et le serveur. */
+  var LEARN_HOST = 'https://learn.organizator/';
+  var TTS_HOST = 'https://tts.organizator/';
+  /* Messages de Révizator que traite le serveur (§ 4) ; getState, saveSettings, notify, log et perf
+     restent sur l'hôte local d'Organizator. */
+  var REMOTE_TYPES = {};
+  ('learnLoad learnSave learnDoc learnDocSave learnDocDelete learnNews learnGenerate learnCancel learnJobs learnWait '
+    + 'ttsStatus ttsDownload ttsRemove ttsWarm speak speakScript cancelSpeak ttsClearCache '
+    + 'whisperStatus whisperDownload whisperRemove whisperWarm transcribe cancelTranscribe '
+    + 'asrStatus asrDownload asrRemove asrWarm asrStart asrFeed asrEnd asrReset asrStop '
+    + 'voiceStart voiceSay voiceInterrupt voiceStop voiceVoices voiceSpeak').split(' ').forEach(function (t) { REMOTE_TYPES[t] = 1; });
+  var REMOTE_EVENTS = { learn: 1, tts: 1, asr: 1, voice: 1, whisper: 1, learnChanged: 1 };
+  var RETRY_MS = [1000, 2000, 5000, 10000];
+  var QUEUE_MS = 10000;               /* un appel attend la reconnexion 10 s au plus */
+  var SILENCE_MS = 50000;             /* le serveur envoie un ping toutes les 20 s : au-delà, la liaison est morte */
+  var OFFLINE = 'Serveur Révizator injoignable';
+  var remote = null, remoteKey = '';
+  /* Transcriptions lancées sur l'hôte local malgré le serveur (fichier de ce PC) : leurs événements passent. */
+  var localJobs = Object.create(null);
+
+  function escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+  function offlineError(detail) {
+    var e = new Error(OFFLINE + (detail ? ' (' + detail + ').' : '.'));
+    e.offline = true;
+    return e;
+  }
+
+  /* Adresse saisie → origine http(s) sans barre finale ; https si le schéma manque ; '' si illisible. */
+  function normServerUrl(url) {
+    var raw = String(url || '').trim();
+    if (!raw) return '';
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) raw = 'https://' + raw;
+    var m = /^(https?):\/\/([^\/?#\s@]+)/i.exec(raw);
+    return m ? m[1].toLowerCase() + '://' + m[2].toLowerCase() : '';
+  }
+
+  /* Une liaison : opts = { url (affichée), origin (serveur), base (préfixe des médias), wsUrl }. */
+  function RemoteLink(opts) {
+    this.url = opts.url;
+    this.wsUrl = opts.wsUrl;
+    this.base = opts.base;
+    this.state = 'connecting';
+    this.pending = new Map();
+    this.queue = [];
+    this.retry = 0;
+    this.closed = false;
+    this.ws = null;
+    this.timer = null;
+    this.watch = null;
+    /* Traduction inverse : toute base de ce serveur (/learn/ du téléphone, /t/<jeton>/learn/ du PC). */
+    var o = escRe(opts.origin);
+    this.reLearn = new RegExp(o + '(?:/t/[A-Za-z0-9_%-]*)?/learn/', 'g');
+    this.reTts = new RegExp(o + '(?:/t/[A-Za-z0-9_%-]*)?/tts/', 'g');
+    this.connect();
+  }
+
+  RemoteLink.prototype.setState = function (state) {
+    if (this.state === state) return;
+    this.state = state;
+    emitRaw('connection', { state: state, url: this.url });
+  };
+
+  /* Les URL n'apparaissent que dans des chaînes JSON, où « / » n'est pas échappé : la traduction se
+     fait sur le texte du message, sans recopier l'objet (un learnSave pèse plusieurs Mo). */
+  RemoteLink.prototype.incoming = function (text) {
+    return String(text).split(LEARN_HOST).join(this.base + '/learn/').split(TTS_HOST).join(this.base + '/tts/');
+  };
+  RemoteLink.prototype.outgoing = function (msg) {
+    return JSON.stringify(msg).replace(this.reLearn, LEARN_HOST).replace(this.reTts, TTS_HOST);
+  };
+
+  RemoteLink.prototype.connect = function () {
+    var self = this;
+    if (this.closed) return;
+    this.timer = null;
+    this.setState('connecting');
+    var ws;
+    try { ws = new WebSocket(this.wsUrl); } catch (e) { this.lost(); return; }
+    this.ws = ws;
+    ws.onopen = function () {
+      if (self.ws !== ws) return;
+      self.retry = 0;
+      self.alive();
+      self.setState('online');
+      self.queue.splice(0).forEach(function (it) { clearTimeout(it.qtimer); self.send(it); });
+    };
+    ws.onmessage = function (ev) {
+      if (self.ws !== ws) return;
+      self.alive();
+      self.receive(ev.data);
+    };
+    ws.onclose = function () { if (self.ws === ws) self.lost(); };
+    ws.onerror = function () { /* onclose suit */ };
+  };
+
+  /* Chaque message repousse l'échéance du chien de garde. */
+  RemoteLink.prototype.alive = function () {
+    var self = this, ws = this.ws;
+    clearTimeout(this.watch);
+    this.watch = setTimeout(function () {
+      if (self.ws !== ws) return;
+      try { ws.close(); } catch (e) { /* déjà fermé */ }
+      self.lost();
+    }, SILENCE_MS);
+  };
+
+  /* Coupure : les appels partis sont rejetés (leur réponse ne viendra plus), puis on se reconnecte. */
+  RemoteLink.prototype.lost = function () {
+    var self = this;
+    this.ws = null;
+    clearTimeout(this.watch);
+    var gone = [];
+    this.pending.forEach(function (it) { gone.push(it); });
+    this.pending.clear();
+    gone.forEach(function (it) { clearTimeout(it.timer); it.reject(offlineError('connexion perdue')); });
+    if (this.closed) return;
+    this.setState('offline');
+    if (!this.timer) {
+      var delay = RETRY_MS[Math.min(this.retry, RETRY_MS.length - 1)];
+      this.retry++;
+      this.timer = setTimeout(function () { self.connect(); }, delay);
+    }
+  };
+
+  RemoteLink.prototype.send = function (it) {
+    this.pending.set(it.id, it);
+    try {
+      this.ws.send(it.text);
+    } catch (e) {
+      this.pending.delete(it.id);
+      clearTimeout(it.timer);
+      it.reject(offlineError());
+    }
+  };
+
+  RemoteLink.prototype.receive = function (text) {
+    var m;
+    try { m = JSON.parse(this.incoming(text)); } catch (e) { return; }
+    if (!m) return;
+    if (m.event) {
+      if (m.event !== 'ping') emitRaw(m.event, m.payload || {});
+      return;
+    }
+    if (m.id == null) return;
+    var it = this.pending.get(String(m.id));
+    if (!it) return;
+    this.pending.delete(String(m.id));
+    clearTimeout(it.timer);
+    if (m.ok) it.resolve(m.payload || {});
+    else it.reject(new Error(m.error || 'Erreur inconnue du serveur Révizator.'));
+  };
+
+  RemoteLink.prototype.call = function (type, payload, timeoutMs) {
+    var self = this;
+    return new Promise(function (resolve, reject) {
+      if (self.closed) { reject(offlineError()); return; }
+      var it = { id: 'r' + (++seq), type: type, resolve: resolve, reject: reject };
+      try { it.text = self.outgoing({ id: it.id, type: type, payload: payload || {} }); } catch (e) { reject(e); return; }
+      it.timer = setTimeout(function () {
+        self.pending.delete(it.id);
+        var qi = self.queue.indexOf(it);
+        if (qi >= 0) { self.queue.splice(qi, 1); clearTimeout(it.qtimer); }
+        reject(new Error('Le serveur Révizator n’a pas répondu (' + type + ').'));
+      }, timeoutMs || TIMEOUT);
+      if (self.ws && self.ws.readyState === 1 && self.state === 'online') { self.send(it); return; }
+      /* Hors ligne : l'appel attend la reconnexion, 10 s au plus. */
+      it.qtimer = setTimeout(function () {
+        var qi = self.queue.indexOf(it);
+        if (qi < 0) return;
+        self.queue.splice(qi, 1);
+        clearTimeout(it.timer);
+        reject(offlineError());
+      }, QUEUE_MS);
+      self.queue.push(it);
+    });
+  };
+
+  /* Fin de la liaison (réglage changé) : tout ce qui attend échoue, plus de reconnexion. */
+  RemoteLink.prototype.close = function () {
+    this.closed = true;
+    clearTimeout(this.timer);
+    clearTimeout(this.watch);
+    var ws = this.ws;
+    this.ws = null;
+    if (ws) { try { ws.close(); } catch (e) { /* déjà fermé */ } }
+    var gone = this.queue.splice(0);
+    this.pending.forEach(function (it) { gone.push(it); });
+    this.pending.clear();
+    gone.forEach(function (it) { clearTimeout(it.timer); clearTimeout(it.qtimer); it.reject(offlineError('serveur changé')); });
+  };
+
+  /* Cas 2 : page servie par le serveur, même origine (le cookie rz_token authentifie le WebSocket). */
+  var SERVER = null;
+  if (!wv && window.REVIZATOR_SERVER) {
+    var wsPath = String(window.REVIZATOR_SERVER.wsUrl || '/api/ws');
+    SERVER = new RemoteLink({
+      url: location.origin, origin: location.origin, base: location.origin,
+      wsUrl: /^wss?:\/\//i.test(wsPath) ? wsPath : (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + wsPath
+    });
+  }
+  function serverCall(type, payload, timeoutMs) { return SERVER.call(type, payload, timeoutMs); }
+
+  /* Cas 3 : réglages revizatorServerUrl et revizatorServerToken d'Organizator, connus après getState.
+     'remoteChanging' part avant la bascule (une sauvegarde en attente va encore à l'ancien
+     destinataire), 'remoteChanged' après. Rend vrai si le transport a changé. */
+  function configureRemote(opts) {
+    var url = normServerUrl(opts && opts.url);
+    var token = String((opts && opts.token) || '').trim();
+    var key = url ? url + '#' + token : '';
+    if (key === remoteKey) return false;
+    emitRaw('remoteChanging', { url: url });
+    if (remote) remote.close();
+    remote = null;
+    remoteKey = key;
+    if (url) {
+      var t = encodeURIComponent(token);
+      remote = new RemoteLink({ url: url, origin: url, base: url + '/t/' + t, wsUrl: url.replace(/^http/, 'ws') + '/api/ws?token=' + t });
+    }
+    emitRaw('remoteChanged', { url: url, active: !!remote });
+    emitRaw('connection', { state: remote ? remote.state : 'local', url: url });
+    return true;
+  }
+
+  /* Un fichier joint (dépôt, collage) ou un enregistrement de ce PC (transcribe avec `path`) n'existe
+     que sur l'hôte local : ces appels y restent, avec leurs événements. */
+  function routeRemote(type, payload, files) {
+    if (!REMOTE_TYPES[type] || (files && files.length)) return false;
+    if (type === 'transcribe' && payload && payload.path) {
+      if (payload.job) localJobs[payload.job] = 1;
+      return false;
+    }
+    if (type === 'cancelTranscribe' && payload && payload.job && localJobs[payload.job]) return false;
+    return true;
+  }
+
+  /* Bouton « Tester la connexion » : /api/health (sans jeton), puis le WebSocket avec le jeton.
+     state : 'online' | 'unreachable' (serveur ou proxy muet) | 'refused' (jeton refusé) | 'invalid'. */
+  function testRemote(opts) {
+    var url = normServerUrl(opts && opts.url);
+    var token = String((opts && opts.token) || '').trim();
+    if (!url) return Promise.resolve({ state: 'invalid', version: '', error: 'Adresse invalide : https://revizator.exemple.fr' });
+    var ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    var abort = setTimeout(function () { if (ctl) ctl.abort(); }, 8000);
+    return fetch(url + '/api/health', { cache: 'no-store', signal: ctl ? ctl.signal : undefined }).then(function (r) {
+      clearTimeout(abort);
+      if (!r.ok) throw new Error('réponse HTTP ' + r.status);
+      return r.json();
+    }).then(function (h) {
+      var version = (h && h.version) || '';
+      return new Promise(function (resolve) {
+        var ws = null, done = false, timer = null;
+        var finish = function (state, error) {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          if (ws) { try { ws.close(); } catch (e) { /* déjà fermé */ } }
+          resolve({ state: state, version: version, error: error || '' });
+        };
+        timer = setTimeout(function () { finish('unreachable', 'Le WebSocket ne répond pas : le proxy le laisse-t-il passer ?'); }, 8000);
+        try { ws = new WebSocket(url.replace(/^http/, 'ws') + '/api/ws?token=' + encodeURIComponent(token)); } catch (e) { finish('unreachable', e.message); return; }
+        ws.onopen = function () { finish('online'); };
+        ws.onerror = ws.onclose = function () { finish('refused', 'Le serveur répond mais refuse ce jeton.'); };
+      });
+    }, function (e) {
+      clearTimeout(abort);
+      /* fetch ne dit rien de plus qu'un « Failed to fetch » : adresse, réseau, certificat ou CORS. */
+      return { state: 'unreachable', version: '', error: e && e.name === 'AbortError' ? 'Pas de réponse en 8 s.'
+        : (/^HTTP|réponse HTTP/.test(String(e && e.message)) ? String(e.message) : 'Pas de réponse : vérifiez l’adresse, le réseau et le certificat.') };
     });
   }
 
@@ -700,7 +997,8 @@
           whisperEnabled: p.whisperEnabled, whisperAuto: p.whisperAuto, whisperModel: p.whisperModel, whisperLanguage: p.whisperLanguage,
           voiceModel: p.voiceModel, voiceEffort: p.voiceEffort, voiceVoice: p.voiceVoice, voiceRate: p.voiceRate,
           voicePersona: p.voicePersona, voiceTopic: p.voiceTopic, voiceInstructions: p.voiceInstructions, voiceWeb: p.voiceWeb,
-          voiceWhisperModel: p.voiceWhisperModel, voiceSensitivity: p.voiceSensitivity, voiceBargeIn: p.voiceBargeIn
+          voiceWhisperModel: p.voiceWhisperModel, voiceSensitivity: p.voiceSensitivity, voiceBargeIn: p.voiceBargeIn,
+          revizatorServerUrl: p.revizatorServerUrl, revizatorServerToken: p.revizatorServerToken
         });
         return {};
 
@@ -1020,13 +1318,27 @@
     }
   }
 
+  var localCall = wv ? hostCall : shimCall;
   window.bridge = {
-    call: wv ? hostCall : shimCall,
+    call: SERVER ? serverCall : function (type, payload, timeoutMs, files) {
+      if (remote && routeRemote(type, payload, files)) return remote.call(type, payload, timeoutMs);
+      return localCall(type, payload, timeoutMs, files);
+    },
     on: on,
-    isShim: !wv
+    isShim: !wv && !SERVER,
+    mode: SERVER ? 'server' : (wv ? 'webview' : 'shim'),
+    remote: function () {
+      var r = SERVER || remote;
+      return r ? { url: r.url, state: r.state } : null;
+    },
+    connection: function () { var r = SERVER || remote; return r ? r.state : null; }
   };
-  /* Hors WebView2 seulement : de quoi simuler les messages d’une page et pousser ses événements. */
-  if (!wv) {
+  if (!SERVER) {
+    window.bridge.configureRemote = configureRemote;
+    window.bridge.testRemote = testRemote;
+  }
+  /* Hors WebView2 et hors serveur seulement : de quoi simuler les messages d’une page et pousser ses événements. */
+  if (!wv && !SERVER) {
     window.bridge.shimRegister = shimRegister;
     window.bridge.shimEmit = emit;
   }

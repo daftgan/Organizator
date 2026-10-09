@@ -1041,7 +1041,7 @@
     if (s.due || room) {
       h.push('<p class="rzx-revpanel-p">' + esc((s.due ? s.due + ' carte' + (s.due > 1 ? 's' : '') + ' à revoir' : 'Rien à revoir') + (room ? ', ' + room + ' nouvelle' + (room > 1 ? 's' : '') + ' à découvrir' : '') + ' · ≈ ' + estimate(s.due, room) + ' min.') + '</p>');
       h.push('<div class="rz-row"><button type="button" class="btn btn-primary rz-big" data-act="rz-cards-review">' + R.icon('cards') + ' ' + (s.due ? 'Réviser' : 'Découvrir les nouvelles') + '</button>'
-        + '<span class="rz-muted">Entrée valide, 1 à 4 notent, Échap termine.</span></div>');
+        + '<span class="rz-muted rzx-keys-hint">Entrée valide, 1 à 4 notent, Échap termine.</span></div>');
     } else {
       h.push('<p class="rzx-revpanel-p">' + (s.total ? esc('Tout est à jour.' + (s.nextDue ? ' Prochaine révision ' + relDay(s.nextDue) + ' : ' + s.nextDueCount + ' carte' + (s.nextDueCount > 1 ? 's' : '') + '.' : '')) : 'Ajoutez une carte, ou faites un cours ou un exercice : les mots à retenir arrivent ici.') + '</p>');
     }

@@ -23,6 +23,9 @@
      R.prefs, R.profile   raccourcis vers R.data.prefs / R.data.profile
      R.ui         état d'affichage en mémoire ; un sous-objet par module (R.ui.lesson, R.ui.test…)
      R.save(now)  persistance (800 ms de délai, immédiate avec now) ; R.isLoaded()
+                  Serveur Révizator (docs/REVIZATOR-SERVER.md § 6) : learnChanged d'un autre appareil relit
+                  les données en silence si rien n'attend d'être sauvegardé, à l'accueil ou dans Progrès
+                  seulement (sinon au retour à l'accueil)
      R.doc(kind, id) → Promise<doc|null> (cache) ; R.docSave(kind, id, doc) ; R.docDelete(kind, id)
      R.render()   rendu complet de l'application ; R.renderSoon() (différé pendant la frappe)
      R.patch(selector, html)  réécrit un fragment sans rendu complet
@@ -71,6 +74,7 @@
   var A = null;                      /* pageApi d'app.js, rendu par registerPage */
   var DOC = null;                    /* learning.json entier */
   var loaded = false;
+  var booted = false;                /* onBoot passé : getState a répondu, le transport est fixé */
 
   R.version = 1;
   R.ui = { view: 'home', params: {}, plays: {}, rec: {}, setCustom: {}, ttsDl: null, onboard: {} };
@@ -392,14 +396,37 @@
   Object.defineProperty(R, 'profile', { get: function () { return subject().profile; } });
   R.isLoaded = function () { return loaded; };
 
-  var saveTimer = null, saveDirty = false, saveInFlight = null;
-  function saveNow() {
+  var saveTimer = null, saveDirty = false, saveInFlight = null, saving = 0;
+  function saveNow(retry) {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     if (!loaded) return Promise.resolve();
     saveDirty = false;
     trimSubject(subject());
-    saveInFlight = bridge.call('learnSave', { data: DOC }, 20000).then(function (r) { R.emit('saved', r); return r; },
-      function (e) { R.toast('Révizator : sauvegarde impossible — ' + e.message); });
+    saving++;
+    /* Sur un serveur Révizator : écriture conditionnelle (§ 6). Si un autre appareil a écrit depuis
+       notre dernière lecture, le serveur n'écrit rien ; on fusionne sa version avec la nôtre, puis on renvoie. */
+    var payload = { data: DOC }, snap = null;
+    if (base.rev !== null && onServer()) { payload.baseRev = base.rev; snap = JSON.stringify(DOC); }
+    saveInFlight = bridge.call('learnSave', payload, 20000).then(function (r) {
+      if (r && r.conflict) {
+        return mergeFromServer().then(function () {
+          saving--;
+          if ((retry || 0) < 3) return saveNow((retry || 0) + 1);
+          saveDirty = true;
+          R.toast('Révizator : sauvegarde différée, un autre appareil écrit en même temps.');
+        }, function (e) { saving--; saveDirty = true; R.toast('Révizator : sauvegarde impossible — ' + e.message); });
+      }
+      saving--;
+      if (snap !== null && r && typeof r.rev === 'number') { base.rev = r.rev; base.text = snap; }
+      R.emit('saved', r);
+      return r;
+    },
+      function (e) {
+        saving--;
+        /* Serveur Révizator coupé : la sauvegarde repart à la reconnexion. */
+        if (e && e.offline) { saveDirty = true; R.toast('Révizator : serveur injoignable, la sauvegarde repartira à la reconnexion.'); return; }
+        R.toast('Révizator : sauvegarde impossible — ' + e.message);
+      });
     return saveInFlight;
   }
   R.save = function (now) {
@@ -420,22 +447,150 @@
     SKILLS.forEach(function (k) { var h = s.skills[k.id].hist; if (h.length > 400) s.skills[k.id].hist = h.slice(h.length - 400); });
   }
 
-  function load() {
+  function adopt(r) {
+    DOC = obj(r && r.data) || { version: 1, subjects: {} };
+    if (!DOC.subjects) DOC.subjects = {};
+    DOC.version = 1;
+    DOC.subjects.en = normalizeSubject(DOC.subjects.en);
+    R.env.learnUrl = (r && r.url) || 'https://learn.organizator/';
+    /* Base des fusions : le rev du serveur (absent hors serveur) et le texte de ce qui a été lu. */
+    base.rev = r && typeof r.rev === 'number' ? r.rev : null;
+    base.text = base.rev !== null ? JSON.stringify(DOC) : null;
+  }
+
+  /* ── Fusion à trois (§ 6) ────────────────────────────────────────────
+     base = dernière version lue ou écrite par cette page, local = DOC, remote = version du serveur.
+     Ce qu'un seul côté a changé est gardé ; les deux ont changé : les objets se fusionnent clé par clé,
+     les listes d'objets à `id` élément par élément, les autres listes (journaux) gardent les éléments
+     du serveur plus ceux ajoutés ici ; une même valeur changée des deux côtés : la nôtre l'emporte.
+     DOC est modifié sur place, même là où seul le serveur a changé : les vues gardent leurs objets
+     (séance, révision en cours). */
+  var base = { rev: null, text: null };
+  function isObj(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+  function same(a, b) { return a === b || JSON.stringify(a) === JSON.stringify(b); }
+  function byId(list) {
+    var m = Object.create(null);
+    for (var i = 0; i < list.length; i++) { if (!isObj(list[i]) || typeof list[i].id !== 'string') return null; m[list[i].id] = list[i]; }
+    return m;
+  }
+  function merge3(b, l, r) {
+    if (same(l, r)) return l;
+    if (isObj(l) && isObj(r)) {
+      var bo = isObj(b) ? b : {};
+      Object.keys(r).forEach(function (k) { if (!(k in l) && !(k in bo)) l[k] = r[k]; });
+      Object.keys(l).forEach(function (k) {
+        if (k in r) l[k] = merge3(bo[k], l[k], r[k]);
+        else if (k in bo && same(bo[k], l[k])) delete l[k];
+      });
+      return l;
+    }
+    if (Array.isArray(l) && Array.isArray(r)) {
+      var ba = Array.isArray(b) ? b : [], out = [];
+      var lm = byId(l), rm = byId(r), bm = byId(ba) || Object.create(null);
+      if (lm && rm) {
+        r.forEach(function (it) {
+          if (lm[it.id]) out.push(merge3(bm[it.id], lm[it.id], it));
+          else if (!bm[it.id]) out.push(it);
+        });
+        l.forEach(function (it) { if (!rm[it.id] && (!bm[it.id] || !same(bm[it.id], it))) out.push(it); });
+      } else {
+        var seen = Object.create(null), key = function (v) { return JSON.stringify(v); };
+        ba.forEach(function (it) { var k = key(it); seen[k] = (seen[k] || 0) + 1; });
+        r.forEach(function (it) { var k = key(it); seen[k] = (seen[k] || 0) + 1; out.push(it); });
+        l.forEach(function (it) { var k = key(it); if (seen[k]) seen[k]--; else out.push(it); });
+      }
+      l.length = 0;
+      Array.prototype.push.apply(l, out);
+      return l;
+    }
+    return same(l, b) ? r : l;
+  }
+  function mergeFromServer() {
     return bridge.call('learnLoad', {}, 20000).then(function (r) {
-      DOC = obj(r && r.data) || { version: 1, subjects: {} };
+      var remote = obj(r && r.data) || { version: 1, subjects: {} };
+      var b = base.text ? JSON.parse(base.text) : {};
+      DOC = merge3(b, DOC, remote);
       if (!DOC.subjects) DOC.subjects = {};
-      DOC.version = 1;
-      DOC.subjects.en = normalizeSubject(DOC.subjects.en);
-      R.env.learnUrl = (r && r.url) || 'https://learn.organizator/';
+      base.rev = typeof r.rev === 'number' ? r.rev : null;
+      base.text = base.rev !== null ? JSON.stringify(remote) : null;
+      R.renderSoon();
+    });
+  }
+
+  /* Données sur un serveur Révizator (page du serveur, ou Organizator réglé pour lui) : un échec de
+     lecture ne se remplace jamais par des données vides, que la prochaine sauvegarde y écrirait. */
+  var loadError = '', loadSeq = 0, loading = null;
+  function onServer() { return !!(bridge.remote && bridge.remote()); }
+
+  function load() {
+    var seq = ++loadSeq;
+    return (loading = bridge.call('learnLoad', {}, 20000).then(function (r) {
+      loading = null;
+      if (seq !== loadSeq) return;
+      adopt(r);
+      loadError = '';
       loaded = true;
       R.emit('loaded', R.data);
       R.render();
     }, function (e) {
+      loading = null;
+      if (seq !== loadSeq) return;
+      if (onServer()) {
+        loadError = (e && e.message) || 'Serveur Révizator injoignable.';
+        R.render();
+        return;
+      }
       DOC = { version: 1, subjects: { en: normalizeSubject(null) } };
       loaded = true;
       R.toast('Révizator : données illisibles — ' + e.message);
       R.render();
-    });
+    }));
+  }
+
+  /* ── Plusieurs appareils (§ 6) ───────────────────────────────────────
+     Un autre appareil a écrit learning.json : relecture silencieuse si rien n'attend d'être sauvegardé
+     (sinon notre sauvegarde l'emporte : dernier écrit gagnant). Jamais au milieu d'une séance, d'une
+     série d'exercices, d'un bilan, d'une révision ou du tuteur : la vue garde ses objets, la relecture
+     attend le retour à l'accueil. */
+  var QUIET_VIEWS = { home: 1, progress: 1 };
+  var reloadWanted = false;
+  function reloadIfQuiet() {
+    if (!reloadWanted || !loaded) return;
+    if (saveDirty || saving) { reloadWanted = false; return; }
+    if (!QUIET_VIEWS[R.viewId()]) return;
+    reloadWanted = false;
+    var seq = ++loadSeq;
+    bridge.call('learnLoad', {}, 20000).then(function (r) {
+      if (seq !== loadSeq || saveDirty || saving || !QUIET_VIEWS[R.viewId()]) return;
+      adopt(r);
+      R.emit('loaded', R.data);
+      R.emit('reloaded', R.data);
+      R.renderSoon();
+    }, function () { reloadWanted = true; /* nouvel essai au prochain signal */ });
+  }
+  R.on('view', reloadIfQuiet);
+
+  /* État de la liaison avec le serveur : un bandeau discret dans la page, réécrit sans rendu complet. */
+  var conn = { state: null, lost: false };
+  function connBannerHtml() {
+    if (!conn.lost || conn.state === 'online' || !onServer()) return '';
+    return '<div class="rz-conn" role="status"><span class="rz-conn-dot"></span>'
+      + (conn.state === 'connecting' ? 'Reconnexion au serveur Révizator…' : 'Serveur Révizator injoignable : nouvel essai automatique. Rien n’est perdu de ce qui est affiché ; les sauvegardes repartiront à la reconnexion.')
+      + '</div>';
+  }
+  function onConnection(p) {
+    var st = (p && p.state) || null;
+    conn.state = st;
+    if (st === 'offline') conn.lost = true;
+    if (st === 'online') {
+      conn.lost = false;
+      if (booted && !loaded && !loading) load().then(reattachJobs);
+      else if (saveDirty) saveNow();
+      reloadIfQuiet();
+    }
+    var els = document.querySelectorAll('[data-rz-conn]');
+    for (var i = 0; i < els.length; i++) els[i].innerHTML = connBannerHtml();
+    if (A && A.state && A.state.ui && A.state.ui.settingsOpen) R.renderSoon();
   }
 
   var DOCS = Object.create(null);
@@ -539,7 +694,12 @@
   var scrollMemo = Object.create(null);
   function renderPage(host, enter) {
     if (!loaded) {
-      A.setHtml(host, '<div class="rz rz-loading"><span class="rz-spin"></span> Chargement de Révizator…</div>');
+      host.removeAttribute('data-rz-view');
+      A.setHtml(host, loadError
+        ? '<div class="rz"><div class="rz-error">' + esc(loadError) + '<br>Révizator relit vos données dès que le serveur répond.</div>'
+          + '<div class="rz-load-actions"><button type="button" class="btn btn-secondary" data-act="rz-reload">Réessayer</button>'
+          + (bridge.mode === 'server' ? '' : ' <button type="button" class="btn btn-ghost" data-act="rz-settings">Réglages du serveur</button>') + '</div></div>'
+        : '<div class="rz rz-loading"><span class="rz-spin"></span> Chargement de Révizator…</div>');
       return;
     }
     var id = R.viewId();
@@ -553,7 +713,7 @@
     for (var i = 0; i < els.length; i++) scrollMemo[els[i].getAttribute('data-rz-scroll')] = els[i].scrollTop;
     var firstHere = host.getAttribute('data-rz-view') !== id;
     host.setAttribute('data-rz-view', id);
-    A.setHtml(host, '<div class="rz rz-view-' + esc(id) + (firstHere ? ' enter' : '') + '">' + inner + '</div>');
+    A.setHtml(host, '<div class="rz rz-view-' + esc(id) + (firstHere ? ' enter' : '') + '"><div data-rz-conn>' + connBannerHtml() + '</div>' + inner + '</div>');
     els = host.querySelectorAll('[data-rz-scroll]');
     for (i = 0; i < els.length; i++) {
       var k = els[i].getAttribute('data-rz-scroll');
@@ -1625,10 +1785,44 @@
     { key: 'cardModel', effort: '', label: 'Correcteur des cartes', help: 'Relit une réponse refusée pendant les révisions et réécrit les cartes floues : un modèle rapide suffit.' }
   ];
 
+  /* Serveur Révizator, dans Organizator seulement (la page du serveur n'a pas de serveur à régler).
+     Les champs remplissent un brouillon ; « Enregistrer » le passe aux réglages et au pont. */
+  function serverSettable() { return !!bridge.configureRemote && (bridge.mode === 'webview' || !!window.__shimRemote); }
+  function serverSettings() { var s = (A && A.state && A.state.settings) || {}; return { url: String(s.revizatorServerUrl || ''), token: String(s.revizatorServerToken || '') }; }
+  function serverDraft() {
+    var u = R.ui.server = R.ui.server || { draft: null, test: null, testing: false };
+    if (!u.draft) u.draft = serverSettings();
+    return u;
+  }
+  var SERVER_STATES = { online: 'Connecté', connecting: 'Connexion…', offline: 'Injoignable', unreachable: 'Injoignable', refused: 'Jeton refusé', invalid: 'Adresse invalide' };
+
+  function serverCardHtml() {
+    var u = serverDraft(), cur = serverSettings(), live = bridge.remote ? bridge.remote() : null;
+    var h = ['<div class="set-card"><div class="set-card-head"><span class="set-card-title">Serveur Révizator</span></div>'];
+    h.push('<div class="rz-set-help">Vos cartes, cours et progrès sont alors lus et écrits sur le serveur ; vos tâches restent sur ce PC. Adresse vide : Révizator garde tout sur ce PC.</div>');
+    h.push(A.setFieldHtml('Adresse', '<input class="input set-cwd" type="url" data-role="rz-server" data-field="url" data-focus-key="rz-server-url" spellcheck="false" autocomplete="off" placeholder="https://revizator.daft-lab.fr" value="' + esc(u.draft.url) + '">'));
+    h.push(A.setFieldHtml('Jeton', '<input class="input set-cwd" type="password" data-role="rz-server" data-field="token" data-focus-key="rz-server-token" spellcheck="false" autocomplete="off" placeholder="revizator-server token new pc" value="' + esc(u.draft.token) + '">'));
+    var dirty = u.draft.url.trim() !== cur.url || u.draft.token.trim() !== cur.token;
+    h.push(A.setFieldHtml('', '<button type="button" class="btn btn-secondary" data-act="rz-server-test"' + (u.testing ? ' disabled' : '') + '>' + (u.testing ? 'Test…' : 'Tester la connexion') + '</button>'
+      + '<button type="button" class="btn ' + (dirty ? 'btn-primary' : 'btn-ghost') + '" data-act="rz-server-save">Enregistrer</button>'));
+    var t = u.test;
+    if (t) {
+      h.push('<div class="rz-set-help rz-server-test is-' + esc(t.state) + '"><strong>' + esc(SERVER_STATES[t.state] || t.state) + '</strong>'
+        + (t.version ? ' · version ' + esc(t.version) : '') + (t.error ? ' — ' + esc(t.error) : '') + '</div>');
+    }
+    var foot = live
+      ? 'En service : ' + esc(live.url) + ' — <strong>' + esc(SERVER_STATES[live.state] || live.state) + '</strong>.'
+      : 'Aucun serveur : Révizator lit et écrit learning.json sur ce PC.';
+    h.push('<div class="set-card-foot">' + foot + ' Le jeton vient de <code>revizator-server token new pc</code> sur le serveur.</div></div>');
+    return h.join('');
+  }
+
   function settingsHtml() {
     var p = R.prefs, pr = R.profile;
     var h = [];
-    if (!loaded) return '<div class="set-note">Chargement…</div>';
+    var srv = serverSettable() ? serverCardHtml() : '';
+    if (!loaded) return srv + '<div class="set-note">' + esc(loadError || 'Chargement…') + '</div>';
+    h.push(srv);
     h.push('<div class="set-card"><div class="set-card-head"><span class="set-card-title">Voix</span></div>');
     h.push('<div class="rz-set-voice">' + voiceStatusHtml(false) + '</div>');
     var eng = engine();
@@ -1684,7 +1878,7 @@
     var d = R.data;
     h.push('<div class="set-card"><div class="set-card-head"><span class="set-card-title">Données</span></div>');
     h.push('<div class="rz-set-help">' + esc(d.cards.length + ' cartes, ' + d.lessons.length + ' cours, ' + d.sessions.length + ' séances, ' + d.toeic.history.length + ' bilans, depuis le ' + new Date(d.createdAt).toLocaleDateString('fr-FR') + '.')
-      + ' Tout est gardé sur ce poste, dans learning.json et le dossier learning\\ du dossier de données.</div>');
+      + (onServer() ? ' Tout est gardé sur le serveur Révizator, dans son learning.json et son dossier learning/.' : ' Tout est gardé sur ce poste, dans learning.json et le dossier learning\\ du dossier de données.') + '</div>');
     h.push('<div class="set-card-foot"><button type="button" class="btn btn-ghost rz-danger" data-act="rz-reset">' + esc(R.ui.resetArm ? 'Confirmer : tout effacer' : 'Repartir de zéro…') + '</button></div></div>');
     return h.join('');
   }
@@ -1756,6 +1950,30 @@
       R.go('home');
     });
     R.act('rz-settings', function () { A.openSettingsTab('revizator'); });
+    R.act('rz-reload', function () { if (!loaded) { loadError = ''; R.render(); load().then(reattachJobs); } });
+    R.input('rz-server', function (el) { serverDraft().draft[el.getAttribute('data-field')] = el.value; });
+    R.act('rz-server-test', function () {
+      var u = serverDraft();
+      u.testing = true; u.test = null;
+      R.render();
+      bridge.testRemote({ url: u.draft.url, token: u.draft.token }).then(function (r) {
+        u.testing = false; u.test = r;
+        R.render();
+      });
+    });
+    R.act('rz-server-save', function () {
+      var u = serverDraft();
+      var url = u.draft.url.trim(), token = u.draft.token.trim();
+      if (url && !/^(https?:\/\/)?[^\/?#\s@]+\/?$/i.test(url)) { u.test = { state: 'invalid', error: 'Une adresse seule, sans chemin : https://revizator.exemple.fr' }; R.render(); return; }
+      url = url.replace(/\/+$/, '');
+      if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
+      u.draft = { url: url, token: token };
+      u.test = null;
+      window.organizatorApp.setSettings({ revizatorServerUrl: url, revizatorServerToken: token });
+      bridge.configureRemote({ url: url, token: token });
+      R.toast(url ? 'Révizator lit maintenant ses données sur ' + url + '.' : 'Révizator garde de nouveau ses données sur ce PC.');
+      R.render();
+    });
 
     R.input('rz-profile', function (el) { R.profile[el.getAttribute('data-field')] = el.value.slice(0, 600); R.save(); });
     R.change('rz-set-pref', function (el) { R.prefs[el.getAttribute('data-field')] = el.value; R.save(); R.render(); });
@@ -1930,6 +2148,7 @@
     renderBar: function (bar) { if (A) renderBar(bar); },
     onBoot: function () {
       try { var v = localStorage.getItem('organizator.revizator.view'); if (v && v !== 'session') R.ui.view = v; } catch (e) { /* stockage refusé */ }
+      booted = true;
       load().then(function () { reattachJobs(); });
       R.tts.refresh();
     },
@@ -1958,6 +2177,20 @@
     if (m) R.go(m[1]);
   });
   bridge.on('learn', onLearnEvent);
+  bridge.on('learnChanged', function () { if (loaded) { reloadWanted = true; reloadIfQuiet(); } });
+  bridge.on('connection', onConnection);
+  if (bridge.connection) conn.state = bridge.connection();
+  /* Serveur réglé ou retiré dans Organizator : la sauvegarde en attente part à l'ancien destinataire,
+     puis tout est relu chez le nouveau (données, documents, travaux, voix). */
+  bridge.on('remoteChanging', function () { if (loaded && saveDirty) saveNow(); });
+  bridge.on('remoteChanged', function () {
+    if (!booted) return;
+    loaded = false; loadError = ''; reloadWanted = false; conn.lost = false;
+    DOCS = Object.create(null);
+    R.render();
+    load().then(reattachJobs);
+    R.tts.refresh();
+  });
 
   /* La fermeture de la fenêtre vide aussi la sauvegarde de Révizator. */
   var prevFlush = window.organizatorFlush;

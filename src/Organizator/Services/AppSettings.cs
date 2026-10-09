@@ -118,6 +118,12 @@ public sealed class AppSettings
     /// <summary>Conversation vocale : quand couper la parole a l'avatar (words = quand on dit quelques mots, voice = des qu'on parle, off = jamais).</summary>
     [JsonPropertyName("voiceBargeIn")] public string VoiceBargeIn { get; set; } = "words";
 
+    /// <summary>Serveur Revizator (https://revizator.exemple.fr) : l'onglet Revizator y lit et y ecrit ses donnees ; vide = tout reste sur ce PC.</summary>
+    [JsonPropertyName("revizatorServerUrl")] public string RevizatorServerUrl { get; set; } = "";
+
+    /// <summary>Jeton d'appareil du serveur Revizator (revizator-server token new), transmis dans l'adresse du WebSocket et des medias.</summary>
+    [JsonPropertyName("revizatorServerToken")] public string RevizatorServerToken { get; set; } = "";
+
     [JsonPropertyName("window")] public WindowPlacement? Window { get; set; }
 
     public AppSettings Clone() => new()
@@ -159,6 +165,8 @@ public sealed class AppSettings
         VoiceWhisperModel = VoiceWhisperModel,
         VoiceSensitivity = VoiceSensitivity,
         VoiceBargeIn = VoiceBargeIn,
+        RevizatorServerUrl = RevizatorServerUrl,
+        RevizatorServerToken = RevizatorServerToken,
         Window = Window is null
             ? null
             : new WindowPlacement
@@ -239,5 +247,40 @@ public sealed class AppSettings
             : "base";
         VoiceSensitivity = Math.Clamp(VoiceSensitivity, 0, 100);
         VoiceBargeIn = VoiceBargeIn is "voice" or "off" ? VoiceBargeIn : "words";
+
+        RevizatorServerUrl = SanitizeServerUrl(RevizatorServerUrl);
+        RevizatorServerToken = (RevizatorServerToken ?? "").Trim();
+        // Jeton du serveur : base64url (43 caracteres) ; autre chose ne passerait pas dans une URL.
+        if (RevizatorServerToken.Length > 200 || RevizatorServerToken.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '-' or '_')))
+        {
+            RevizatorServerToken = "";
+        }
+    }
+
+    /// <summary>
+    /// Adresse du serveur Revizator : http(s) seulement, sans chemin, requete ni barre finale ;
+    /// sans schema, https est suppose. Illisible : vide (Revizator reste local).
+    /// </summary>
+    public static string SanitizeServerUrl(string? url)
+    {
+        var raw = (url ?? "").Trim().TrimEnd('/');
+        if (raw.Length == 0 || raw.Length > 300)
+        {
+            return "";
+        }
+
+        if (!raw.Contains("://", StringComparison.Ordinal))
+        {
+            raw = "https://" + raw;
+        }
+
+        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp)
+            || string.IsNullOrEmpty(uri.Host) || !string.IsNullOrEmpty(uri.UserInfo))
+        {
+            return "";
+        }
+
+        return uri.GetLeftPart(UriPartial.Authority);
     }
 }

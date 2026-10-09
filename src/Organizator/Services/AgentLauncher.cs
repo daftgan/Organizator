@@ -425,6 +425,11 @@ public sealed class AgentLauncher
 
     private string? FindClaude()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            return FindClaudeUnix();
+        }
+
         string[] names = { "claude.exe", "claude.cmd", "claude.bat" };
 
         foreach (var dir in PathDirectories())
@@ -455,6 +460,55 @@ public sealed class AgentLauncher
         }
 
         _log.Warn("claude introuvable dans le PATH ni dans %USERPROFILE%\\.local\\bin");
+        return null;
+    }
+
+    /// <summary>
+    /// Hors Windows (serveur Revizator) : <c>REVIZATOR_CLAUDE</c> s'il est pose, sinon <c>claude</c> dans le
+    /// PATH, sinon <c>~/.local/bin/claude</c> (installeur natif de Claude Code).
+    /// </summary>
+    private string? FindClaudeUnix()
+    {
+        var configured = Environment.GetEnvironmentVariable("REVIZATOR_CLAUDE")?.Trim();
+        if (!string.IsNullOrEmpty(configured))
+        {
+            if (File.Exists(configured))
+            {
+                _log.Info($"claude detecte (REVIZATOR_CLAUDE) : {configured}");
+                return configured;
+            }
+
+            if (!configured.Contains('/'))
+            {
+                // Un nom seul : cherche dans le PATH comme le ferait le shell.
+                foreach (var dir in PathDirectories())
+                {
+                    var candidate = SafeCombine(dir, configured);
+                    if (candidate is not null && File.Exists(candidate))
+                    {
+                        _log.Info($"claude detecte (REVIZATOR_CLAUDE) : {candidate}");
+                        return candidate;
+                    }
+                }
+            }
+
+            _log.Warn($"REVIZATOR_CLAUDE introuvable : {configured}");
+            return null;
+        }
+
+        var candidates = PathDirectories()
+            .Append(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin"));
+        foreach (var dir in candidates)
+        {
+            var candidate = SafeCombine(dir, "claude");
+            if (candidate is not null && File.Exists(candidate))
+            {
+                _log.Info($"claude detecte : {candidate}");
+                return candidate;
+            }
+        }
+
+        _log.Warn("claude introuvable dans le PATH ni dans ~/.local/bin");
         return null;
     }
 

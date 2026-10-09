@@ -23,6 +23,9 @@ public sealed class HostLog
 
     public string FilePath => _path;
 
+    /// <summary>Copie de chaque ligne ailleurs (serveur Revizator : la console, lue par <c>docker logs</c>) ; rien par defaut.</summary>
+    public Action<string>? Mirror { get; set; }
+
     public void Info(string message) => Write("INFO", message);
 
     public void Warn(string message) => Write("WARN", message);
@@ -48,6 +51,7 @@ public sealed class HostLog
             (message ?? "").Replace("\r\n", "\n").Replace('\n', '↵'));
 
         Debug.WriteLine("[Organizator] " + line);
+        Mirror?.Invoke(line);
 
         lock (_gate)
         {

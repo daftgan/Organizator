@@ -1,0 +1,91 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- Revizator seul, heberge sur un serveur Linux (voir docs/REVIZATOR-SERVER.md). Les services de
+       Revizator sont ceux de l'hote WPF, compiles ici par liens : une correction profite aux deux. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>revizator-server</AssemblyName>
+    <RootNamespace>Revizator.Server</RootNamespace>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Product>Revizator</Product>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!-- Les fichiers partages contiennent des branches Windows (kernel32, Media Foundation) gardees par
+         OperatingSystem.IsWindows() : l'analyseur de plateforme n'a rien a en dire ici. CS0649 : champs de
+         TranscriptAccumulator que seul l'hote WPF remplit (lecture des sessions). -->
+    <NoWarn>$(NoWarn);CA1416;CS0649</NoWarn>
+    <!-- wwwroot n'est pas celui du projet : c'est celui de l'hote WPF, copie plus bas. -->
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Services de Revizator, partages avec l'hote WPF (src/Organizator/Services). AgentDraft et
+         BitbucketPullRequests, qui tireraient Copilot et les quotas, ont leur copie reduite dans Platform/. -->
+    <Compile Include="..\Organizator\Services\HostLog.cs" Link="Shared\HostLog.cs" />
+    <Compile Include="..\Organizator\Services\AgentProvider.cs" Link="Shared\AgentProvider.cs" />
+    <Compile Include="..\Organizator\Services\AgentLauncher.cs" Link="Shared\AgentLauncher.cs" />
+    <Compile Include="..\Organizator\Services\AppSettings.cs" Link="Shared\AppSettings.cs" />
+    <Compile Include="..\Organizator\Services\DataStore.cs" Link="Shared\DataStore.cs" />
+    <Compile Include="..\Organizator\Services\InheritedEnvironment.cs" Link="Shared\InheritedEnvironment.cs" />
+    <Compile Include="..\Organizator\Services\ModelCatalog.cs" Link="Shared\ModelCatalog.cs" />
+    <Compile Include="..\Organizator\Services\TranscriptAccumulator.cs" Link="Shared\TranscriptAccumulator.cs" />
+    <Compile Include="..\Organizator\Services\LearningAgent.cs" Link="Shared\LearningAgent.cs" />
+    <Compile Include="..\Organizator\Services\LearningStore.cs" Link="Shared\LearningStore.cs" />
+    <Compile Include="..\Organizator\Services\NewsMenu.cs" Link="Shared\NewsMenu.cs" />
+    <Compile Include="..\Organizator\Services\TextToSpeech.cs" Link="Shared\TextToSpeech.cs" />
+    <Compile Include="..\Organizator\Services\SherpaRuntime.cs" Link="Shared\SherpaRuntime.cs" />
+    <Compile Include="..\Organizator\Services\LiveAsr.cs" Link="Shared\LiveAsr.cs" />
+    <Compile Include="..\Organizator\Services\WhisperTranscriber.cs" Link="Shared\WhisperTranscriber.cs" />
+    <Compile Include="..\Organizator\Services\SpeechAssessment.cs" Link="Shared\SpeechAssessment.cs" />
+    <Compile Include="..\Organizator\Services\AudioDecoder.cs" Link="Shared\AudioDecoder.cs" />
+    <Compile Include="..\Organizator\Services\VoiceChat.cs" Link="Shared\VoiceChat.cs" />
+    <Compile Include="..\Organizator\Services\VoiceSentences.cs" Link="Shared\VoiceSentences.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Memes versions que l'hote WPF. -->
+    <PackageReference Include="Whisper.net" Version="1.8.1" />
+    <!-- Les cibles du paquet copieraient les natives de toutes les plateformes : seules celles de linux-x64
+         sont prises, sous runtimes/linux-x64/ (la ou Whisper.net les cherche). -->
+    <PackageReference Include="Whisper.net.Runtime" Version="1.8.1" ExcludeAssets="build;buildTransitive" GeneratePathProperty="true" />
+    <PackageReference Include="NAudio.Core" Version="2.2.1" />
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+    <!-- sherpa-onnx : seul l'assembly manage ; les .so de linux-x64 sont extraits du paquet runtime par
+         SherpaRuntime (telechargement depuis nuget.org, ou copie de celles livrees a cote de l'exe). -->
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.8" ExcludeAssets="native" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.linux-x64" Version="1.13.8" ExcludeAssets="all" GeneratePathProperty="true" />
+    <!-- QR code d'appairage, dessine en caracteres dans le terminal (token new). -->
+    <PackageReference Include="QRCoder" Version="1.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(PkgWhisper_net_Runtime)\build\linux-x64\*.so" Visible="false">
+      <Link>runtimes\linux-x64\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Include="$(Pkgorg_k2fsa_sherpa_onnx_runtime_linux-x64)\runtimes\linux-x64\native\*.so" Visible="false">
+      <Link>sherpa\linux-x64\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- La page est celle de l'hote WPF, copiee telle quelle sous wwwroot/ dans la sortie (et la publication). -->
+  <ItemGroup>
+    <None Include="..\Organizator\wwwroot\**\*" Visible="false">
+      <Link>wwwroot\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

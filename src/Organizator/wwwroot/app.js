@@ -45,7 +45,9 @@
     /* Mode Conversation (voice.js) : interlocuteur à voix et avatar. Base pour Whisper : chaque phrase
        dite doit être transcrite en moins d'une seconde. */
     voiceModel: 'sonnet', voiceEffort: 'low', voiceVoice: '', voiceRate: 1, voicePersona: 'Alma', voiceTopic: 'libre',
-    voiceInstructions: '', voiceWeb: true, voiceWhisperModel: 'base', voiceSensitivity: 40, voiceBargeIn: 'words'
+    voiceInstructions: '', voiceWeb: true, voiceWhisperModel: 'base', voiceSensitivity: 40, voiceBargeIn: 'words',
+    /* Serveur Révizator (docs/REVIZATOR-SERVER.md) : vide = Révizator reste sur ce PC. */
+    revizatorServerUrl: '', revizatorServerToken: ''
   };
 
   /* Agents disponibles. `short` sert dans les listes, `example` dans le champ de modèle libre. */
@@ -139,6 +141,13 @@
   };
 
   var ARTIFACT_ACTIONS = { written: 'écrit', created: 'créé', modified: 'modifié', deleted: 'supprimé' };
+
+  /* Mode « Révizator seul » (docs/REVIZATOR-SERVER.md § 5.2) : la page servie par le serveur Révizator
+     (téléphone), ou le shim avec ?mode=revizator pour les essais. Révizator est la seule page ; rien
+     de ce qui touche aux tâches (data.json, sessions, quotas, articles, modèles) n'est appelé. */
+  var RZ_ONLY = !!(window.REVIZATOR_SERVER && window.REVIZATOR_SERVER.mode === 'revizator')
+    || (bridge.mode === 'shim' && /[?&]mode=revizator(&|$)/.test(location.search));
+  if (RZ_ONLY) document.documentElement.classList.add('rz-only');
 
   /* ══ État ═════════════════════════════════════════════════════════════ */
 
@@ -291,6 +300,8 @@
   function saveDataNow() {
     if (dataTimer) { clearTimeout(dataTimer); dataTimer = null; }
     dataDirty = false;
+    /* Révizator seul : aucune tâche ici, et le serveur refuse saveData. */
+    if (RZ_ONLY) return Promise.resolve();
     if (S.ui.composerType) S.data.lastType = S.ui.composerType;
     dataInFlight = bridge.call('saveData', {
       tasks: S.data.tasks, types: S.data.types, convos: S.data.convos, remarks: S.data.remarks,
@@ -336,7 +347,8 @@
       voiceRate: S.settings.voiceRate, voicePersona: S.settings.voicePersona, voiceTopic: S.settings.voiceTopic,
       voiceInstructions: S.settings.voiceInstructions, voiceWeb: S.settings.voiceWeb,
       voiceWhisperModel: S.settings.voiceWhisperModel, voiceSensitivity: S.settings.voiceSensitivity,
-      voiceBargeIn: S.settings.voiceBargeIn
+      voiceBargeIn: S.settings.voiceBargeIn,
+      revizatorServerUrl: S.settings.revizatorServerUrl, revizatorServerToken: S.settings.revizatorServerToken
     })['catch'](function (e) { toast('Réglages non sauvegardés : ' + e.message); });
     return setInFlight;
   }
@@ -3145,6 +3157,7 @@
   /* Détection du catalogue par l'hôte, mis en cache 24 h de part et d'autre : sonde ACP pour
      Copilot, `GET /v1/models` de l'API Anthropic avec le jeton de Claude Code pour Claude. */
   function refreshModels(provider, force) {
+    if (RZ_ONLY) return Promise.resolve();
     provider = provider === 'copilot' ? 'copilot' : 'claude';
     var p = providerById(provider);
     if (S.ui.modelsBusy[provider]) return Promise.resolve();
@@ -3212,11 +3225,14 @@
       renderPanel();
       renderReader();
       renderDialogs();
-      renderUsage();
-      renderRemarksBtn();
-      renderReviewsBtn();
-      renderNotifsBtn();
-      renderNotifs();
+      /* Révizator seul : ni quotas, ni articles, ni remarques, ni cloche. */
+      if (!RZ_ONLY) {
+        renderUsage();
+        renderRemarksBtn();
+        renderReviewsBtn();
+        renderNotifsBtn();
+        renderNotifs();
+      }
     });
     syncDictate();
     perfRender(t0);
@@ -3240,6 +3256,8 @@
   }
 
   function currentPage() {
+    /* Révizator seul : sa page est la seule (la file n'existe pas). */
+    if (RZ_ONLY && pageDef('revizator')) return 'revizator';
     var p = S.ui.page;
     return p && p !== 'queue' && pageDef(p) ? p : 'queue';
   }
@@ -3247,7 +3265,7 @@
   function renderPageTabs() {
     var nav = $('#page-tabs');
     if (!nav) return;
-    if (!PAGES.length) { setHtml(nav, ''); nav.hidden = true; return; }
+    if (!PAGES.length || RZ_ONLY) { setHtml(nav, ''); nav.hidden = true; return; }
     var cur = currentPage();
     var all = [{ id: 'queue', label: 'File', title: 'La file de tâches' }].concat(PAGES);
     nav.hidden = false;
@@ -3289,6 +3307,7 @@
 
   function goPage(id, quiet) {
     var next = id && id !== 'queue' && pageDef(id) ? id : 'queue';
+    if (RZ_ONLY) next = currentPage();
     var prev = currentPage();
     if (next === prev) { if (!quiet) render(); return; }
     var pd = pageDef(prev), nd = pageDef(next);
@@ -5082,14 +5101,26 @@
     { id: 'bitbucket', label: 'Bitbucket', lead: 'Serveur interrogé par « Mes PRs Bitbucket », dans le dialogue Nouvelle tâche.' }
   ];
 
+  /* Révizator seul : son onglet, puis la dictée (Whisper sur le serveur) ; rien d'autre n'y a de sens. */
+  var RZ_SETTINGS = { revizator: 1, voice: 1 };
+  var RZ_VOICE_LEAD = 'Dicter dans les zones de saisie avec Whisper. La transcription se fait sur le serveur Révizator : seul le modèle s’y télécharge, une fois.';
+
+  function settingsTabs() {
+    if (!RZ_ONLY) return SETTINGS_TABS;
+    return SETTINGS_TABS.filter(function (t) { return RZ_SETTINGS[t.id]; })
+      .map(function (t) { return t.id === 'voice' ? { id: t.id, label: t.label, lead: RZ_VOICE_LEAD } : t; })
+      .sort(function (a, b) { return (a.id === 'revizator' ? 0 : 1) - (b.id === 'revizator' ? 0 : 1); });
+  }
+
   function settingsTab() {
     var id = S.ui.settingsTab;
-    return SETTINGS_TABS.some(function (t) { return t.id === id; }) ? id : SETTINGS_TABS[0].id;
+    var tabs = settingsTabs();
+    return tabs.some(function (t) { return t.id === id; }) ? id : tabs[0].id;
   }
 
   function settingsTabLabel() {
     var id = settingsTab();
-    return SETTINGS_TABS.filter(function (t) { return t.id === id; })[0].label;
+    return settingsTabs().filter(function (t) { return t.id === id; })[0].label;
   }
 
   /* Une ligne : nom et aide à gauche, contrôle à droite (ou dessous, `stacked`). L'aide est du HTML déjà échappé. */
@@ -5120,14 +5151,14 @@
   function settingsHtml(enter) {
     var s = S.settings;
     var tab = settingsTab();
-    var info = SETTINGS_TABS.filter(function (t) { return t.id === tab; })[0];
+    var info = settingsTabs().filter(function (t) { return t.id === tab; })[0];
     var h = [];
     h.push('<div class="dialog-backdrop">');
     h.push('<div class="dialog dialog-settings' + (enter ? ' enter' : '') + '" data-act="noop" role="dialog" aria-label="Réglages">');
     h.push('<div class="dialog-title">Réglages</div>');
     h.push('<div class="set-layout">');
     h.push('<div class="set-nav" role="tablist" aria-label="Rubriques des réglages">'
-      + SETTINGS_TABS.map(function (t) {
+      + settingsTabs().map(function (t) {
         return '<button type="button" role="tab" class="set-tab' + (t.id === tab ? ' on' : '') + '" data-act="settings-tab" data-id="' + t.id + '"'
           + ' aria-selected="' + (t.id === tab ? 'true' : 'false') + '">' + esc(t.label) + '</button>';
       }).join('')
@@ -5274,7 +5305,7 @@
     h.push(setRowHtml('Dictée', 'Un micro se pose dans le coin de la zone de saisie où vous écrivez. '
       + '<b>Ctrl + Maj + Espace</b> démarre et termine, Échap annule ; le texte s’insère au curseur.',
       switchHtml(s.whisperEnabled !== false, 'toggle-whisper', 'Dictée')));
-    h.push(setRowHtml('Transcrire les enregistrements joints', 'Un fichier audio joint à une tâche (mp3, m4a, wav, ogg…) est transcrit aussitôt, '
+    if (!RZ_ONLY) h.push(setRowHtml('Transcrire les enregistrements joints', 'Un fichier audio joint à une tâche (mp3, m4a, wav, ogg…) est transcrit aussitôt, '
       + 'et sa transcription jointe en texte : c’est elle que l’agent lit. Sinon, et pour le son d’une vidéo, le bouton Transcrire de la pièce jointe.',
       switchHtml(s.whisperAuto !== false, 'toggle-whisper-auto', 'Transcrire les enregistrements joints')));
     h.push(setRowHtml('Langue parlée', 'La fixer évite les contresens sur une dictée de quelques mots ; la détection automatique convient à un enregistrement dans une autre langue.',
@@ -7259,6 +7290,7 @@
   var SESSIONS_TIMEOUT = 60000;
 
   function refreshSessions() {
+    if (RZ_ONLY) return Promise.resolve();
     if (sessionsInFlight) { sessionsAgain = true; return sessionsInFlight; }
     var convs = S.data.convos;
     if (!convs.length) return Promise.resolve();
@@ -7358,6 +7390,7 @@
      dizaines de relectures par seconde saturaient l'hôte, et la frappe traînait. */
   function armSessionsPoll() {
     if (sessionsTimer) clearTimeout(sessionsTimer);
+    if (RZ_ONLY) return;
     sessionsTimer = setTimeout(pollSessions, sessionsPollDelay());
   }
 
@@ -7674,6 +7707,7 @@
 
   /* Sans `force`, une lecture de moins de 5 min suffit ; l'hôte a lui-même un cache de 2 min. */
   function refreshUsage(force) {
+    if (RZ_ONLY) return Promise.resolve();
     var u = S.ui.usage;
     if (u.busy) return Promise.resolve();
     if (!force && u.fetchedAt && Date.now() - u.fetchedAt < USAGE_MAX_AGE) return Promise.resolve();
@@ -7811,6 +7845,7 @@
 
   /* Au démarrage : ce que l'hôte garde, sans rien lancer — puis l'article du jour de chaque fil s'il manque. */
   function peekArticles() {
+    if (RZ_ONLY) return;
     ARTICLE_FEEDS.forEach(function (F) {
       bridge.call('getArticle', { kind: F.id, mode: 'peek' }).then(function (r) {
         var A = articleState(F);
@@ -7830,6 +7865,7 @@
      plan, changement de date), jamais par-dessus une recherche en cours, et pas plus d'une fois par
      heure après un échec. `hostBusy` : l'hôte cherche déjà (page rechargée) — on attend sa fiche. */
   function ensureArticle(F, hostBusy) {
+    if (RZ_ONLY) return;
     var A = articleState(F);
     if (!A.loaded || !articleOn(F) || A.busy) return;
     if (!hostBusy) {
@@ -9379,6 +9415,8 @@
     S.settings.whisperEnabled = S.settings.whisperEnabled !== false;
     S.settings.whisperAuto = S.settings.whisperAuto !== false;
     S.settings.whisperModel = String(S.settings.whisperModel || DEFAULTS.whisperModel);
+    S.settings.revizatorServerUrl = String(S.settings.revizatorServerUrl || '').trim();
+    S.settings.revizatorServerToken = String(S.settings.revizatorServerToken || '').trim();
     S.settings.whisperLanguage = WHISPER_LANGS.some(function (l) { return l.id === S.settings.whisperLanguage; })
       ? S.settings.whisperLanguage : DEFAULTS.whisperLanguage;
 
@@ -9391,6 +9429,7 @@
 
   function boot() {
     bindDrag();
+    if (RZ_ONLY) bootRevizatorOnly();
 
     var search = $('#search');
     search.addEventListener('input', function () {
@@ -9463,10 +9502,12 @@
       }
     });
 
-    /* Les quotas bougent lentement : relecture toutes les 5 min au plus, fenêtre visible. */
-    setInterval(function () { if (document.visibilityState !== 'hidden') refreshUsage(false); }, 60000);
-    /* Fenêtre restée ouverte d'un jour sur l'autre : les articles du lendemain viennent tout seuls. */
-    setInterval(ensureArticles, ARTICLE_CHECK_MS);
+    if (!RZ_ONLY) {
+      /* Les quotas bougent lentement : relecture toutes les 5 min au plus, fenêtre visible. */
+      setInterval(function () { if (document.visibilityState !== 'hidden') refreshUsage(false); }, 60000);
+      /* Fenêtre restée ouverte d'un jour sur l'autre : les articles du lendemain viennent tout seuls. */
+      setInterval(ensureArticles, ARTICLE_CHECK_MS);
+    }
 
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'hidden') { window.organizatorFlush(); return; }
@@ -9481,12 +9522,15 @@
 
     bridge.call('getState').then(function (st) {
       normalize(st || {});
+      /* Serveur Révizator réglé : branché avant le démarrage des pages (Révizator lit ses données). */
+      if (bridge.configureRemote) bridge.configureRemote({ url: S.settings.revizatorServerUrl, token: S.settings.revizatorServerToken });
       booted = true;
       PAGES.forEach(function (p) { if (p.onBoot) { try { p.onBoot(); } catch (e) { /* page fautive : la file démarre quand même */ } } });
       render();
       var shown = pageDef(currentPage());
       if (shown && shown.onShow) { try { shown.onShow(); } catch (e) { /* idem */ } }
       appReady();
+      if (RZ_ONLY) return;
       refreshSessions();
       restartSessionsPoll();
       refreshUsage(true);
@@ -9502,6 +9546,19 @@
       appReady();
       toast('Données illisibles : ' + e.message);
     });
+  }
+
+  /* Révizator seul : en-tête à son nom, et, servi par le serveur, le service worker de l'application
+     installable (sw.js : l'enveloppe de la page en cache, jamais les données). Ni dans WebView2 ni
+     dans le shim : la page y vient du disque, rien à mettre en cache. */
+  function bootRevizatorOnly() {
+    var h1 = $('.app-header h1');
+    if (h1) h1.textContent = 'Révizator';
+    document.title = 'Révizator';
+    if (bridge.mode === 'server' && navigator.serviceWorker && window.isSecureContext) {
+      /* La version dans l'adresse : un nouveau serveur installe un nouveau service worker (sw.js). */
+      navigator.serviceWorker.register('sw.js?v=' + encodeURIComponent(String(window.REVIZATOR_SERVER.version || '0')))['catch'](function (e) { console.warn('[organizator] service worker', e); });
+    }
   }
 
   /* ── Point d'accroche des modules chargés après app.js (voice.js) ─────────

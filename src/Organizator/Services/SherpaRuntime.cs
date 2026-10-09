@@ -40,18 +40,36 @@ public sealed class SherpaRuntime
 
     // Le paquet NuGet du runtime win-x64, dont on n'extrait que les deux DLL ; son SHA-512 est celui
     // que NuGet verifie (org.k2fsa.sherpa.onnx.runtime.win-x64.1.13.8.nupkg.sha512).
-    private const string PackageUrl = "https://api.nuget.org/v3-flatcontainer/org.k2fsa.sherpa.onnx.runtime.win-x64/1.13.8/org.k2fsa.sherpa.onnx.runtime.win-x64.1.13.8.nupkg";
-    public const long DownloadSize = 8_535_869;
-    private const string PackageSha512 = "7ZpIieyGnrhTBTPDeQsq5S36Qe3wxGHFAB/Hl3Q7zrhJ7ayb4co0oCI+ZY6MDC1p519T3DqUIPRUO6g47GSKkw==";
-    private const string PackageEntry = "runtimes/win-x64/native/";
+    // Hors Windows (serveur Revizator, Linux) : le paquet linux-x64 et ses deux .so, de la meme facon.
+    private static readonly string PackageUrl = OperatingSystem.IsWindows()
+        ? "https://api.nuget.org/v3-flatcontainer/org.k2fsa.sherpa.onnx.runtime.win-x64/1.13.8/org.k2fsa.sherpa.onnx.runtime.win-x64.1.13.8.nupkg"
+        : "https://api.nuget.org/v3-flatcontainer/org.k2fsa.sherpa.onnx.runtime.linux-x64/1.13.8/org.k2fsa.sherpa.onnx.runtime.linux-x64.1.13.8.nupkg";
+    public static readonly long DownloadSize = OperatingSystem.IsWindows() ? 8_535_869 : 10_794_309;
+    private static readonly string PackageSha512 = OperatingSystem.IsWindows()
+        ? "7ZpIieyGnrhTBTPDeQsq5S36Qe3wxGHFAB/Hl3Q7zrhJ7ayb4co0oCI+ZY6MDC1p519T3DqUIPRUO6g47GSKkw=="
+        : "qzbcKztel04totaGoYQdTte/AhTpNZ0DqIGzOHVmgC3K8jh7MY1lC/EKD+d2P87KUtJriQMsHFjjFis6sgYGeQ==";
+    private static readonly string PackageEntry = OperatingSystem.IsWindows() ? "runtimes/win-x64/native/" : "runtimes/linux-x64/native/";
 
     private sealed record Asset(string Path, long Size, string Sha256);
 
-    private static readonly Asset[] Files =
-    [
-        new("onnxruntime.dll", 17_799_168, "7f66f939a881baf4f46a2216496798edf4a1429878b646d12674aa62f27d8a25"),
-        new("sherpa-onnx-c-api.dll", 4_605_952, "2729a0da3fbd20fb4e14e157f7cc0e00af848b55f04121319d445c138aeba214"),
-    ];
+    // Dans l'ordre de chargement : onnxruntime d'abord, puis l'API C de sherpa-onnx.
+    private static readonly Asset[] Files = OperatingSystem.IsWindows()
+        ?
+        [
+            new("onnxruntime.dll", 17_799_168, "7f66f939a881baf4f46a2216496798edf4a1429878b646d12674aa62f27d8a25"),
+            new("sherpa-onnx-c-api.dll", 4_605_952, "2729a0da3fbd20fb4e14e157f7cc0e00af848b55f04121319d445c138aeba214"),
+        ]
+        :
+        [
+            new("libonnxruntime.so", 27_026_609, "4b3607aebd1784b26b6f9b20e4bd974c7ab8287043e4d095cb7d2cb40b5e566e"),
+            new("libsherpa-onnx-c-api.so", 5_120_672, "e50ae8bca4db52b7be04f56f8ac1502b940ca124a26fac0d48d8cef7fc9823d4"),
+        ];
+
+    /// <summary>
+    /// Hors Windows : copie des deux .so livree a cote de l'executable (<c>sherpa/linux-x64/</c>, voir
+    /// Revizator.Server.csproj), prise avant tout telechargement.
+    /// </summary>
+    private static string BundledDir => System.IO.Path.Combine(AppContext.BaseDirectory, "sherpa", "linux-x64");
 
     /// <summary>Le code natif borne ses chemins : on garde de la marge sous MAX_PATH.</summary>
     public const int NativePathLimit = 240;
@@ -194,6 +212,12 @@ public sealed class SherpaRuntime
         }
 
         var watch = Stopwatch.StartNew();
+        if (!OperatingSystem.IsWindows() && CopyBundled())
+        {
+            _log.Info($"Sherpa : runtime {Version} copie depuis {BundledDir}");
+            return;
+        }
+
         var part = Path.Combine(_dir, "runtime.nupkg.part");
         try
         {
@@ -253,6 +277,38 @@ public sealed class SherpaRuntime
                 TryDelete(part);
                 throw;
             }
+        }
+    }
+
+    /// <summary>Copie les bibliotheques livrees avec l'executable, si elles y sont entieres ; <c>false</c> sinon.</summary>
+    private bool CopyBundled()
+    {
+        try
+        {
+            if (!Files.All(f => new FileInfo(Path.Combine(BundledDir, f.Path)) is { Exists: true } info && info.Length == f.Size))
+            {
+                return false;
+            }
+
+            foreach (var asset in Files)
+            {
+                var source = Path.Combine(BundledDir, asset.Path);
+                if (!string.Equals(Sha256Of(source), asset.Sha256, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                var target = Path.Combine(_dir, asset.Path);
+                File.Copy(source, target + ".part", overwrite: true);
+                File.Move(target + ".part", target, overwrite: true);
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _log.Warn("Sherpa : copie du runtime livre impossible, telechargement : " + ex.Message);
+            return false;
         }
     }
 
@@ -458,7 +514,7 @@ public sealed class SherpaRuntime
                 throw new InvalidOperationException(missing);
             }
 
-            LoadNative(Path.Combine(_dir, "onnxruntime.dll"), Path.Combine(_dir, "sherpa-onnx-c-api.dll"), _dir);
+            LoadNative(Path.Combine(_dir, Files[0].Path), Path.Combine(_dir, Files[1].Path), _dir);
             _log.Info(logPrefix + " : DLL natives chargees depuis " + _dir);
         }
     }

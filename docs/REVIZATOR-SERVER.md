@@ -40,6 +40,24 @@ Une seule source de vérité : le dossier de données du serveur. Le PC et le t�
   rester sans erreur (le SDK Microsoft.NET.Sdk.WindowsDesktop est installé dans cet environnement).
 - Les URL que les services mettent dans leurs réponses restent les hôtes virtuels de WebView2
   (`https://learn.organizator/…`, `https://tts.organizator/…`) : c'est la page qui les traduit (§ 5).
+- Mise en œuvre (état actuel) :
+  - fichiers liés : `HostLog`, `AgentProvider`, `AgentLauncher`, `AppSettings`, `DataStore`,
+    `InheritedEnvironment`, `ModelCatalog`, `TranscriptAccumulator`, `LearningAgent`, `LearningStore`,
+    `NewsMenu`, `TextToSpeech`, `SherpaRuntime`, `LiveAsr`, `WhisperTranscriber`, `SpeechAssessment`,
+    `AudioDecoder`, `VoiceChat`, `VoiceSentences`. `SpeechVoice` (SAPI) n'est pas lié.
+  - `Platform/AgentDraft.cs` et `Platform/BitbucketPullRequests.cs` : copies réduites des seules
+    fonctions statiques utilisées (`Clean`/`Explain`, `NormalizeUrl`) ; les classes d'origine tireraient
+    les sessions Copilot (SQLite) et les quotas. À garder alignées.
+  - branches `OperatingSystem.IsWindows()` dans les fichiers partagés : `AgentLauncher` (hors Windows :
+    `REVIZATOR_CLAUDE`, sinon `claude` dans le `PATH`, sinon `~/.local/bin/claude`), `SherpaRuntime`
+    (paquet `runtime.linux-x64` et ses deux `.so`, empreintes vérifiées comme pour win-x64 ; copiés d'abord
+    depuis `sherpa/linux-x64/` à côté de l'exécutable s'ils y sont, sinon téléchargés depuis nuget.org ;
+    `DownloadSize` devient `static readonly`), `WhisperTranscriber` (bibliothèques livrées sous
+    `runtimes/linux-x64/` à côté de l'exécutable, rien à extraire), `AudioDecoder.FromFile` (`ffmpeg`
+    au lieu de Media Foundation ; inutilisé par le serveur, qui ne reçoit que des WAV). `HostLog.Mirror`
+    recopie le journal sur la console (`docker logs`).
+  - bibliothèques natives : Whisper.net (`libwhisper.so`, `libggml*.so`) a besoin de `libgomp1` dans
+    l'image.
 
 ## 3. Serveur HTTP
 
@@ -53,6 +71,7 @@ Configuration par variables d'environnement :
 | `REVIZATOR_ALLOWED_ORIGINS` | `https://app.organizator` | origines autorisées en CORS (la page d'Organizator dans WebView2) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | jeton de `claude setup-token`, lu par Claude Code |
 | `REVIZATOR_CLAUDE` | `claude` (dans le `PATH`) | chemin de l'exécutable Claude Code |
+| `REVIZATOR_WWWROOT` | `wwwroot/` à côté de l'exécutable | dossier de la page (développement : `src/Organizator/wwwroot`) |
 
 Routes :
 
@@ -80,14 +99,20 @@ Routes :
 - Jetons : `tokens.json` dans le dossier de données, chaque jeton = 32 octets aléatoires en base64url,
   stocké **haché** (SHA-256) avec un nom d'appareil et sa date de création ; comparaison à temps
   constant ; 10 échecs par minute et par IP au plus (au-delà : 429). En-tête `X-Forwarded-For` pris en
-  compte (le serveur est derrière NPM).
+  compte (le serveur est derrière NPM) : sa **dernière** entrée (celle qu'ajoute NPM), et seulement quand
+  la connexion vient d'une adresse privée ou locale (le proxy). Au-delà de la limite, même un bon jeton
+  reçoit 429 jusqu'à la fin de la minute. `tokens.json` est relu dès qu'il change : `token new` et
+  `token revoke` valent aussitôt pour le serveur qui tourne. `token new` sur un nom existant remplace
+  son jeton.
 - Ligne de commande (même exécutable) :
   - `revizator-server token new <appareil>` : crée un jeton, affiche le lien d'appairage
     `${REVIZATOR_PUBLIC_URL}/pair?token=…`, son QR code en caractères dans le terminal, et le jeton seul
     (pour Organizator sur le PC) ;
   - `revizator-server token list` / `token revoke <appareil>` ;
   - `revizator-server import <dossier>` : importe `learning.json` et `learning/` depuis une copie du
-    dossier `%LOCALAPPDATA%\Organizator\` du PC (sauvegarde de l'existant avant d'écraser).
+    dossier `%LOCALAPPDATA%\Organizator\` du PC (sauvegarde de l'existant avant d'écraser : l'ancien
+    `learning.json` et `learning/` sont déplacés sous `import-backup-<date>/` ; à lancer serveur arrêté,
+    ou au moins sans page ouverte, qui réécrirait son ancien état) ;
   - sans argument : lance le serveur.
 
 ## 4. Pont WebSocket
@@ -123,6 +148,21 @@ Les gestionnaires reprennent ceux de `BridgeHost.cs` (mêmes noms de champs, mê
 types de la liste sont branchés : il n'existe aucun gestionnaire pour les tâches, sessions, pièces
 jointes, articles, quotas, etc.
 
+Précisions de la mise en œuvre :
+
+- le message d'erreur d'un type refusé est « Type de message non disponible sur le serveur Révizator :
+  `<type>` » (la page ne doit donc pas appeler `badge`, `getUsage`, `getArticle`, `refreshModels`… en
+  mode serveur : ils échouent) ;
+- `learnLoad` et `learnSave` rendent en plus `rev` (même compteur que `learnChanged`) ; le compteur
+  repart de 0 au démarrage du serveur ;
+- `transcribe` avec un `path` est refusé (il n'y a pas de pièces jointes sur le serveur) ;
+- `perf` est accepté et ignoré ; `log` va au journal ;
+- WebSocket ouvert avec le cookie : l'en-tête `Origin`, s'il est présent, doit être l'hôte du serveur
+  (ou une origine de `REVIZATOR_ALLOWED_ORIGINS`), sinon 403 ; avec `?token=`, l'origine est libre ;
+- un message au-delà de 32 Mo ferme la connexion (code 1009) ; les messages binaires sont ignorés ;
+- la partie synchrone de chaque gestionnaire s'exécute dans l'ordre de réception (les `asrFeed`
+  restent ordonnés), le reste en parallèle, comme sous WebView2.
+
 ## 5. La page
 
 ### 5.1 Transport (`bridge.js`)
@@ -139,17 +179,39 @@ Trois cas, décidés au chargement :
    `whisper`, `learnChanged` du serveur sont émis dans la page ; ceux de l'hôte local pour ces mêmes
    noms sont ignorés. Serveur injoignable : les appels échouent avec « Serveur Révizator injoignable »
    (jamais de repli silencieux sur les données locales, qui divergeraient).
+   **Exceptions** (ce qui n'existe que sur le PC) : un appel avec des fichiers joints
+   (`bridge.call(…, files)`) et un `transcribe` qui porte un `path` (enregistrement joint à une tâche),
+   ainsi que le `cancelTranscribe` de ce travail, restent sur l'hôte local, et les événements de l'hôte
+   dont le `job` est celui d'un tel travail passent.
+   Les réglages ne sont connus qu'après `getState` : `app.js` appelle
+   `bridge.configureRemote({ url, token })` juste après, avant le démarrage des pages, et Révizator le
+   rappelle quand le réglage change (Réglages › Révizator › Serveur Révizator : adresse, jeton masqué,
+   « Tester la connexion » = `bridge.testRemote` : `GET /api/health` puis ouverture du WebSocket avec le
+   jeton → connecté / injoignable / jeton refusé, et « Enregistrer »). `configureRemote` émet
+   `remoteChanging` (avant la bascule : une sauvegarde en attente part encore à l'ancien destinataire)
+   puis `remoteChanged` ; Révizator relit alors tout chez le nouveau. Le réglage n'est montré que dans
+   WebView2 (dans le shim, seulement avec `window.__shimRemote = true`, pour les essais).
 
 Commun aux cas 2 et 3 : reconnexion automatique (1 s, 2 s, 5 s, puis toutes les 10 s), appels en
 attente rejetés à la coupure, file d'envoi pendant la reconnexion pour les appels de moins de 10 s,
-`bridge.on('connection', fn)` (`{ state: 'online'|'offline'|'connecting' }`) pour un bandeau discret.
+`bridge.on('connection', fn)` (`{ state: 'online'|'offline'|'connecting', url }` ; `'local'` quand le
+serveur est retiré dans le cas 3) pour un bandeau discret (`[data-rz-conn]` en tête de la page
+Révizator, réécrit sans rendu complet). Chien de garde : sans aucun message pendant 50 s (le serveur
+envoie un ping toutes les 20 s), la liaison est tenue pour morte et rouverte. `bridge.mode`
+(`'webview'|'server'|'shim'`), `bridge.remote()` (`{ url, state }` ou `null`) et
+`bridge.connection()` donnent l'état courant. Dans les cas 2 et 3, si `learnLoad` échoue, Révizator
+**ne démarre pas sur des données vides** (que sa prochaine sauvegarde écrirait sur le serveur) : il
+affiche l'erreur, un bouton « Réessayer », et relit dès que la liaison revient ; une sauvegarde ratée
+parce que le serveur est coupé repart à la reconnexion.
 
 **Traduction des URL** : dans toutes les chaînes des réponses et des événements venus du serveur,
 `https://learn.organizator/` devient `<base>/learn/` et `https://tts.organizator/` devient
 `<base>/tts/`, où `<base>` vaut l'origine du serveur (cas 2) ou `https://<serveur>/t/<jeton>` (cas 3).
 La traduction **inverse** s'applique à tout ce que la page envoie au serveur : `learning.json` et les
 documents gardent les hôtes virtuels, et restent portables entre le PC et le serveur. `env.learnUrl` et
-`env.ttsUrl` sont traduits de la même façon.
+`env.ttsUrl` sont traduits de la même façon. Mise en œuvre : sur le texte JSON du message (les URL ne
+sont que dans des chaînes, où `/` n'est pas échappé), sans recopier l'objet ; l'inverse reconnaît toute
+base du même serveur (`<origine>/learn/` comme `<origine>/t/<n'importe quel jeton>/learn/`).
 
 ### 5.2 Mode « Révizator seul » (`app.js`)
 
@@ -162,6 +224,12 @@ tests) :
 - Réglages : seulement l'onglet Révizator (et ce qui concerne la voix et la dictée) ;
 - rien de ce qui touche aux tâches n'est appelé (`saveData`, `getSessions`, `getUsage`, …).
 
+Mise en œuvre : constante `RZ_ONLY` en tête d'`app.js`, classe `rz-only` sur `<html>` (règles d'en-tête
+dans `app.css`, valables aussi sur grand écran) ; `currentPage()` rend toujours `revizator` ; les
+fonctions de la file (`saveDataNow`, `refreshSessions`, la relecture périodique des sessions,
+`refreshUsage`, `peekArticles`, `ensureArticle`, `refreshModels`) ne font rien ; les Réglages montrent
+l'onglet Révizator puis l'onglet Dictée (sans « Transcrire les enregistrements joints »).
+
 ### 5.3 Téléphone
 
 - `mobile.css` (chargé seulement par le serveur) : mise en page pour 360–430 px de large, cibles
@@ -172,7 +240,15 @@ tests) :
   `wwwroot/icons/icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, et `wwwroot/sw.js` (service
   worker à la racine : met en cache l'enveloppe de la page — HTML, CSS, JS, polices, icônes — pour un
   démarrage rapide ; **jamais** `/api`, `/learn`, `/tts`, `/t/`, `/pair`). Enregistré par `app.js` en
-  mode serveur seulement.
+  mode serveur seulement (`bridge.mode === 'server'`, contexte sécurisé), sous l'adresse
+  `sw.js?v=<REVIZATOR_SERVER.version>` : une nouvelle version du serveur installe un nouveau service
+  worker, dont le cache (`revizator-shell-<version>`) remplace l'ancien. Page et `revizator-server.js` :
+  réseau d'abord (copie hors ligne) ; autres fichiers : copie d'abord, relue en arrière-plan.
+- `mobile.css` n'agit que sous `@media (max-width: 600px)` (et `(hover: none)` / `(pointer: coarse)` pour
+  les aides au survol et les raccourcis clavier) : en-tête d'une ligne collé en haut, onglets en bas
+  d'écran, masqués dans les vues plein écran (séance, série d'exercices, révision des cartes, bilan en
+  cours, conversation du tuteur), traductions des mots dans une bulle en bas d'écran, Réglages plein
+  écran. Les icônes se régénèrent par `node tools/make-pwa-icons.mjs` (Chromium headless).
 - Micro : `getUserMedia` exige HTTPS (assuré par NPM) ; le PCM et les WAV partent par le WebSocket comme
   dans WebView2.
 
@@ -183,7 +259,9 @@ serveur envoie `{ event: 'learnChanged', payload: { rev, at } }` aux **autres** 
 compteur incrémenté à chaque écriture). Dans `revizator/core.js`, à la réception : si rien n'attend
 d'être sauvegardé, la page relit `learnLoad` et se redessine (sans interrompre une séance en cours :
 elle attend la fin de la séance ou le retour à l'accueil) ; sinon, sa propre sauvegarde l'emporte
-(dernier écrit gagnant). Limite assumée et documentée : faire réviser ses cartes sur deux appareils
+(dernier écrit gagnant). « Séance en cours » = toute vue autre que l'accueil et Progrès (séance,
+exercices, bilans, cartes, tuteur) : la relecture attend que l'on revienne à l'une de ces deux vues, et
+elle est abandonnée si, entre-temps, une modification attend d'être sauvegardée. Limite assumée et documentée : faire réviser ses cartes sur deux appareils
 **au même moment** peut perdre les réponses de l'un des deux.
 
 ## 7. Déploiement (`deploy/`)
@@ -200,3 +278,24 @@ elle attend la fin de la séance ou le retour à l'accueil) ; sinon, sa propre s
 - `deploy/FINALISER.md` : la liste de contrôle que suivra Claude Code installé sur le serveur pour
   terminer l'installation et vérifier chaque point (ce qui n'a pas pu être testé dans le cloud :
   construction de l'image Docker, Claude Code réel, modèles de voix réels, téléphone réel).
+- Mise en œuvre (état actuel) :
+  - images `sdk:8.0-noble` → `aspnet:8.0-noble` (Ubuntu 24.04, variante essayée ; la variante Debian
+    de `aspnet:8.0` conviendrait aussi : glibc ≥ 2.29 suffit aux natives) ; paquets `ffmpeg`, `libgomp1`
+    (OpenMP de `libggml-cpu-whisper.so`) et `curl` (installeur, `HEALTHCHECK`) ;
+  - utilisateur non root : `app` (UID/GID 1654) fourni par l'image .NET ; `/opt/revizator/data` doit lui
+    appartenir (`chown -R 1654:1654`) ;
+  - Claude Code : `curl -fsSL https://claude.ai/install.sh | bash -s -- $CLAUDE_CODE_VERSION`, en tant que
+    `app`, binaire `~/.local/bin/claude` dans le `PATH` ; `DISABLE_AUTOUPDATER=1` : la version est figée
+    dans l'image (argument de construction `CLAUDE_CODE_VERSION`, alimenté dans le compose par
+    `REVIZATOR_CLAUDE_VERSION` — pas `CLAUDE_CODE_VERSION`, qu'un shell de Claude Code pose déjà) ;
+  - `/usr/local/bin/revizator-server` (script : `exec dotnet /app/revizator-server.dll "$@"`) pour
+    `docker exec revizator revizator-server token new …` ; `ASPNETCORE_HTTP_PORTS` vidé (le port vient de
+    `REVIZATOR_PORT`) ;
+  - compose : `pull_policy: build` (image locale `revizator-server:local`, jamais tirée d'un registre :
+    Deploy dans Komodo reconstruit), `init: true` (tini récolte les processus de `claude`), port
+    `8080:8080`, journaux `json-file` limités ; `PUBLIC_URL`, `ALLOWED_ORIGINS`,
+    `CLAUDE_CODE_OAUTH_TOKEN` et `TZ` interpolés depuis `.env` (écrit par Komodo à partir de
+    l'« Environment » de la stack) ; `deploy/.env` est ignoré par git ;
+  - `.dockerignore` à la racine : seul `src/` entre dans le contexte ;
+  - import : `docker compose stop`, `docker compose run --rm --no-deps revizator import /data/import-pc`,
+    `docker compose start`.

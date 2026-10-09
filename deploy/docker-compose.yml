@@ -1,0 +1,36 @@
+# Revizator serveur : stack Komodo (ou « docker compose up -d --build » depuis ce dossier).
+# Voir deploy/README.md. Les variables viennent de .env (modele : .env.example) ou de l'onglet
+# « Environment » de la stack Komodo, que Komodo ecrit dans .env a cote de ce fichier.
+name: revizator
+
+services:
+  revizator:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        # stable, latest ou un numero (2.1.30) : change-le pour forcer une nouvelle version de Claude Code.
+        CLAUDE_CODE_VERSION: ${REVIZATOR_CLAUDE_VERSION:-stable}
+    image: revizator-server:local
+    # Image construite ici, jamais tiree d'un registre : « up » (Deploy dans Komodo) la reconstruit depuis
+    # les sources (couches en cache : quelques secondes quand rien n'a change).
+    pull_policy: build
+    container_name: revizator
+    restart: unless-stopped
+    # tini en PID 1 : recolte les processus orphelins de claude.
+    init: true
+    ports:
+      - "8080:8080"
+    environment:
+      REVIZATOR_PUBLIC_URL: ${REVIZATOR_PUBLIC_URL:-https://revizator.daft-lab.fr}
+      REVIZATOR_ALLOWED_ORIGINS: ${REVIZATOR_ALLOWED_ORIGINS:-https://app.organizator}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      TZ: ${TZ:-Europe/Paris}
+    volumes:
+      # Proprietaire 1654:1654 (utilisateur « app » de l'image) : chown -R 1654:1654 /opt/revizator/data
+      - /opt/revizator/data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

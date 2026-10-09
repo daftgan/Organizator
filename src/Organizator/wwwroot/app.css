@@ -1733,3 +1733,13 @@ html { scrollbar-gutter: stable; }
 .page-host { flex: 1; min-width: 0; padding: 0 clamp(20px, 4vw, 56px) 60px; }
 .page-host[hidden] { display: none; }
 .page-error { padding: 24px; border-radius: var(--radius-lg); background: var(--color-surface); color: var(--color-accent-800); }
+
+/* ── Révizator seul (docs/REVIZATOR-SERVER.md § 5.2) ─────────────────────
+   Page servie par le serveur Révizator (ou shim avec ?mode=revizator) : ni quotas ni articles dans
+   l'en-tête, ni cloche ni remarques dans la barre ; restent le titre, la barre de Révizator et les
+   réglages. Le téléphone a ses propres règles dans mobile.css, chargé par le serveur seulement. */
+.rz-only .app-header .usage,
+.rz-only #notifs-btn,
+.rz-only #remarks-btn,
+.rz-only #notifs { display: none !important; }
+.rz-only .app-header { padding-bottom: 6px; }
