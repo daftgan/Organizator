@@ -71,7 +71,7 @@ public sealed class LiveAsr : IDisposable
             Decoder: "decoder.int8.onnx",
             Joiner: "joiner.int8.onnx",
             Tokens: "tokens.txt",
-            Size: 650_000_000),
+            Size: 650L * 1024 * 1024),
     ];
 
     /// <summary>Anciens dossiers (Zipformer en flux, un par langue), effaces au demarrage.</summary>

@@ -2,8 +2,8 @@
    Révizator — le tuteur vocal (module U3)
    Une conversation en anglais. Deux façons de la mener :
      · mains libres (par défaut, R.prefs.tutorLive) : le moteur vocal partagé (voice-engine.js,
-       window.OrganizatorVoice) écoute en continu, détecte la fin de phrase, transcrit (en direct par le
-       modèle en flux s'il est téléchargé — la bulle de l'apprenant se remplit pendant qu'il parle —, sinon
+       window.OrganizatorVoice) écoute en continu, détecte la fin de phrase, transcrit (en direct par
+       Parakeet v3 s'il est téléchargé — la bulle de l'apprenant se remplit pendant qu'il parle —, sinon
        Whisper local ; les mesures Whisper arrivent alors après coup, onUtteranceDetail),
        envoie à une session Claude persistante en mode tuteur (voiceStart mode 'tutor') et lit la réponse
        phrase par phrase (Kokoro, sinon SAPI) ; on peut couper la parole au tuteur. Avatar en tête du chat.
@@ -1429,7 +1429,7 @@
       + sc.phrases.map(function (ph) { return '<button type="button" class="rz-phrase rzv-phrase" data-act="rz-tutor-phrase" data-text="' + esc(ph) + '" title="Écouter" lang="en">' + R.icon('speak') + esc(ph) + '</button>'; }).join('')
       + '</div></section>'
       + '<section class="rz-card rzv-opts">' + (liveMode()
-        ? '<div class="rzv-note">Mains libres : le micro reste ouvert pendant la conversation ; le son est transcrit sur ce poste (en direct avec le modèle anglais, sinon Whisper), seule la transcription part vers le tuteur. Sensibilité du micro, coupure de parole et transcription en direct se règlent dans ⚙ › Révizator.</div>'
+        ? '<div class="rzv-note">Mains libres : le micro reste ouvert pendant la conversation ; le son est transcrit sur ce poste (en direct avec Parakeet v3, sinon Whisper), seule la transcription part vers le tuteur. Sensibilité du micro, coupure de parole et transcription en direct se règlent dans ⚙ › Révizator.</div>'
         : '<label class="rzv-toggle"><input type="checkbox" data-role="rz-tutor-voice"' + (tutorData().voiceOff ? '' : ' checked') + '><span>Lire les réponses à voix haute</span></label>')
       + '<div class="rzv-note">Whisper peut lisser vos fautes : la transcription montre ce qu’il a compris ; les mots soulignés sont ceux dont il doute.</div>'
       + (avg ? '<div class="rzv-note">Temps de réponse moyen du tuteur : ' + esc(secs(avg)) + '.</div>' : '') + '</section>'
@@ -1983,7 +1983,7 @@
       + '<div class="rz-set-help">Plus haute, il entend une voix douce ou lointaine, mais aussi davantage le bruit ambiant ; plus basse, il ignore le bruit, il faut parler plus franchement. 40 convient à la plupart des pièces.</div>'
       + '<div class="rzv-set-sub">Transcription en direct</div>'
       + (asr ? asr.modelsHtml() : '<div class="asr-note">Indisponible dans cette fenêtre : Whisper transcrit chaque phrase quand vous vous taisez.</div>')
-      + '<div class="rz-set-help">Avec le modèle anglais, votre phrase s’écrit pendant que vous parlez et part au tuteur dès que vous vous taisez ; Whisper mesure ensuite, sans faire attendre, les mots douteux et le débit. Le modèle français sert à la conversation en français. Tout reste sur ce poste.</div>'
+      + '<div class="rz-set-help">Un seul modèle pour l’anglais et le français, plus précis que Whisper et robuste aux accents : votre phrase s’écrit pendant que vous parlez et part au tuteur, ponctuée, dès que vous vous taisez ; Whisper mesure ensuite, sans faire attendre, les mots douteux et le débit. Tout reste sur ce poste.</div>'
       + '<div class="set-card-foot">Sans modèle en direct, la conversation utilise le même Whisper que l’oral (ci-dessous) ; les réponses viennent du modèle « Tuteur » des agents.</div></div>';
   } });
   R.act('rz-tutor-history', function () { R.tts.stopAll(); setScreen('history'); goTutor(); });

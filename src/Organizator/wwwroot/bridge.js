@@ -470,24 +470,28 @@
     return delay ? new Promise(function (resolve) { setTimeout(function () { resolve(out); }, delay); }) : out;
   }
 
-  /* Transcription en flux simulée (StreamingAsr de l'hôte) : modèles en/fr, téléchargement avec
-     l'avancement (évènement `asr`), sessions. window.__fakeAsr impose l'état : un objet { runtime, models }
-     rendu par asrStatus (et modifié par asrDownload / asrRemove), ou 'error' pour un hôte sans
-     transcription en flux (tous les messages asr* échouent). Réglages facultatifs dans ce même objet :
-     startError (asrStart échoue avec ce message), endError (asrEnd échoue), decodeError (évènement `asr`
-     { session, phase:'error', error } au premier paquet, puis asrEnd échoue avec ce message), downloadError
-     (asrDownload rend { ok:false, error }, comme l'hôte), wordMs (audio par mot des partiels, 220 ms). Partiels progressifs : les mots de window.__fakeTranscript (sans
-     ponctuation), un de plus par wordMs d'audio reçu, poussés par l'évènement `asr` { session, phase:
-     'partial', text } ; asrEnd rend la phrase entière (point final ajouté s'il manque) et remet la session à
-     zéro. Journal : window.__voiceCalls (asrFeed noté { session, samples }). */
+  /* Transcription en direct simulée (StreamingAsr de l'hôte, Parakeet v3 en pseudo-flux) : un seul modèle
+     ('parakeet', langues en et fr), téléchargement avec l'avancement (évènement `asr`, `lang` = id du
+     modèle), sessions. window.__fakeAsr impose l'état : un objet { runtime, models } rendu par asrStatus (et
+     modifié par asrDownload / asrRemove ; un état à deux modèles 'en' / 'fr' simule l'hôte d'avant), ou
+     'error' pour un hôte sans transcription en direct (tous les messages asr* échouent). Réglages
+     facultatifs dans ce même objet : startError (asrStart échoue avec ce message), endError (asrEnd
+     échoue), decodeError (évènement `asr` { session, phase:'error', error } au premier paquet, puis asrEnd
+     échoue avec ce message), downloadError (asrDownload rend { ok:false, error }, comme l'hôte), wordMs
+     (audio par mot, 220 ms), partialMs (écart entre deux recalculs, 600 ms), revise ({ mot: 'variante' } :
+     le premier partiel entend la variante, les suivants la corrigent). Partiels « par recalcul » : au plus
+     un toutes les partialMs, quand ≥ 300 ms d'audio nouveau est arrivé, le texte complet de l'énoncé jusque-
+     là (les mots de window.__fakeTranscript, ponctuation et casse comprises, un par wordMs d'audio reçu),
+     poussé par l'évènement `asr` { session, phase:'partial', text } ; il remplace le précédent. asrEnd rend
+     la phrase entière (point final ajouté s'il manque) et remet la session à zéro ; aucun partiel ensuite.
+     Journal : window.__voiceCalls (asrFeed noté { session, samples }). */
   var shimAsr = {
     seq: 0, sessions: {},
     state: {
-      repo: 'csukuangfj / shaojieli (Hugging Face)',
       runtime: { downloaded: false, version: '1.13.8', size: 31457280 },
       models: [
-        { id: 'en', label: 'Anglais', size: 70254592, downloaded: false, downloading: false, received: 0, total: 0 },
-        { id: 'fr', label: 'Français', size: 74448896, downloaded: false, downloading: false, received: 0, total: 0 }
+        { id: 'parakeet', label: 'Parakeet v3 (anglais, français…)', langs: ['en', 'fr'], repo: 'csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8',
+          size: 681574400, downloaded: false, downloading: false, received: 0, total: 0 }
       ]
     }
   };
@@ -503,7 +507,12 @@
     return shimAsr.state;
   }
 
-  function shimAsrModel(st, lang) { return st.models.filter(function (m) { return m.id === lang; })[0] || null; }
+  /* Par id ('parakeet'), sinon le modèle qui sert la langue ; `lang` absent : le premier (modèle unique). */
+  function shimAsrModel(st, lang) {
+    if (lang == null || lang === '') return st.models[0] || null;
+    return st.models.filter(function (m) { return m.id === lang; })[0]
+      || st.models.filter(function (m) { return Array.isArray(m.langs) && m.langs.indexOf(lang) >= 0; })[0] || null;
+  }
 
   function shimAsrText() {
     return window.__fakeTranscript != null ? String(window.__fakeTranscript) : 'texte dicté de démonstration';
@@ -565,7 +574,7 @@
         m = shimAsrModel(st, p.lang);
         if (!m || !m.downloaded) throw new Error('Le modèle de transcription en direct (' + p.lang + ') n’est pas téléchargé.');
         var id = 'asr-' + (++shimAsr.seq);
-        shimAsr.sessions[id] = { lang: p.lang, samples: 0, words: 0, gen: 0 };
+        shimAsr.sessions[id] = { lang: p.lang, samples: 0, decoded: 0, decodedAt: 0, partials: 0, gen: 0 };
         return { session: id };
 
       case 'asrFeed': {
@@ -580,12 +589,16 @@
           }
           return {};
         }
-        var words = shimAsrText().split(/\s+/).map(function (w) { return w.replace(/[.,;:!?…«»"]+/g, ''); }).filter(Boolean);
-        var n = Math.min(words.length, Math.floor(s.samples / 16 / (st.wordMs || 220)));
-        if (n > s.words && shimAsrText() !== 'error') {
-          s.words = n;
-          var gen = s.gen, text = words.slice(0, n).join(' ');
-          setTimeout(function () {
+        /* Recalcul : ≥ 300 ms d'audio nouveau et partialMs écoulées depuis le précédent. */
+        var now = Date.now();
+        if (shimAsrText() !== 'error' && s.samples - s.decoded >= 4800 && now - s.decodedAt >= (st.partialMs || 600)) {
+          s.decoded = s.samples; s.decodedAt = now;
+          var words = shimAsrText().split(/\s+/).filter(Boolean);
+          var n = Math.min(words.length, Math.floor(s.samples / 16 / (st.wordMs || 220)));
+          var first = !s.partials++, rv = st.revise || {};
+          var text = words.slice(0, n).map(function (w) { return first && rv[w] ? rv[w] : w; }).join(' ');
+          var gen = s.gen;
+          if (text) setTimeout(function () {
             if (shimAsr.sessions[p.session] === s && s.gen === gen) emit('asr', { session: p.session, phase: 'partial', text: text });
           }, 20);
         }
@@ -595,7 +608,7 @@
       case 'asrEnd': {
         s = shimAsrSession(p);
         shimVoiceLog(type, p);
-        s.samples = 0; s.words = 0; s.gen++;
+        s.samples = 0; s.decoded = 0; s.decodedAt = 0; s.partials = 0; s.gen++;
         var failed = s.failed;
         s.failed = false;
         if (failed) throw new Error(String(st.decodeError || 'décodage impossible'));
@@ -610,7 +623,7 @@
       case 'asrReset':
         s = shimAsrSession(p);
         shimVoiceLog(type, p);
-        s.samples = 0; s.words = 0; s.gen++; s.failed = false;
+        s.samples = 0; s.decoded = 0; s.decodedAt = 0; s.partials = 0; s.gen++; s.failed = false;
         return {};
 
       case 'asrStop':

@@ -89,10 +89,13 @@
     return Math.round(bytes / 1048576) + ' Mo';
   }
 
-  /* ══ Transcription en direct : les modèles en flux (partagé avec le Tuteur) ══
-     L'état des modèles sherpa-onnx de l'hôte (`asrStatus`), leur téléchargement (`asrDownload`, progression
-     par l'évènement `asr`) et leur suppression (`asrRemove`). Les lignes de réglage (modelsHtml) portent
-     data-asr-models : chaque changement les réécrit sur place, où qu'elles soient (overlay, Réglages). */
+  /* ══ Transcription en direct : le modèle de l'hôte (partagé avec le Tuteur) ══
+     L'état du modèle sherpa-onnx de l'hôte (`asrStatus` : un seul, Parakeet v3, qui sert l'anglais et le
+     français), son téléchargement (`asrDownload` avec l'id du modèle, progression par l'évènement `asr` dont
+     `lang` est cet id) et sa suppression (`asrRemove`). Un hôte plus ancien rend un modèle par langue (ids
+     'en', 'fr') : une ligne chacun. Les lignes de réglage (modelsHtml) portent data-asr-models : chaque
+     changement les réécrit sur place, où qu'elles soient (overlay, Réglages). Clés de `dl` / `err` : l'id
+     du modèle. */
 
   var BARGE = [
     { id: 'words', label: 'Quand je dis quelques mots', hint: 'conseillé' },
@@ -138,16 +141,25 @@
   }
 
   function asrModels() {
-    var list = (ASR.st && ASR.st.models) || [];
-    return ['en', 'fr'].map(function (id) {
-      var m = list.filter(function (x) { return x && x.id === id; })[0];
-      return m ? m : null;
-    }).filter(Boolean);
+    return ((ASR.st && ASR.st.models) || []).filter(function (m) { return m && m.id; });
   }
 
-  function asrModel(lang) { return asrModels().filter(function (m) { return m.id === lang; })[0] || null; }
+  /* Par id ('parakeet'), sinon le modèle qui sert la langue ('en' → parakeet). */
+  function asrModel(key) {
+    var all = asrModels();
+    return all.filter(function (m) { return m.id === key; })[0]
+      || all.filter(function (m) { return Array.isArray(m.langs) && m.langs.indexOf(key) >= 0; })[0] || null;
+  }
+
+  function asrKey(key) { var m = asrModel(key); return m ? m.id : String(key || ''); }
+
+  function asrText(m) {
+    if (typeof OV.asrModelText === 'function') return OV.asrModelText(m);
+    return { name: m.label || m.id, langs: '', size: fmtSize(m.size) };
+  }
 
   function asrDownload(lang) {
+    lang = asrKey(lang);
     if (ASR.dl[lang] && !ASR.dl[lang].done) return Promise.resolve(false);
     var m = asrModel(lang);
     ASR.dl[lang] = { received: 0, total: (m && m.size) || 0 };
@@ -169,6 +181,7 @@
   }
 
   function asrRemove(lang) {
+    lang = asrKey(lang);
     return bridge.call('asrRemove', { lang: lang }, 30000).then(function () {
       delete ASR.err[lang];
       return asrRefresh();
@@ -186,11 +199,14 @@
     if (!models.length) return '<div class="asr-note">Aucun modèle de transcription en direct proposé par l’application.</div>';
     var rows = models.map(function (m) {
       var d = ASR.dl[m.id], err = ASR.err[m.id];
-      var name = ASR_LABELS[m.id] || m.label || m.id;
+      var t = asrText(m);
+      var name = ASR_LABELS[m.id] || t.name;
+      /* « Parakeet v3 · anglais et français · ~650 Mo » */
+      var meta = [Array.isArray(m.langs) ? t.langs : '', m.size ? t.size : ''].filter(Boolean).join(' · ');
       var state;
       if (d) {
         var pct = asrPct(d);
-        state = '<span class="asr-prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-label="Téléchargement du modèle ' + esc(name.toLowerCase()) + '"><i style="width:' + pct + '%"></i></span>'
+        state = '<span class="asr-prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-label="Téléchargement du modèle ' + esc(name) + '"><i style="width:' + pct + '%"></i></span>'
           + '<span class="wm-state">' + (d.total ? pct + ' %' : 'Téléchargement…') + '</span>';
       } else if (m.downloaded) {
         state = '<span class="wm-state is-ok">✓ Prêt</span>'
@@ -198,14 +214,16 @@
       } else {
         state = '<button type="button" class="btn btn-secondary wm-btn" data-act="asr-download" data-lang="' + esc(m.id) + '">Télécharger</button>';
       }
-      return '<div class="wm-row asr-row" data-lang="' + esc(m.id) + '"><span class="wm-text"><span class="wm-name">' + esc(name)
-        + (m.size ? ' <span class="wm-size">' + esc(fmtSize(m.size)) + '</span>' : '') + '</span>'
+      return '<div class="wm-row asr-row" data-lang="' + esc(m.id) + '"><span class="wm-text"><span class="wm-name"><span class="asr-name">' + esc(name) + '</span>'
+        + (meta ? ' <span class="wm-size">· ' + esc(meta).replace(/ (Mo|Ko)\b/g, '\u00a0$1') + '</span>' : '') + '</span>'
         + '<span class="wm-note">' + (err ? '<span class="asr-err">Échec : ' + esc(err) + '</span>'
-          : (m.downloaded ? 'Vos phrases s’écrivent pendant que vous parlez.' : (d ? 'Téléchargement en cours ; vous pouvez continuer à parler (Whisper prend le relais).' : 'Pas encore sur ce poste : Whisper transcrit à la fin de chaque phrase.'))) + '</span></span>'
+          : (m.downloaded ? 'Vos phrases s’écrivent pendant que vous parlez ; l’aperçu se met à jour par à-coups, environ toutes les demi-secondes.'
+            : (d ? 'Téléchargement en cours ; vous pouvez continuer à parler (Whisper prend le relais).'
+              : 'Pas encore sur ce poste : Whisper transcrit à la fin de chaque phrase. Plus précis et robuste aux accents, ce modèle écrit vos phrases pendant que vous parlez.'))) + '</span></span>'
         + '<span class="wm-side">' + state + '</span></div>';
     }).join('');
     var rt = ASR.st.runtime;
-    return rows + (rt && rt.downloaded === false ? '<div class="asr-note">Le moteur de reconnaissance (sherpa-onnx) se télécharge avec le premier modèle.</div>' : '');
+    return rows + (rt && rt.downloaded === false ? '<div class="asr-note">Le moteur de reconnaissance (sherpa-onnx) se télécharge avec le modèle.</div>' : '');
   }
 
   /* Les lignes de modèles, à placer dans un réglage ; l'état est demandé à l'hôte à la première vue. */
@@ -217,6 +235,8 @@
 
   bridge.on('asr', function (ev) {
     if (!ev || ev.session || !ev.lang) return;
+    /* `lang` : l'id du modèle ('parakeet'), ou la langue d'un hôte plus ancien. */
+    ev = Object.assign({}, ev, { lang: asrKey(ev.lang) });
     if (ev.phase === 'download') {
       ASR.dl[ev.lang] = { received: Number(ev.received) || 0, total: Number(ev.total) || (ASR.dl[ev.lang] && ASR.dl[ev.lang].total) || 0 };
       delete ASR.err[ev.lang];
@@ -694,7 +714,7 @@
       'Distinct de celui de la dictée (' + esc(s.whisperModel || 'small') + ') : ici, chaque phrase doit être transcrite en moins d’une seconde.', 'vc-whisper'));
 
     h.push(fieldHtml('Transcription en direct', asrModelsHtml(),
-      'Avec le modèle de la langue (' + (c.language === 'en' ? 'anglais' : 'français') + ' pour ce sujet), votre phrase s’écrit pendant que vous parlez et part dès que vous vous taisez. Tout reste sur ce poste.'));
+      'Un seul modèle pour l’anglais et le français (' + (c.language === 'en' ? 'anglais' : 'français') + ' pour ce sujet) : votre phrase s’écrit pendant que vous parlez et part dès que vous vous taisez. Tout reste sur ce poste.'));
 
     h.push('<div class="vc-field"><div class="vc-label" id="vc-barge-l">Couper la parole</div>'
       + '<div class="vc-seg" role="radiogroup" aria-labelledby="vc-barge-l">' + BARGE.map(function (b) {
@@ -862,12 +882,12 @@
     }
   });
 
-  /* Un modèle en flux vient d'arriver (les moteurs ouverts le reprennent d'eux-mêmes) : les abonnés le savent. */
+  /* Le modèle de transcription en direct vient d'arriver (les moteurs ouverts le reprennent d'eux-mêmes) : les abonnés le savent. */
   function asrReady(lang) {
     ASR.subs.slice().forEach(function (fn) { try { fn(ASR.st, lang); } catch (err) { /* abonné fautif */ } });
   }
 
-  /* Partagé avec le Tuteur (revizator/tutor.js) : les modèles en flux et le choix « Couper la parole ». */
+  /* Partagé avec le Tuteur (revizator/tutor.js) : le modèle de transcription en direct et le choix « Couper la parole ». */
   window.OrganizatorLiveAsr = {
     modelsHtml: asrModelsHtml, refresh: asrRefresh, download: asrDownload, remove: asrRemove,
     status: function () { return ASR.st; }, model: asrModel,

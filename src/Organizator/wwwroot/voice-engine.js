@@ -1,8 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    Organizator — moteur de conversation vocale réutilisable (window.OrganizatorVoice)
    Micro ouvert en continu, fin de phrase détectée dans la page (VAD sur la bande de la voix),
-   transcription en flux sherpa-onnx de l'hôte (`asrStart` / `asrFeed` / `asrEnd`, évènement `asr` des
-   partiels) quand le modèle de la langue est là, sinon Whisper sur le poste (transcription spéculative),
+   transcription en direct de l'hôte (Parakeet v3 par sherpa-onnx, `asrStart` / `asrFeed` / `asrEnd` ;
+   évènement `asr` des partiels : le texte complet de l'énoncé, recalculé toutes les ~600 ms, qui remplace
+   le précédent) quand un modèle qui sert la langue est là, sinon Whisper sur le poste (transcription spéculative),
    conversation Claude de l'hôte (`voiceStart` / `voiceSay`, évènement `voice` phrase par phrase, phase
    `meta` du mode tutor), synthèse de chaque phrase (Kokoro `speak` → SAPI `voiceSpeak` →
    speechSynthesis), lecture WebAudio (donc retirée du micro par l'annulation d'écho, et analysée pour la
@@ -30,7 +31,7 @@
      En plus : eng.element (l'avatar monté), eng.downloadWhisper(), eng.downloadAsr(lang?),
      eng.feed(Float32Array) (essais).
      OrganizatorVoice.isJunk(text), .whisper() (dernier état Whisper connu), .tts() (dernier état Kokoro),
-     .asr() / .asrStatus(force) / .downloadAsr(lang) (modèles en flux), .active() (le moteur démarré).
+     .asr() / .asrStatus(force) / .downloadAsr(lang | id du modèle) (transcription en direct), .active() (le moteur démarré).
    Un seul AudioContext pour toute la page ; un seul moteur actif : en créer ou en démarrer un autre
    arrête le premier (qui passe en phase `idle`).
    ═══════════════════════════════════════════════════════════════════════ */
@@ -214,29 +215,58 @@
 
   /* ══ PCM pour la transcription en flux ════════════════════════════════ */
 
-  /* Rééchantillonnage au fil de l'eau vers 16 kHz : moyenne sur la largeur d'un pas (anti-repliement
-     sommaire, suffisant pour la reconnaissance), interpolation linéaire si le contexte est plus lent. */
-  function Resampler(rate) { this.r = rate / ASR_RATE; this.buf = new Float32Array(0); this.pos = 0; }
+  /* Rééchantillonnage au fil de l'eau vers 16 kHz. Contexte plus rapide (44,1 / 48 kHz) : filtre passe-bas
+     anti-repliement (FIR à phase linéaire, sinus cardinal fenêtré par Hamming, coupure 7,6 kHz, 32
+     coefficients à 48 kHz, davantage au-delà pour garder la même pente), puis lecture aux instants de sortie
+     (pas = rate / 16000) par interpolation linéaire du signal filtré, suréchantillonné, donc lisse. Mesuré :
+     1 kHz intact, 10 et 12 kHz atténués de plus de 40 dB. Contexte plus lent : interpolation linéaire seule.
+     L'historique du filtre et la position de lecture passent d'un bloc au suivant : découper le signal ne
+     change rien à la sortie. */
+  var RS_CUTOFF = 7600, RS_TAPS = 32;
+
+  function lowpassTaps(rate) {
+    var n = Math.max(RS_TAPS, Math.ceil(RS_TAPS * rate / 48000)), m = n - 1;
+    var x = 2 * Math.min(RS_CUTOFF, 0.45 * rate) / rate, h = new Float32Array(n), sum = 0, k;
+    for (k = 0; k < n; k++) {
+      var t = k - m / 2;
+      var v = (t === 0 ? x : Math.sin(Math.PI * x * t) / (Math.PI * t)) * (0.54 - 0.46 * Math.cos(2 * Math.PI * k / m));
+      h[k] = v; sum += v;
+    }
+    for (k = 0; k < n; k++) h[k] /= sum;
+    return h;
+  }
+
+  function Resampler(rate) {
+    this.r = rate / ASR_RATE;
+    this.h = this.r > 1 ? lowpassTaps(rate) : null;
+    this.hist = new Float32Array(this.h ? this.h.length - 1 : 0);
+    this.buf = new Float32Array(0);
+    this.pos = 0;
+  }
 
   Resampler.prototype.push = function (input) {
-    var all = new Float32Array(this.buf.length + input.length);
-    all.set(this.buf, 0); all.set(input, this.buf.length);
-    var r = this.r, half = r / 2, out = [], p = this.pos, s, k;
-    while (p + Math.max(half, 1) < all.length) {
-      if (r > 1) {
-        var a = Math.max(0, Math.ceil(p - half)), b = Math.min(all.length - 1, Math.floor(p + half));
-        s = 0;
-        for (k = a; k <= b; k++) s += all[k];
-        s /= Math.max(1, b - a + 1);
-      } else {
-        k = Math.floor(p);
-        s = all[k] + (all[k + 1] - all[k]) * (p - k);
+    var y = input, h = this.h, i, k;
+    if (h) {
+      var n = h.length, x = new Float32Array(this.hist.length + input.length);
+      x.set(this.hist, 0); x.set(input, this.hist.length);
+      y = new Float32Array(input.length);
+      for (i = 0; i < input.length; i++) {
+        var acc = 0;
+        for (k = 0; k < n; k++) acc += h[k] * x[i + k];
+        y[i] = acc;
       }
+      this.hist = x.slice(x.length - (n - 1));
+    }
+    var all = new Float32Array(this.buf.length + y.length);
+    all.set(this.buf, 0); all.set(y, this.buf.length);
+    var r = this.r, out = [], p = this.pos, s;
+    while ((k = Math.floor(p)) + 1 < all.length) {
+      s = all[k] + (all[k + 1] - all[k]) * (p - k);
       s = s < -1 ? -1 : (s > 1 ? 1 : s);
       out.push(s < 0 ? s * 0x8000 : s * 0x7fff);
       p += r;
     }
-    var keep = Math.max(0, Math.floor(p - half) - 1);
+    var keep = Math.min(Math.floor(p), all.length);
     this.buf = all.slice(keep);
     this.pos = p - keep;
     return Int16Array.from(out);
@@ -333,9 +363,11 @@
     return TT.loading;
   }
 
-  /* Modèles de transcription en flux : `status` null tant que l'hôte n'a pas répondu, `unsupported`
+  /* Modèles de transcription en direct : `status` null tant que l'hôte n'a pas répondu, `unsupported`
      si l'hôte ne connaît pas `asrStatus` (ancienne version : Whisper seul, sans avis) ; `dl` : les
-     téléchargements en cours par langue ; `offered` : langues pour lesquelles l'avis a déjà été montré. */
+     téléchargements en cours par id de modèle ; `offered` : modèles dont l'avis a déjà été montré.
+     Un modèle sert les langues de `langs` (Parakeet v3 : un seul modèle, `langs` ['en','fr']) ; un modèle
+     sans `langs` dont l'id est une langue (hôte d'avant Parakeet : 'en', 'fr') sert cette langue. */
   var AS = { status: null, unsupported: false, loading: null, dl: {}, offered: {} };
 
   function asrStatus(force) {
@@ -351,19 +383,57 @@
 
   function asrLang(language) { return String(language || 'fr').slice(0, 2).toLowerCase() === 'en' ? 'en' : 'fr'; }
 
-  function asrModel(lang) {
-    var st = AS.status;
-    return st && st.models ? (st.models.filter(function (m) { return m.id === lang; })[0] || null) : null;
+  function asrServes(m, lang) {
+    return !!m && ((Array.isArray(m.langs) && m.langs.indexOf(lang) >= 0) || m.id === lang);
   }
 
-  /* Téléchargement partagé (réglages ou avis) : une seule promesse par langue. */
+  /* Le modèle qui sert une langue (le téléchargé d'abord, s'il y en a plusieurs). */
+  function asrModel(lang) {
+    var st = AS.status;
+    if (!st || !st.models) return null;
+    var all = st.models.filter(function (m) { return asrServes(m, lang); });
+    return all.filter(function (m) { return m.downloaded; })[0] || all[0] || null;
+  }
+
+  /* Id de modèle d'un `lang` reçu ou donné : l'id lui-même ('parakeet'), ou le modèle de la langue ('en'). */
+  function asrKey(v) {
+    v = String(v || '');
+    var st = AS.status;
+    if (st && st.models && st.models.some(function (m) { return m.id === v; })) return v;
+    var m = asrModel(asrLang(v));
+    return m ? m.id : (v || asrLang(v));
+  }
+
+  /* Pour les textes : « Parakeet v3 », « anglais et français », « ~650 Mo ». */
+  var ASR_LANG_NAMES = { en: 'anglais', fr: 'français', de: 'allemand', es: 'espagnol', it: 'italien' };
+
+  function asrModelName(m) {
+    if (!m) return '';
+    if (m.id === 'parakeet') return 'Parakeet v3';
+    return String(m.label || m.id).replace(/\s*\(.*\)\s*$/, '') || m.id;
+  }
+
+  function asrLangsText(m) {
+    var ls = (m && Array.isArray(m.langs) ? m.langs : (m && ASR_LANG_NAMES[m.id] ? [m.id] : [])).map(function (l) { return ASR_LANG_NAMES[l] || l; });
+    return ls.length > 1 ? ls.slice(0, -1).join(', ') + ' et ' + ls[ls.length - 1] : (ls[0] || '');
+  }
+
+  function approxSize(bytes) {
+    bytes = Number(bytes) || 0;
+    if (!bytes) return '';
+    return bytes >= 104857600 ? '~' + Math.round(bytes / 10485760) * 10 + ' Mo' : fmtSize(bytes);
+  }
+
+  /* Téléchargement partagé (réglages ou avis) : une seule promesse par modèle ; l'hôte reçoit l'id du
+     modèle dans `lang` (Parakeet : 'parakeet' ; ancien hôte : la langue, qui est l'id). */
   function downloadAsr(lang) {
-    lang = asrLang(lang);
-    if (AS.dl[lang] && AS.dl[lang].promise) return AS.dl[lang].promise;
-    var m = asrModel(lang);
-    var dl = AS.dl[lang] = { lang: lang, received: 0, total: (m && m.size) || 0, promise: null, error: '' };
+    var key = asrKey(lang);
+    if (AS.dl[key] && AS.dl[key].promise) return AS.dl[key].promise;
+    var m = asrModel(key) || asrModel(asrLang(lang));
+    var dl = AS.dl[key] = { lang: key, received: 0, total: (m && m.size) || 0, promise: null, error: '' };
+    lang = key;
     /* L'hôte rend { ok:false, error } en cas d'échec (pas d'exception). */
-    dl.promise = bridge.call('asrDownload', { lang: lang }, 3600000).then(function (r) {
+    dl.promise = bridge.call('asrDownload', { lang: key }, 3600000).then(function (r) {
       if (r && r.ok === false) throw new Error(r.error || 'téléchargement impossible.');
       return asrStatus(true);
     }).then(function (st) {
@@ -387,7 +457,8 @@
   bridge.on('asr', function (p) {
     p = p || {};
     if (p.session != null) return;
-    var lang = p.lang ? asrLang(p.lang) : '';
+    var lang = p.lang ? asrKey(p.lang) : '';
+    if (lang && lang !== p.lang) p = Object.assign({}, p, { lang: lang });
     if (p.phase === 'download' && lang) {
       var dl = AS.dl[lang] || (AS.dl[lang] = { lang: lang, promise: null, error: '' });
       dl.received = p.received || 0; dl.total = p.total || dl.total || 0;
@@ -1668,7 +1739,8 @@
       cb('onPartial', '');
     }
 
-    /* Évènement `asr` d'une session : texte partiel de l'énoncé en cours. */
+    /* Évènement `asr` d'une session : texte partiel de l'énoncé en cours — tout l'énoncé, recalculé par
+       l'hôte (casse et ponctuation comprises) ; il remplace le précédent, qui a pu être corrigé. */
     function onAsr(p) {
       p = p || {};
       var ch = E.asr;
@@ -1754,37 +1826,38 @@
       if (ch.session != null) bridge.call('asrStop', { session: ch.session })['catch'](noop);
     }
 
-    /* Avis non bloquant : le modèle en flux de la langue manque (proposé une fois par page et par langue),
-       se télécharge, ou n'a pas pu l'être. */
+    /* Avis non bloquant : le modèle de transcription en direct de la langue manque (proposé une fois par
+       page et par modèle), se télécharge, ou n'a pas pu l'être. */
     function checkAsr() {
       if (!E.started) return;
       var lang = asrLang(E.opts.language);
       var m = asrModel(lang);
       if (E.opts.liveAsr === false || !m || m.downloaded) { notice('asr', null); return; }
-      var dl = AS.dl[lang];
+      var key = m.id, dl = AS.dl[key];
       var cur = E.notices.asr;
-      if (!dl && !E.asrDlError && !cur && AS.offered[lang]) return;
-      AS.offered[lang] = true;
-      var name = '« ' + (m.label || lang) + ' » (' + fmtSize(m.size || (dl && dl.total)) + ')';
-      var n = { kind: 'asr-missing', lang: lang, size: m.size || 0, progress: -1 };
+      if (!dl && !E.asrDlError && !cur && AS.offered[key]) return;
+      AS.offered[key] = true;
+      var name = asrModelName(m), size = approxSize(m.size || (dl && dl.total)), langs = asrLangsText(m);
+      var n = { kind: 'asr-missing', lang: lang, model: key, size: m.size || 0, progress: -1 };
       if (dl) {
-        n.text = 'Téléchargement du modèle de transcription en direct ' + name + '…';
+        n.text = 'Téléchargement du modèle de transcription en direct ' + name + (size ? ' (' + size + ')' : '') + '…';
         n.action = null;
         n.progress = dl.total ? Math.floor(100 * (dl.received || 0) / dl.total) : 0;
       } else if (E.asrDlError) {
         n.text = 'Téléchargement du modèle de transcription en direct impossible : ' + E.asrDlError;
-        n.action = { label: 'Réessayer', run: function () { E.asrDlError = ''; downloadAsr(lang)['catch'](noop); } };
+        n.action = { label: 'Réessayer', run: function () { E.asrDlError = ''; downloadAsr(key)['catch'](noop); } };
       } else {
-        n.text = 'Pour voir vos paroles s’écrire en direct et obtenir la réponse dès que vous vous taisez, téléchargez le modèle de transcription en direct '
-          + name + '. En attendant, Whisper transcrit chaque phrase.';
-        n.action = { label: 'Télécharger', run: function () { downloadAsr(lang)['catch'](noop); } };
+        n.text = 'Téléchargez le modèle de transcription en direct ' + name + ' (' + [langs, size].filter(Boolean).join(', ')
+          + ') : plus précis, robuste aux accents, il écrit vos paroles pendant que vous parlez et la réponse part dès que vous vous taisez. En attendant, Whisper transcrit chaque phrase.';
+        n.action = { label: 'Télécharger', run: function () { downloadAsr(key)['catch'](noop); } };
       }
       notice('asr', n);
     }
 
     function onAsrModel(p) {
       if (!E.started || !p) return;
-      if (p.lang && asrLang(p.lang) !== asrLang(E.opts.language)) return;
+      var mine = asrModel(asrLang(E.opts.language));
+      if (p.lang && (mine ? asrKey(p.lang) !== mine.id : asrLang(p.lang) !== asrLang(E.opts.language))) return;
       if (p.phase === 'download') E.asrDlError = '';
       else if (p.phase === 'download-failed') E.asrDlError = String(p.error || 'erreur inconnue');
       else if (p.phase === 'refreshed') { E.asrDlError = ''; ensureAsr(); checkWhisper(false); }
@@ -2089,6 +2162,8 @@
     ttsStatus: ttsStatus,
     asr: function () { return AS.status; },
     asrStatus: asrStatus,
-    downloadAsr: downloadAsr
+    downloadAsr: downloadAsr,
+    /* Textes d'un modèle de transcription en direct : { name: 'Parakeet v3', langs: 'anglais et français', size: '~650 Mo' }. */
+    asrModelText: function (m) { return { name: asrModelName(m), langs: asrLangsText(m), size: approxSize(m && m.size) }; }
   };
 })();
