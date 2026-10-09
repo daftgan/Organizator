@@ -1,26 +1,36 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    Organizator — moteur de conversation vocale réutilisable (window.OrganizatorVoice)
-   Micro ouvert en continu, fin de phrase détectée dans la page (VAD), Whisper sur le poste
-   (transcription spéculative), conversation Claude de l'hôte (`voiceStart` / `voiceSay`, évènement
-   `voice` phrase par phrase, phase `meta` du mode tutor), synthèse de chaque phrase (Kokoro `speak`
-   → SAPI `voiceSpeak` → speechSynthesis), lecture WebAudio (donc retirée du micro par l'annulation
-   d'écho, et analysée pour la bouche de l'avatar), barge-in avec ce qui a été réellement entendu.
+   Micro ouvert en continu, fin de phrase détectée dans la page (VAD sur la bande de la voix),
+   transcription en flux sherpa-onnx de l'hôte (`asrStart` / `asrFeed` / `asrEnd`, évènement `asr` des
+   partiels) quand le modèle de la langue est là, sinon Whisper sur le poste (transcription spéculative),
+   conversation Claude de l'hôte (`voiceStart` / `voiceSay`, évènement `voice` phrase par phrase, phase
+   `meta` du mode tutor), synthèse de chaque phrase (Kokoro `speak` → SAPI `voiceSpeak` →
+   speechSynthesis), lecture WebAudio (donc retirée du micro par l'annulation d'écho, et analysée pour la
+   bouche de l'avatar), barge-in confirmé par les mots (volume baissé d'abord, coupure quand de vrais
+   mots, qui ne sont pas l'écho de l'avatar, sont reconnus) avec ce qui a été réellement entendu.
    Aucun raccourci clavier, aucun réglage de l'application : tout passe par les options.
 
      var eng = OrganizatorVoice.create({
-       container, avatar: { size } | false, language, whisperModel, sensitivity, keepAudio, detail,
+       container, avatar: { size } | false, language, whisperModel, sensitivity (0..100, 40 par défaut),
+       keepAudio, detail, liveAsr (true par défaut), bargeIn: 'words' (défaut) | 'voice' | 'off',
        tts: { kokoroVoice, accent, speed, sapiVoice, sapiRate },
-       conversation: { start: { …voiceStart }, greeting } | null,   (null : micro + Whisper seulement)
+       conversation: { start: { …voiceStart }, greeting } | null,   (null : micro + transcription seulement)
        texts: { noiseResume },
-       onUserUtterance(text, info) → false pour ne pas envoyer, onSentence(text, { turn, index, replay? }),
+       onUserUtterance(text, info) → false pour ne pas envoyer
+         (info : id, source 'stream'|'whisper', seconds, bargedIn, heard, url, urls, stt — stt seulement
+         si Whisper a transcrit l'énoncé lui-même),
+       onPartial(text) (texte en direct ; '' à l'effacement, après onUserUtterance s'il y en a un),
+       onUtteranceDetail(id, stt | null, { url }) (detail/keepAudio en flux : Whisper en arrière-plan),
+       onSentence(text, { turn, index, replay? }),
        onReply({ turn, sentences, full }), onMeta(meta, { turn }), onReplyDone({ turn, full, heard }),
        onInterrupt({ turn, heard }), onPhase(phase, { text }), onNotice(notice | null, { kind }), onError(err)
      });
      eng.start() eng.stop() eng.destroy() eng.mute(b) eng.muted() eng.interrupt() eng.send(text, { hidden })
      eng.replay(text) eng.state() eng.setOptions(partial)
-     En plus : eng.element (l'avatar monté), eng.downloadWhisper(), eng.feed(Float32Array) (essais).
+     En plus : eng.element (l'avatar monté), eng.downloadWhisper(), eng.downloadAsr(lang?),
+     eng.feed(Float32Array) (essais).
      OrganizatorVoice.isJunk(text), .whisper() (dernier état Whisper connu), .tts() (dernier état Kokoro),
-     .active() (le moteur démarré, s'il y en a un).
+     .asr() / .asrStatus(force) / .downloadAsr(lang) (modèles en flux), .active() (le moteur démarré).
    Un seul AudioContext pour toute la page ; un seul moteur actif : en créer ou en démarrer un autre
    arrête le premier (qui passe en phase `idle`).
    ═══════════════════════════════════════════════════════════════════════ */
@@ -32,13 +42,25 @@
 
   /* ══ Constantes ═══════════════════════════════════════════════════════ */
 
-  /* Détection de parole : trames de 20 ms. Pendant que l'avatar parle, le seuil monte de
-     PLAY_BOOST_DB et il faut parler plus longtemps : l'écho résiduel ne doit pas le couper. */
+  /* Détection de parole : trames de 20 ms. Une trame n'est de la voix que si l'énergie de la bande
+     250–3800 Hz dépasse le seuil ET domine le spectre (rapport bande / total) : souffle, clavier,
+     ventilateur (large bande) ou grondements (graves) ne comptent pas. Pendant que l'avatar parle, le
+     seuil monte de PLAY_BOOST_DB et il faut parler plus longtemps : l'écho résiduel ne doit pas le couper. */
   var FRAME_MS = 20;
-  var ONSET_MS = 160, ONSET_PLAY_MS = 250, PLAY_BOOST_DB = 6;
-  var PREROLL_MS = 300, SPEC_MS = 300, END_MS = 650, MIN_MS = 300, MAX_MS = 30000;
+  var ONSET_MS = 220, ONSET_PLAY_MS = 350, PLAY_BOOST_DB = 6;
+  var PREROLL_MS = 300, SPEC_MS = 300, END_MS = 650, MIN_MS = 400, MAX_MS = 30000;
   var RESUME_MS = 80;
   var REST_MS = 1500;
+  var BAND_LO = 250, BAND_HI = 3800;
+
+  /* Transcription en flux : PCM 16 kHz Int16, un paquet au plus toutes les 100 ms, un seul en vol. */
+  var ASR_RATE = 16000, ASR_PACKET = 1600, ASR_GAP_MS = 100;
+
+  /* Barge-in : volume de l'avatar baissé à 25 % en 80 ms, rétabli en 150 ms ; sans flux, coupure après
+     700 ms de voix continue (des creux de 120 ms au plus entre syllabes). Écho : un énoncé dont 70 % des
+     mots viennent des 3 dernières phrases de l'avatar, pendant ou 1,5 s après la lecture, est ignoré. */
+  var DUCK = 0.25, DUCK_S = 0.08, UNDUCK_S = 0.15, BARGE_VOICE_MS = 700, BARGE_GAP_MS = 120;
+  var ECHO_SHARE = 0.7, ECHO_AFTER_MS = 1500, ECHO_SENTENCES = 3;
 
   /* Ce que Whisper « entend » dans le silence ou le bruit : génériques de vidéos, didascalies. */
   var JUNK = [
@@ -53,7 +75,8 @@
   };
 
   var DEFAULTS = {
-    container: null, avatar: {}, language: 'fr', whisperModel: 'base', sensitivity: 50, keepAudio: false, detail: false,
+    container: null, avatar: {}, language: 'fr', whisperModel: 'base', sensitivity: 40, keepAudio: false, detail: false,
+    liveAsr: true, bargeIn: 'words',
     tts: { kokoroVoice: '', accent: '', speed: 1, sapiVoice: '', sapiRate: 0 },
     conversation: null, texts: {}
   };
@@ -160,6 +183,80 @@
     return out;
   }
 
+  /* ══ Bande de la voix ═════════════════════════════════════════════════ */
+
+  /* Biquads RBJ (Butterworth, 12 dB/octave) : passe-haut 250 Hz puis passe-bas 3800 Hz. */
+  function biquad(kind, f0, rate) {
+    var w = 2 * Math.PI * Math.min(f0, rate * 0.45) / rate, c = Math.cos(w), al = Math.sin(w) / (2 * Math.SQRT1_2), a0 = 1 + al;
+    var b = kind === 'hp' ? [(1 + c) / 2, -(1 + c), (1 + c) / 2] : [(1 - c) / 2, 1 - c, (1 - c) / 2];
+    return { b0: b[0] / a0, b1: b[1] / a0, b2: b[2] / a0, a1: -2 * c / a0, a2: (1 - al) / a0, x1: 0, x2: 0, y1: 0, y2: 0 };
+  }
+
+  function bandFilter(rate) { return { rate: rate, hp: biquad('hp', BAND_LO, rate), lp: biquad('lp', BAND_HI, rate) }; }
+
+  /* Une trame → niveau de la bande voix (dB), et part de la bande dans l'énergie totale (0..1). */
+  function analyse(F, buf) {
+    var n = buf.length, mean = 0, i;
+    for (i = 0; i < n; i++) mean += buf[i];
+    mean /= n;
+    var tot = 0, band = 0, h = F.hp, l = F.lp;
+    for (i = 0; i < n; i++) {
+      var x = buf[i], d = x - mean;
+      tot += d * d;
+      var y = h.b0 * x + h.b1 * h.x1 + h.b2 * h.x2 - h.a1 * h.y1 - h.a2 * h.y2;
+      h.x2 = h.x1; h.x1 = x; h.y2 = h.y1; h.y1 = y;
+      var z = l.b0 * y + l.b1 * l.x1 + l.b2 * l.x2 - l.a1 * l.y1 - l.a2 * l.y2;
+      l.x2 = l.x1; l.x1 = y; l.y2 = l.y1; l.y1 = z;
+      band += z * z;
+    }
+    return { db: 10 * Math.log10(band / n + 1e-12), ratio: tot > 1e-12 ? clamp(band / tot, 0, 1) : 0 };
+  }
+
+  /* ══ PCM pour la transcription en flux ════════════════════════════════ */
+
+  /* Rééchantillonnage au fil de l'eau vers 16 kHz : moyenne sur la largeur d'un pas (anti-repliement
+     sommaire, suffisant pour la reconnaissance), interpolation linéaire si le contexte est plus lent. */
+  function Resampler(rate) { this.r = rate / ASR_RATE; this.buf = new Float32Array(0); this.pos = 0; }
+
+  Resampler.prototype.push = function (input) {
+    var all = new Float32Array(this.buf.length + input.length);
+    all.set(this.buf, 0); all.set(input, this.buf.length);
+    var r = this.r, half = r / 2, out = [], p = this.pos, s, k;
+    while (p + Math.max(half, 1) < all.length) {
+      if (r > 1) {
+        var a = Math.max(0, Math.ceil(p - half)), b = Math.min(all.length - 1, Math.floor(p + half));
+        s = 0;
+        for (k = a; k <= b; k++) s += all[k];
+        s /= Math.max(1, b - a + 1);
+      } else {
+        k = Math.floor(p);
+        s = all[k] + (all[k + 1] - all[k]) * (p - k);
+      }
+      s = s < -1 ? -1 : (s > 1 ? 1 : s);
+      out.push(s < 0 ? s * 0x8000 : s * 0x7fff);
+      p += r;
+    }
+    var keep = Math.max(0, Math.floor(p - half) - 1);
+    this.buf = all.slice(keep);
+    this.pos = p - keep;
+    return Int16Array.from(out);
+  };
+
+  function pcmBase64(chunks, len) {
+    var all = new Int16Array(len), o = 0;
+    chunks.forEach(function (c) { all.set(c, o); o += c.length; });
+    var bytes = new Uint8Array(len * 2), v = new DataView(bytes.buffer);
+    for (var i = 0; i < len; i++) v.setInt16(i * 2, all[i], true);
+    return base64Bytes(bytes);
+  }
+
+  /* ══ Mots (écho, confirmation du barge-in) ════════════════════════════ */
+
+  function wordsOf(text) {
+    return String(text || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/['’]/g, '')
+      .split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  }
+
   /* ══ Son partagé ══════════════════════════════════════════════════════ */
 
   var WORKLET = [
@@ -235,6 +332,76 @@
     }, function () { TT.loading = null; TT.status = null; return null; });
     return TT.loading;
   }
+
+  /* Modèles de transcription en flux : `status` null tant que l'hôte n'a pas répondu, `unsupported`
+     si l'hôte ne connaît pas `asrStatus` (ancienne version : Whisper seul, sans avis) ; `dl` : les
+     téléchargements en cours par langue ; `offered` : langues pour lesquelles l'avis a déjà été montré. */
+  var AS = { status: null, unsupported: false, loading: null, dl: {}, offered: {} };
+
+  function asrStatus(force) {
+    if (AS.loading) return AS.loading;
+    if ((AS.status || AS.unsupported) && !force) return Promise.resolve(AS.status);
+    AS.loading = bridge.call('asrStatus', {}, 15000).then(function (st) {
+      AS.loading = null;
+      if (st && st.models) { AS.status = st; AS.unsupported = false; }
+      return AS.status;
+    }, function () { AS.loading = null; AS.status = null; AS.unsupported = true; return null; });
+    return AS.loading;
+  }
+
+  function asrLang(language) { return String(language || 'fr').slice(0, 2).toLowerCase() === 'en' ? 'en' : 'fr'; }
+
+  function asrModel(lang) {
+    var st = AS.status;
+    return st && st.models ? (st.models.filter(function (m) { return m.id === lang; })[0] || null) : null;
+  }
+
+  /* Téléchargement partagé (réglages ou avis) : une seule promesse par langue. */
+  function downloadAsr(lang) {
+    lang = asrLang(lang);
+    if (AS.dl[lang] && AS.dl[lang].promise) return AS.dl[lang].promise;
+    var m = asrModel(lang);
+    var dl = AS.dl[lang] = { lang: lang, received: 0, total: (m && m.size) || 0, promise: null, error: '' };
+    /* L'hôte rend { ok:false, error } en cas d'échec (pas d'exception). */
+    dl.promise = bridge.call('asrDownload', { lang: lang }, 3600000).then(function (r) {
+      if (r && r.ok === false) throw new Error(r.error || 'téléchargement impossible.');
+      return asrStatus(true);
+    }).then(function (st) {
+      if (AS.dl[lang] === dl) delete AS.dl[lang];
+      emitAsr({ phase: 'refreshed', lang: lang });
+      return st;
+    }, function (e) {
+      if (AS.dl[lang] === dl) delete AS.dl[lang];
+      emitAsr({ phase: 'download-failed', lang: lang, error: msgOf(e), local: true });
+      throw e;
+    });
+    dl.promise['catch'](noop);
+    emitAsr({ phase: 'download', lang: lang, received: 0, total: dl.total, local: true });
+    return dl.promise;
+  }
+
+  /* Les moteurs écoutent l'évènement `asr` de l'hôte ; les changements décidés ici leur sont relayés. */
+  var asrListeners = [];
+  function emitAsr(p) { asrListeners.slice().forEach(function (fn) { try { fn(p); } catch (e) { console.error('[voice] asr', e); } }); }
+
+  bridge.on('asr', function (p) {
+    p = p || {};
+    if (p.session != null) return;
+    var lang = p.lang ? asrLang(p.lang) : '';
+    if (p.phase === 'download' && lang) {
+      var dl = AS.dl[lang] || (AS.dl[lang] = { lang: lang, promise: null, error: '' });
+      dl.received = p.received || 0; dl.total = p.total || dl.total || 0;
+      emitAsr(p);
+    } else if (p.phase === 'downloaded' && lang) {
+      asrStatus(true).then(function () {
+        if (AS.dl[lang] && !AS.dl[lang].promise) delete AS.dl[lang];
+        emitAsr({ phase: 'refreshed', lang: lang });
+      });
+    } else if (p.phase === 'download-failed' && lang) {
+      if (AS.dl[lang] && !AS.dl[lang].promise) delete AS.dl[lang];
+      emitAsr(p);
+    }
+  });
 
   var active = null;
 
@@ -491,7 +658,10 @@
       /* Énoncé en cours d'assemblage : transcriptions des segments pas encore envoyés. */
       parts: [],
       stream: null, source: null, vadNode: null,
-      vad: null, micDb: -100, micLevel: 0, threshold: -50,
+      vad: null, micDb: -100, micLevel: 0, threshold: -50, voiceRatio: 0, filt: null,
+      /* Transcription en flux : canal de la session (file d'envoi), échecs consécutifs ; Whisper
+         d'arrière-plan (detail/keepAudio) ; phrases récentes de l'avatar (écho) ; volume baissé. */
+      asr: null, asrFails: 0, asrRetry: 0, bg: [], spoken: [], playEndAt: 0, ducked: false,
       ttsJobs: {}, kokoroFails: 0, warned: {},
       wrap: null, face: null, anim: null, raf: 0, restUntil: 0,
       notices: {},
@@ -656,7 +826,7 @@
       var reply = E.reply;
       if (!reply) {
         if (E.playing && E.playing.replay) {
-          stopPlayback(true); cancelQueue();
+          stopPlayback(true); cancelQueue(); unduck();
           if (startle && E.anim) E.anim.startleAt = performance.now();
           if (E.started && E.phase === 'speaking') setPhase('listening');
           return true;
@@ -666,6 +836,7 @@
       var heard = heardOf(reply);
       stopPlayback(true);
       cancelQueue();
+      unduck();
       if (reply.turn != null) { E.ignoreTurns[reply.turn] = 1; E.minTurn = Math.max(E.minTurn, reply.turn + 1); }
       else E.minTurn = Math.max(E.minTurn, E.maxTurn + 1);
       E.reply = null;
@@ -876,6 +1047,7 @@
 
     function sentenceDone() {
       E.playing = null;
+      E.playEndAt = performance.now();
       var it = E.queue.shift();
       if (it && !it.replay && E.reply) E.reply.played++;
       if (it && it.resolve) it.resolve(true);
@@ -883,6 +1055,9 @@
     }
 
     function showSentence(it) {
+      /* Les mots des dernières phrases dites : ce que le micro peut en renvoyer n'est pas l'utilisateur. */
+      E.spoken.push(wordsOf(it.text));
+      if (E.spoken.length > ECHO_SENTENCES) E.spoken.splice(0, E.spoken.length - ECHO_SENTENCES);
       if (E.started && E.phase !== 'user') setPhase('speaking');
       kick();
       if (it.replay) cb('onSentence', it.text, { turn: null, index: 0, replay: true });
@@ -901,6 +1076,7 @@
       var pl = E.playing;
       E.playing = null;
       if (!pl) return;
+      E.playEndAt = performance.now();
       if (pl.fallback) {
         clearTimeout(pl.timer);
         try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) { /* rien à couper */ }
@@ -980,36 +1156,57 @@
 
     function resetVad() {
       E.vad = { floor: -65, above: 0, preroll: [], inSpeech: false, seg: null };
-      E.micDb = -100; E.micLevel = 0;
+      E.micDb = -100; E.micLevel = 0; E.voiceRatio = 0;
+      E.filt = null;
     }
 
-    /* Seuil = plancher de bruit + marge (la sensibilité la réduit), jamais sous un plancher absolu. */
+    function sensitivity() {
+      return clamp(E.opts.sensitivity == null ? 40 : Number(E.opts.sensitivity) || 0, 0, 100);
+    }
+
+    /* Seuil (niveau de la bande voix) = plancher de bruit + marge, jamais sous un plancher absolu ; la
+       sensibilité réduit l'un et l'autre. Recalibrage : à 50, marge de 16 dB (12 avant) et plancher
+       absolu à −52 dB (−58 avant), mesurés sur la seule bande voix ; 40 par défaut. */
     function thresholdDb(playing) {
-      var sens = clamp(E.opts.sensitivity == null ? 50 : Number(E.opts.sensitivity) || 0, 0, 100);
-      var margin = 18 - sens * 0.12;
-      var t = Math.max(E.vad.floor + margin, -58 + (50 - sens) * 0.2);
+      var sens = sensitivity();
+      var margin = 22 - sens * 0.12;
+      var t = Math.max(E.vad.floor + margin, -52 + (50 - sens) * 0.25);
       return playing ? t + PLAY_BOOST_DB : t;
     }
+
+    /* Part minimale de la bande voix dans l'énergie de la trame : 0,55 (sensibilité 0) … 0,30 (100),
+       0,45 à 40. Bruit blanc ≈ 0,16, bruit rose ≈ 0,30, voyelles ouvertes ≥ 0,55. */
+    function ratioMin() { return 0.55 - sensitivity() * 0.0025; }
+
+    function bargeMode() {
+      var b = E.opts.bargeIn;
+      return b === 'voice' || b === 'off' ? b : 'words';
+    }
+
+    /* L'avatar parle ou va parler (réponse en cours). */
+    function busy() { return !!(E.reply || E.playing); }
 
     function onFrame(buf) {
       if (!E.started || !E.vad || !buf || !buf.length) return;
       var rate = AUD.ctx.sampleRate;
       var ms = buf.length / rate * 1000;
-      var sum = 0;
-      for (var i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-      var db = 10 * Math.log10(sum / buf.length + 1e-12);
+      if (!E.filt || E.filt.rate !== rate) E.filt = bandFilter(rate);
+      var an = analyse(E.filt, buf);
+      var db = an.db;
       var vad = E.vad;
       var playing = !!E.playing;
-      var thr = thresholdDb(playing);
-      E.micDb = db; E.threshold = thr;
+      var thr = thresholdDb(playing), rmin = ratioMin();
+      E.micDb = db; E.threshold = thr; E.voiceRatio = an.ratio;
 
       if (E.muted) { E.micLevel = 0; return; }
       E.micLevel = clamp((db - vad.floor) / 30, 0, 1);
+      var voice = db > thr && an.ratio >= rmin;
 
       if (!vad.inSpeech) {
-        /* Plancher adaptatif : il descend vite, monte lentement (moyenne des trames calmes). */
+        /* Plancher adaptatif : il descend vite, monte lentement (moyenne des trames calmes, et des bruits
+           qui ne sont pas de la voix : un ventilateur relève le seuil). */
         if (db < vad.floor) vad.floor += (db - vad.floor) * 0.1;
-        else if (db < thr) vad.floor += (db - vad.floor) * 0.012;
+        else if (!voice) vad.floor += (db - vad.floor) * 0.012;
         else vad.floor += (db - vad.floor) * 0.002;
         vad.floor = clamp(vad.floor, -95, -30);
 
@@ -1017,22 +1214,29 @@
         var keep = Math.ceil((PREROLL_MS + ONSET_PLAY_MS) / ms);
         if (vad.preroll.length > keep) vad.preroll.splice(0, vad.preroll.length - keep);
 
-        if (db > thr) vad.above += ms;
+        if (voice) vad.above += ms;
         else vad.above = Math.max(0, vad.above - 2 * ms);
-        if (vad.above >= (playing || E.reply ? ONSET_PLAY_MS : ONSET_MS)) speechStart(ms);
+        /* « Jamais » : ce qui se dit pendant que l'avatar parle est ignoré. */
+        if (playing && bargeMode() === 'off') { vad.above = 0; return; }
+        if (vad.above >= (busy() ? ONSET_PLAY_MS : ONSET_MS)) speechStart(ms);
         return;
       }
 
       var seg = vad.seg;
       seg.frames.push(buf);
       seg.ms += ms;
-      if (db > thr - 3) {
-        seg.voiced += ms; seg.run += ms; seg.silence = 0;
+      if (playing) seg.echo = true;
+      if (seg.live) liveAppend(seg.live, buf);
+      if (db > thr - 3 && an.ratio >= rmin - 0.1) {
+        seg.voiced += ms; seg.run += ms; seg.silence = 0; seg.cont += ms; seg.gap = 0;
         if (seg.spec && seg.run >= RESUME_MS) cancelSpec(seg);
       } else {
-        seg.run = 0; seg.silence += ms;
-        if (!seg.spec && seg.silence >= SPEC_MS && seg.voiced >= MIN_MS) launchSpec(seg);
+        seg.run = 0; seg.silence += ms; seg.gap += ms;
+        if (seg.gap > BARGE_GAP_MS) seg.cont = 0;
+        if (!seg.spec && !seg.live && !seg.barge && seg.silence >= SPEC_MS && seg.voiced >= MIN_MS) launchSpec(seg);
       }
+      /* Sans flux (ou flux en panne) : 700 ms de voix continue confirment le barge-in. */
+      if (seg.barge === 'pending' && (!seg.live || seg.live.failed || seg.live.decodeError) && seg.cont >= BARGE_VOICE_MS) confirmBarge(seg);
       if (seg.silence >= END_MS) speechEnd();
       else if (seg.ms >= MAX_MS) speechEnd();
     }
@@ -1041,27 +1245,120 @@
       var vad = E.vad;
       var pre = Math.ceil(PREROLL_MS / ms) + Math.ceil(vad.above / ms);
       var frames = vad.preroll.slice(-pre);
+      var onset = vad.above;
       vad.preroll = [];
       vad.above = 0;
       vad.inSpeech = true;
-      vad.seg = { frames: frames, ms: frames.length * ms, voiced: 0, run: 0, silence: 0, spec: null };
-      /* Barge-in : l'utilisateur parle pendant que l'avatar parle ou réfléchit. */
-      var hadReply = !!E.reply;
-      if (interrupt(true) && hadReply) E.bargedIn = true;
+      var seg = vad.seg = {
+        id: uid('vu'), frames: frames, ms: frames.length * ms, voiced: onset, run: 0, silence: 0, spec: null,
+        cont: onset, gap: 0, echo: echoWindow(), barge: '', live: null
+      };
+      /* Flux prêt : tout l'énoncé part à l'hôte, pré-roll compris. */
+      if (liveReady() && !E.parts.length) {
+        seg.live = { id: seg.id, ch: E.asr, res: new Resampler(AUD.ctx.sampleRate), chunks: [], len: 0, partial: '', shown: '', ended: false, failed: false };
+        /* Le pré-roll et le début de parole partent d'un bloc : la reconnaissance démarre sur tout l'attaque. */
+        frames.forEach(function (f) { liveAppend(seg.live, f, true); });
+        liveFlush(seg.live);
+      }
+      if (busy()) {
+        var mode = bargeMode();
+        if (mode === 'voice') {
+          /* « Dès que je parle » : coupure immédiate, comme avant. */
+          var hadReply = !!E.reply;
+          if (interrupt(true) && hadReply) E.bargedIn = true;
+        } else {
+          /* « Quand je dis quelques mots » : l'avatar baisse la voix, la coupure attend de vrais mots.
+             « Jamais » (avatar qui réfléchit) : rien n'est coupé, l'énoncé n'est gardé que si la réponse
+             est finie quand il se termine. */
+          seg.barge = mode === 'off' ? 'off' : 'pending';
+          if (mode === 'words') duck();
+          return;
+        }
+      }
       setPhase('user');
     }
+
+    /* De vrais mots pendant que l'avatar parle : coupure réelle (heard…), on rend le volume. */
+    function confirmBarge(seg) {
+      if (seg.barge !== 'pending') return;
+      seg.barge = 'done';
+      var hadReply = !!E.reply;
+      if (interrupt(true) && hadReply) E.bargedIn = true;
+      unduck();
+      setPhase('user');
+      if (seg.live && seg.live.partial) showPartial(seg.live, seg.live.partial);
+    }
+
+    function pendingBarge(seg) { return seg.barge === 'pending' || seg.barge === 'off'; }
 
     function noiseResume() {
       E.bargedIn = false;
       if (E.conv) say(texts().noiseResume, true)['catch'](noop);
     }
 
+    function restorePhase() {
+      if (E.phase !== 'user' && E.phase !== 'transcribing') return;
+      setPhase(E.playing ? 'speaking' : (E.reply ? 'thinking' : (E.parts.length ? 'transcribing' : 'listening')));
+    }
+
+    /* ·· Volume de l'avatar (barge-in en attente de mots) ·· */
+
+    function rampOut(v, s) {
+      try {
+        var g = AUD.outGain.gain, now = AUD.ctx.currentTime;
+        g.cancelScheduledValues(now);
+        g.setValueAtTime(g.value, now);
+        g.linearRampToValueAtTime(v, now + s);
+      } catch (e) { /* contexte fermé */ }
+    }
+
+    function duck() {
+      if (E.ducked || !AUD.outGain) return;
+      E.ducked = true;
+      rampOut(DUCK, DUCK_S);
+    }
+
+    function unduck() {
+      if (!E.ducked) return;
+      E.ducked = false;
+      rampOut(1, UNDUCK_S);
+    }
+
+    /* ·· Écho : les mots de l'avatar renvoyés par les haut-parleurs ·· */
+
+    function echoWindow() { return !!E.playing || (E.playEndAt > 0 && performance.now() - E.playEndAt < ECHO_AFTER_MS); }
+
+    function echoWords() {
+      var set = {};
+      E.spoken.forEach(function (ws) { ws.forEach(function (w) { set[w] = 1; }); });
+      return set;
+    }
+
+    function echoShare(text) {
+      var ws = wordsOf(text);
+      if (!ws.length) return 0;
+      var set = echoWords(), n = 0;
+      ws.forEach(function (w) { if (set[w]) n++; });
+      return n / ws.length;
+    }
+
+    /* Assez de vrais mots pour couper l'avatar : 2 mots, ou 1 mot de 4 lettres et plus, hors écho. */
+    function wordsConfirm(text, echo) {
+      var set = echo ? echoWords() : {};
+      var fresh = wordsOf(text).filter(function (w) { return !set[w]; });
+      return fresh.length >= 2 || fresh.some(function (w) { return w.replace(/[^\p{L}]/gu, '').length >= 4; });
+    }
+
     function speechEnd() {
       var vad = E.vad, seg = vad.seg;
       vad.inSpeech = false; vad.seg = null; vad.above = 0;
       if (!seg) return;
+      var lv = seg.live;
       if (seg.voiced < MIN_MS) {
         cancelSpec(seg);
+        if (lv) liveDrop(lv);
+        /* Barge-in en attente : un bruit, l'avatar retrouve sa voix et continue. */
+        if (pendingBarge(seg)) { unduck(); restorePhase(); return; }
         /* Un bruit (toux, porte, écho) a coupé l'avatar sans que personne ne parle : il reprend. */
         if (!E.parts.length && E.bargedIn && E.pendingHeard != null && !E.reply) { noiseResume(); return; }
         if (!E.parts.length && !E.reply) setPhase('listening');
@@ -1069,10 +1366,23 @@
         flushParts();
         return;
       }
+      if (lv && !lv.failed) { liveEnd(seg); return; }
+      if (lv) clearPartial(lv);
+      whisperEnd(seg);
+    }
+
+    function whisperEnd(seg) {
+      if (pendingBarge(seg)) {
+        unduck();
+        /* Pas confirmé et l'avatar parle toujours : rien n'est transcrit. */
+        if (busy()) { cancelSpec(seg); restorePhase(); return; }
+      }
       var t;
       if (seg.spec && !seg.spec.cancelled) t = seg.spec;
       else t = transcribe(seg.frames);
       t.seconds = seg.ms / 1000;
+      t.echo = seg.echo;
+      t.id = seg.id;
       E.parts.push(t);
       setPhase('transcribing');
       if (E.anim) E.anim.nodAt = performance.now();
@@ -1081,7 +1391,12 @@
 
     function abortSegment() {
       if (!E.vad) return;
-      if (E.vad.seg) cancelSpec(E.vad.seg);
+      var seg = E.vad.seg;
+      if (seg) {
+        cancelSpec(seg);
+        if (seg.live) liveDrop(seg.live);
+        if (seg.barge) unduck();
+      }
       E.vad.inSpeech = false; E.vad.seg = null; E.vad.above = 0; E.vad.preroll = [];
     }
 
@@ -1092,6 +1407,15 @@
         bridge.call('cancelTranscribe', { job: t.job })['catch'](noop);
       });
       E.parts = [];
+    }
+
+    function cancelBackground() {
+      E.bg.forEach(function (t) {
+        if (t.cancelled) return;
+        t.cancelled = true;
+        bridge.call('cancelTranscribe', { job: t.job })['catch'](noop);
+      });
+      E.bg = [];
     }
 
     /* Transcription spéculative : lancée dès 300 ms de silence, gardée si la phrase est bien finie,
@@ -1142,26 +1466,329 @@
           if (txt && !isJunk(txt)) good.push({ r: r, text: txt, seconds: parts[i].seconds });
         });
         var text = good.map(function (g) { return g.text; }).join(' ').replace(/\s+/g, ' ').trim();
-        var barged = E.bargedIn;
-        E.bargedIn = false;
+        /* Ce que l'avatar vient de dire, revenu par les haut-parleurs. */
+        if (text && parts.some(function (t) { return t.echo; }) && echoShare(text) >= ECHO_SHARE) text = '';
         if (!text) {
+          var barged = E.bargedIn;
+          E.bargedIn = false;
           if (E.phase === 'transcribing') setPhase('listening');
           if (barged && E.pendingHeard != null && !E.reply) noiseResume();
           return;
         }
-        if (E.reply) interrupt(false);
         var stt = mergeStt(good);
         var urls = good.map(function (g) { return g.r && g.r.url; }).filter(Boolean);
-        var info = {
+        deliver(text, {
+          id: parts[0].id || uid('vu'), source: 'whisper',
           seconds: Math.round(parts.reduce(function (s, t) { return s + (t.seconds || 0); }, 0) * 100) / 100,
-          stt: stt, url: urls[0] || '', urls: urls, bargedIn: !!barged, heard: E.pendingHeard
-        };
-        if (cb('onUserUtterance', text, info) === false) {
-          if (E.phase === 'transcribing') setPhase('listening');
+          stt: stt, url: urls[0] || '', urls: urls
+        }, null);
+      });
+    }
+
+    /* Un énoncé reconnu part tout de suite ; en flux, Whisper mesure ensuite (detail/keepAudio). */
+    function deliver(text, info, seg) {
+      var barged = E.bargedIn;
+      E.bargedIn = false;
+      if (E.reply) interrupt(false);
+      unduck();
+      info.bargedIn = !!barged;
+      info.heard = E.pendingHeard;
+      if (info.url == null) info.url = '';
+      if (!info.urls) info.urls = [];
+      var sent = cb('onUserUtterance', text, info) !== false;
+      if (seg && seg.live) clearPartial(seg.live, true);
+      if (!sent) {
+        if (E.phase === 'transcribing') setPhase('listening');
+        return;
+      }
+      say(text, false)['catch'](noop);
+      if (seg) detailLater(info.id, seg.frames);
+    }
+
+    function detailLater(id, frames) {
+      var o = E.opts;
+      if (!o.detail && !o.keepAudio) return;
+      if (!whisperReady()) { cb('onUtteranceDetail', id, null, { url: '' }); return; }
+      var t = transcribe(frames);
+      E.bg.push(t);
+      t.promise.then(function (r) {
+        var i = E.bg.indexOf(t);
+        if (i >= 0) E.bg.splice(i, 1);
+        if (t.cancelled || E.destroyed) return;
+        cb('onUtteranceDetail', id, r || null, { url: (r && r.url) || '' });
+      });
+    }
+
+    /* ══ Transcription en flux (hôte : sherpa-onnx) ═══════════════════════ */
+
+    function liveReady() { return !!(E.asr && E.asr.session != null && !E.muted); }
+
+    function liveAppend(lv, buf, hold) {
+      if (lv.ended || lv.failed) return;
+      var pcm = lv.res.push(buf);
+      if (!pcm.length) return;
+      lv.chunks.push(pcm); lv.len += pcm.length;
+      if (!hold && lv.len >= ASR_PACKET) liveFlush(lv);
+    }
+
+    function liveFlush(lv) {
+      if (!lv.len) return;
+      var op = { kind: 'feed', live: lv, chunks: lv.chunks, len: lv.len };
+      lv.chunks = []; lv.len = 0;
+      asrOp(op);
+    }
+
+    /* File d'envoi de la session : paquets dans l'ordre, un seul message en vol, un paquet au plus toutes
+       les 100 ms (ce qui s'accumule entre-temps part dans le paquet suivant). */
+    function asrOp(op) {
+      var ch = E.asr, lv = op.live;
+      if (!ch || ch.session == null || (lv && (lv.ch !== ch || (lv.failed && op.kind !== 'reset')))) {
+        if (lv && op.kind === 'feed') lv.failed = true;
+        if (op.done) op.done(null, new Error('transcription en direct interrompue'));
+        return;
+      }
+      var last = ch.q[ch.q.length - 1];
+      if (op.kind === 'feed' && last && last.kind === 'feed' && last.live === lv) {
+        last.chunks = last.chunks.concat(op.chunks); last.len += op.len;
+      } else {
+        ch.q.push(op);
+      }
+      asrPump(ch);
+    }
+
+    function asrPump(ch) {
+      if (ch !== E.asr || ch.busy || !ch.q.length) return;
+      var op = ch.q[0];
+      if (op.kind === 'feed') {
+        var wait = ch.lastFeed + ASR_GAP_MS - performance.now();
+        if (wait > 0) {
+          if (!ch.timer) ch.timer = setTimeout(function () { ch.timer = 0; asrPump(ch); }, wait);
           return;
         }
-        say(text, false)['catch'](noop);
+      }
+      ch.q.shift();
+      ch.busy = true;
+      var req;
+      if (op.kind === 'feed') {
+        ch.lastFeed = performance.now();
+        ch.current = op.live;
+        req = bridge.call('asrFeed', { session: ch.session, pcm: pcmBase64(op.chunks, op.len) }, 15000);
+      } else {
+        ch.current = null;
+        req = bridge.call(op.kind === 'end' ? 'asrEnd' : 'asrReset', { session: ch.session }, 15000);
+      }
+      req.then(function (r) {
+        ch.busy = false;
+        if (op.done) op.done(r || {}, null);
+        asrPump(ch);
+      }, function (e) {
+        ch.busy = false;
+        if (op.live) op.live.failed = true;
+        if (op.done) op.done(null, e);
+        /* Erreur de décodage annoncée (phase `error`) : l'hôte a remis la session à zéro, elle sert encore. */
+        if (op.kind === 'end' && op.live && op.live.decodeError) { asrPump(ch); return; }
+        asrBroken(ch, e);
       });
+    }
+
+    function failOps(ch, e) {
+      var q = ch.q;
+      ch.q = [];
+      q.forEach(function (op) {
+        if (op.live) op.live.failed = true;
+        if (op.done) op.done(null, e);
+      });
+    }
+
+    /* Énoncé abandonné (bruit, écho, muet) : la session de l'hôte repart de zéro. */
+    function liveDrop(lv) {
+      if (lv.ended) return;
+      lv.ended = true;
+      lv.chunks = []; lv.len = 0;
+      if (!lv.failed) asrOp({ kind: 'reset', live: lv });
+      clearPartial(lv, true);
+    }
+
+    function liveEnd(seg) {
+      var lv = seg.live;
+      liveFlush(lv);
+      lv.ended = true;
+      /* Barge-in en attente dont le texte en direct n'est que l'écho de l'avatar : abandonné tel quel. */
+      if (pendingBarge(seg) && busy() && lv.partial && echoShare(lv.partial) >= ECHO_SHARE) {
+        lv.ended = false;
+        liveDrop(lv);
+        unduck();
+        restorePhase();
+        return;
+      }
+      if (!pendingBarge(seg)) {
+        setPhase('transcribing');
+        if (E.anim) E.anim.nodAt = performance.now();
+      }
+      asrOp({ kind: 'end', live: lv, done: function (r, err) {
+        if (!E.started) return;
+        if (err || !r) {
+          warnOnce('asrEnd', err);
+          clearPartial(lv, true);
+          whisperEnd(seg);
+          return;
+        }
+        finishLive(seg, String(r.text || '').trim());
+      } });
+    }
+
+    function finishLive(seg, text) {
+      var lv = seg.live;
+      var ok = !!text && !isJunk(text) && !(seg.echo && echoShare(text) >= ECHO_SHARE);
+      if (ok && pendingBarge(seg) && busy()) {
+        ok = seg.barge === 'pending' && wordsConfirm(text, seg.echo);
+        if (ok) confirmBarge(seg);
+      }
+      if (!ok) {
+        clearPartial(lv, true);
+        if (pendingBarge(seg)) { unduck(); restorePhase(); return; }
+        var barged = E.bargedIn;
+        E.bargedIn = false;
+        if (barged && E.pendingHeard != null && !E.reply && !E.parts.length) { noiseResume(); return; }
+        restorePhase();
+        return;
+      }
+      deliver(text, { id: seg.id, source: 'stream', seconds: Math.round(seg.ms / 10) / 100 }, seg);
+    }
+
+    function showPartial(lv, text) {
+      if (text === lv.shown) return;
+      lv.shown = text;
+      cb('onPartial', text);
+    }
+
+    function clearPartial(lv, force) {
+      if (!force && !lv.shown) return;
+      lv.shown = '';
+      cb('onPartial', '');
+    }
+
+    /* Évènement `asr` d'une session : texte partiel de l'énoncé en cours. */
+    function onAsr(p) {
+      p = p || {};
+      var ch = E.asr;
+      if (p.session == null || !ch || p.session !== ch.session || (p.phase !== 'partial' && p.phase !== 'error')) return;
+      var lv = ch.current, seg = E.vad && E.vad.seg;
+      /* Décodage en échec dans l'énoncé : asrEnd redira l'erreur, ce segment passera par Whisper ; d'ici
+         là, plus de partiels, et le barge-in retombe sur la règle des 700 ms. */
+      if (p.phase === 'error') {
+        if (lv) { lv.decodeError = true; warnOnce('asr-decode', p.error); }
+        return;
+      }
+      if (!lv || lv.ended || lv.failed || lv.decodeError || !seg || seg.live !== lv) return;
+      var text = String(p.text || '').trim();
+      if (text === lv.partial) return;
+      lv.partial = text;
+      if (seg.barge === 'pending' && text && wordsConfirm(text, seg.echo)) confirmBarge(seg);
+      /* En attente de confirmation (avatar qui parle), rien n'est montré : souvent de l'écho. */
+      if (pendingBarge(seg)) return;
+      showPartial(lv, seg.echo && echoShare(text) >= ECHO_SHARE ? '' : text);
+    }
+
+    function streamAvailable() {
+      if (E.opts.liveAsr === false) return false;
+      var m = asrModel(asrLang(E.opts.language));
+      return !!(m && m.downloaded);
+    }
+
+    /* Une session par moteur démarré, dans la langue des options ; l'hôte la remet à zéro à chaque
+       asrEnd. En cas d'échec : Whisper, et nouvel essai (3 au plus). */
+    function ensureAsr() {
+      if (!E.started || E.destroyed || E.opts.liveAsr === false) { closeAsr(); return; }
+      var lang = asrLang(E.opts.language);
+      if (!streamAvailable()) { closeAsr(); return; }
+      if (E.asr && E.asr.lang === lang) return;
+      closeAsr();
+      var ch = E.asr = { lang: lang, session: null, q: [], busy: false, lastFeed: 0, timer: 0, current: null };
+      warmAsr(lang);
+      bridge.call('asrStart', { lang: lang }, 120000).then(function (r) {
+        var s = r && r.session;
+        if (E.asr !== ch) { if (s != null) bridge.call('asrStop', { session: s })['catch'](noop); return; }
+        if (s == null) throw new Error('l’hôte n’a pas ouvert de session.');
+        ch.session = s;
+        E.asrFails = 0;
+      })['catch'](function (e) {
+        if (E.asr !== ch) return;
+        E.asr = null;
+        asrFailed(e);
+      });
+    }
+
+    function warmAsr(lang) {
+      if (E.asrWarmed === lang) return;
+      E.asrWarmed = lang;
+      bridge.call('asrWarm', { lang: lang }, 15000)['catch'](noop);
+    }
+
+    function asrFailed(e) {
+      E.asrFails++;
+      warnOnce('asr', e);
+      cb('onError', { kind: 'asr', message: 'Transcription en direct indisponible : ' + msgOf(e) + ' Whisper prend le relais.' });
+      if (E.asrFails < 3 && E.started) {
+        clearTimeout(E.asrRetry);
+        E.asrRetry = setTimeout(function () { E.asrRetry = 0; ensureAsr(); }, 3000 * E.asrFails);
+      }
+    }
+
+    function asrBroken(ch, e) {
+      if (E.asr !== ch) return;
+      E.asr = null;
+      clearTimeout(ch.timer);
+      failOps(ch, e);
+      if (ch.session != null) bridge.call('asrStop', { session: ch.session })['catch'](noop);
+      asrFailed(e);
+    }
+
+    function closeAsr() {
+      clearTimeout(E.asrRetry); E.asrRetry = 0;
+      var ch = E.asr;
+      if (!ch) return;
+      E.asr = null;
+      clearTimeout(ch.timer);
+      failOps(ch, new Error('session fermée'));
+      if (ch.session != null) bridge.call('asrStop', { session: ch.session })['catch'](noop);
+    }
+
+    /* Avis non bloquant : le modèle en flux de la langue manque (proposé une fois par page et par langue),
+       se télécharge, ou n'a pas pu l'être. */
+    function checkAsr() {
+      if (!E.started) return;
+      var lang = asrLang(E.opts.language);
+      var m = asrModel(lang);
+      if (E.opts.liveAsr === false || !m || m.downloaded) { notice('asr', null); return; }
+      var dl = AS.dl[lang];
+      var cur = E.notices.asr;
+      if (!dl && !E.asrDlError && !cur && AS.offered[lang]) return;
+      AS.offered[lang] = true;
+      var name = '« ' + (m.label || lang) + ' » (' + fmtSize(m.size || (dl && dl.total)) + ')';
+      var n = { kind: 'asr-missing', lang: lang, size: m.size || 0, progress: -1 };
+      if (dl) {
+        n.text = 'Téléchargement du modèle de transcription en direct ' + name + '…';
+        n.action = null;
+        n.progress = dl.total ? Math.floor(100 * (dl.received || 0) / dl.total) : 0;
+      } else if (E.asrDlError) {
+        n.text = 'Téléchargement du modèle de transcription en direct impossible : ' + E.asrDlError;
+        n.action = { label: 'Réessayer', run: function () { E.asrDlError = ''; downloadAsr(lang)['catch'](noop); } };
+      } else {
+        n.text = 'Pour voir vos paroles s’écrire en direct et obtenir la réponse dès que vous vous taisez, téléchargez le modèle de transcription en direct '
+          + name + '. En attendant, Whisper transcrit chaque phrase.';
+        n.action = { label: 'Télécharger', run: function () { downloadAsr(lang)['catch'](noop); } };
+      }
+      notice('asr', n);
+    }
+
+    function onAsrModel(p) {
+      if (!E.started || !p) return;
+      if (p.lang && asrLang(p.lang) !== asrLang(E.opts.language)) return;
+      if (p.phase === 'download') E.asrDlError = '';
+      else if (p.phase === 'download-failed') E.asrDlError = String(p.error || 'erreur inconnue');
+      else if (p.phase === 'refreshed') { E.asrDlError = ''; ensureAsr(); checkWhisper(false); }
+      checkAsr();
     }
 
     /* ══ Whisper ══════════════════════════════════════════════════════════ */
@@ -1176,11 +1803,19 @@
       return !!(m && m.downloaded);
     }
 
+    /* Avec le modèle en flux, Whisper ne sert plus qu'aux mesures du tuteur (detail/keepAudio) : sans
+       elles, pas d'avis Whisper ni de préchauffage. */
     function checkWhisper(warm) {
       if (!E.started) return;
+      if (!WH.status && WH.loading) return;
+      var stream = streamAvailable();
+      var measures = !!(E.opts.detail || E.opts.keepAudio);
+      if (stream && !measures) { notice('whisper', null); return; }
       var m = whisperModelInfo();
       if (!WH.status) {
-        notice('whisper', { kind: 'whisper-unavailable', text: 'Transcription indisponible dans cette fenêtre : la conversation ne peut pas vous entendre.' });
+        notice('whisper', { kind: 'whisper-unavailable', text: stream
+          ? 'Whisper est indisponible dans cette fenêtre : vos phrases seront transcrites, mais sans mesure de l’élocution.'
+          : 'Transcription indisponible dans cette fenêtre : la conversation ne peut pas vous entendre.' });
         return;
       }
       if (!m) {
@@ -1191,7 +1826,9 @@
         var dl = WH.dl && WH.dl.model === m.id ? WH.dl : null;
         notice('whisper', {
           kind: 'whisper-missing', model: m.id, size: m.size || 0,
-          text: 'Pour vous entendre, la conversation a besoin du modèle Whisper « ' + m.label + ' » (' + fmtSize(m.size) + '), pas encore téléchargé sur ce poste.',
+          text: stream
+            ? 'Pour mesurer votre élocution (mots douteux, débit, réécoute), il faut le modèle Whisper « ' + m.label + ' » (' + fmtSize(m.size) + '), pas encore téléchargé sur ce poste.'
+            : 'Pour vous entendre, la conversation a besoin du modèle Whisper « ' + m.label + ' » (' + fmtSize(m.size) + '), pas encore téléchargé sur ce poste.',
           action: dl ? null : { label: 'Télécharger', run: downloadWhisper },
           progress: dl ? (dl.total ? Math.floor(100 * dl.received / dl.total) : 0) : -1
         });
@@ -1307,7 +1944,13 @@
       if (first) {
         resetVad();
         startAudio();
-        whisperStatus(true).then(function () { checkWhisper(true); });
+        /* Whisper et modèle en flux connus ensemble : l'avis Whisper dépend du flux. */
+        Promise.all([whisperStatus(true), asrStatus(true)]).then(function () {
+          if (!E.started) return;
+          ensureAsr();
+          checkAsr();
+          checkWhisper(true);
+        });
         warmTts();
         kick();
       }
@@ -1324,6 +1967,9 @@
       E.reply = null; E.pendingHeard = null; E.bargedIn = false;
       abortSegment();
       cancelParts();
+      cancelBackground();
+      closeAsr();
+      unduck();
       if (E.conv) bridge.call('voiceStop', { conversationId: E.conv.id })['catch'](noop);
       E.conv = null;
       stopAudio(false);
@@ -1384,6 +2030,8 @@
     api.state = function () {
       return {
         phase: effectivePhase(), muted: E.muted, micLevel: E.micLevel, micDb: E.micDb, threshold: E.threshold,
+        voiceRatio: E.voiceRatio, live: !!(E.asr && E.asr.session != null), bargeIn: bargeMode(), ducked: E.ducked,
+        volume: AUD.outGain ? AUD.outGain.gain.value : 1,
         playing: !!E.playing, fallback: !!(E.playing && E.playing.fallback), replying: !!E.reply, conversationId: E.conv ? E.conv.id : null, started: E.started,
         tts: useKokoro() ? 'kokoro' : 'sapi', amp: E.anim ? E.anim.amp : 0, sampleRate: AUD.ctx ? AUD.ctx.sampleRate : 0
       };
@@ -1395,6 +2043,13 @@
       E.opts = mergeOpts(E.opts, patch);
       if ('whisperModel' in patch && patch.whisperModel !== before.whisperModel) checkWhisper(true);
       if ('tts' in patch) { E.kokoroFails = 0; if (E.started) warmTts(); }
+      if (E.started && (('language' in patch && asrLang(patch.language) !== asrLang(before.language)) || ('liveAsr' in patch && patch.liveAsr !== before.liveAsr))) {
+        ensureAsr();
+        checkAsr();
+        checkWhisper(false);
+      } else if (E.started && (('detail' in patch && patch.detail !== before.detail) || ('keepAudio' in patch && patch.keepAudio !== before.keepAudio))) {
+        checkWhisper(false);
+      }
       if (('container' in patch && patch.container !== before.container) || ('avatar' in patch)) {
         unmountAvatar();
         mountAvatar();
@@ -1403,14 +2058,24 @@
     };
 
     api.downloadWhisper = downloadWhisper;
+    api.downloadAsr = function (lang) { return downloadAsr(lang || E.opts.language); };
     api.feed = function (buf) { onFrame(buf); };
     Object.defineProperty(api, 'element', { get: function () { return E.wrap; } });
 
     E.offs.push(bridge.on('voice', onVoice));
     E.offs.push(bridge.on('whisper', onWhisper));
     E.offs.push(bridge.on('tts', onTts));
+    E.offs.push(bridge.on('asr', onAsr));
+    asrListeners.push(onAsrModel);
+    E.offs.push(function () { var i = asrListeners.indexOf(onAsrModel); if (i >= 0) asrListeners.splice(i, 1); });
     mountAvatar();
     ttsStatus(false);
+    /* Le modèle en flux se charge dès la création (l'écran s'ouvre) : prêt quand on commence à parler. */
+    asrStatus(false).then(function () {
+      if (E.destroyed || E.opts.liveAsr === false) return;
+      var lang = asrLang(E.opts.language), m = asrModel(lang);
+      if (m && m.downloaded) warmAsr(lang);
+    });
     return api;
   }
 
@@ -1421,6 +2086,9 @@
     whisper: function () { return WH.status; },
     whisperStatus: whisperStatus,
     tts: function () { return TT.status; },
-    ttsStatus: ttsStatus
+    ttsStatus: ttsStatus,
+    asr: function () { return AS.status; },
+    asrStatus: asrStatus,
+    downloadAsr: downloadAsr
   };
 })();

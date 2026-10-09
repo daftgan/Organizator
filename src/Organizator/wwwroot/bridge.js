@@ -470,6 +470,157 @@
     return delay ? new Promise(function (resolve) { setTimeout(function () { resolve(out); }, delay); }) : out;
   }
 
+  /* Transcription en flux simulée (StreamingAsr de l'hôte) : modèles en/fr, téléchargement avec
+     l'avancement (évènement `asr`), sessions. window.__fakeAsr impose l'état : un objet { runtime, models }
+     rendu par asrStatus (et modifié par asrDownload / asrRemove), ou 'error' pour un hôte sans
+     transcription en flux (tous les messages asr* échouent). Réglages facultatifs dans ce même objet :
+     startError (asrStart échoue avec ce message), endError (asrEnd échoue), decodeError (évènement `asr`
+     { session, phase:'error', error } au premier paquet, puis asrEnd échoue avec ce message), downloadError
+     (asrDownload rend { ok:false, error }, comme l'hôte), wordMs (audio par mot des partiels, 220 ms). Partiels progressifs : les mots de window.__fakeTranscript (sans
+     ponctuation), un de plus par wordMs d'audio reçu, poussés par l'évènement `asr` { session, phase:
+     'partial', text } ; asrEnd rend la phrase entière (point final ajouté s'il manque) et remet la session à
+     zéro. Journal : window.__voiceCalls (asrFeed noté { session, samples }). */
+  var shimAsr = {
+    seq: 0, sessions: {},
+    state: {
+      repo: 'csukuangfj / shaojieli (Hugging Face)',
+      runtime: { downloaded: false, version: '1.13.8', size: 31457280 },
+      models: [
+        { id: 'en', label: 'Anglais', size: 70254592, downloaded: false, downloading: false, received: 0, total: 0 },
+        { id: 'fr', label: 'Français', size: 74448896, downloaded: false, downloading: false, received: 0, total: 0 }
+      ]
+    }
+  };
+
+  function shimAsrState() {
+    var f = window.__fakeAsr;
+    if (f === 'error') throw new Error('Type de message inconnu : transcription en flux absente de cet hôte.');
+    if (f && typeof f === 'object') {
+      if (!Array.isArray(f.models)) f.models = [];
+      if (!f.runtime) f.runtime = { downloaded: f.models.some(function (m) { return m.downloaded; }) };
+      return f;
+    }
+    return shimAsr.state;
+  }
+
+  function shimAsrModel(st, lang) { return st.models.filter(function (m) { return m.id === lang; })[0] || null; }
+
+  function shimAsrText() {
+    return window.__fakeTranscript != null ? String(window.__fakeTranscript) : 'texte dicté de démonstration';
+  }
+
+  function shimAsrSession(p) {
+    var s = shimAsr.sessions[p.session];
+    if (!s) throw new Error('Session de transcription en direct inconnue : ' + p.session);
+    return s;
+  }
+
+  function shimAsrHandle(type, p) {
+    var st = shimAsrState(), m, s;
+    switch (type) {
+      case 'asrStatus':
+        shimVoiceLog(type, p);
+        return JSON.parse(JSON.stringify({ repo: st.repo || '', runtime: st.runtime, models: st.models }));
+
+      case 'asrDownload':
+        shimVoiceLog(type, p);
+        m = shimAsrModel(st, p.lang);
+        if (!m) throw new Error('Modèle de transcription en direct inconnu : ' + p.lang);
+        return new Promise(function (resolve) {
+          m.downloading = true;
+          [0.25, 0.5, 0.75].forEach(function (f, i) {
+            setTimeout(function () {
+              m.received = Math.round(m.size * f); m.total = m.size;
+              emit('asr', { phase: 'download', lang: m.id, received: m.received, total: m.total });
+            }, 150 * (i + 1));
+          });
+          setTimeout(function () {
+            m.downloading = false;
+            if (st.downloadError) {
+              emit('asr', { phase: 'download-failed', lang: m.id, error: String(st.downloadError) });
+              resolve({ ok: false, error: String(st.downloadError) });
+              return;
+            }
+            m.downloaded = true; st.runtime.downloaded = true;
+            emit('asr', { phase: 'downloaded', lang: m.id });
+            resolve({ ok: true });
+          }, 600);
+        });
+
+      case 'asrRemove':
+        shimVoiceLog(type, p);
+        m = shimAsrModel(st, p.lang);
+        var had = !!(m && m.downloaded);
+        if (m) m.downloaded = false;
+        return { removed: had };
+
+      case 'asrWarm':
+        shimVoiceLog(type, p);
+        window.__asrWarm = (window.__asrWarm || 0) + 1;
+        return {};
+
+      case 'asrStart':
+        shimVoiceLog(type, p);
+        if (st.startError) throw new Error(String(st.startError));
+        m = shimAsrModel(st, p.lang);
+        if (!m || !m.downloaded) throw new Error('Le modèle de transcription en direct (' + p.lang + ') n’est pas téléchargé.');
+        var id = 'asr-' + (++shimAsr.seq);
+        shimAsr.sessions[id] = { lang: p.lang, samples: 0, words: 0, gen: 0 };
+        return { session: id };
+
+      case 'asrFeed': {
+        s = shimAsrSession(p);
+        var samples = Math.floor(atob(String(p.pcm || '')).length / 2);
+        shimVoiceLog(type, { session: p.session, samples: samples });
+        s.samples += samples;
+        if (st.decodeError) {
+          if (!s.failed) {
+            s.failed = true;
+            setTimeout(function () { emit('asr', { session: p.session, phase: 'error', error: String(st.decodeError) }); }, 20);
+          }
+          return {};
+        }
+        var words = shimAsrText().split(/\s+/).map(function (w) { return w.replace(/[.,;:!?…«»"]+/g, ''); }).filter(Boolean);
+        var n = Math.min(words.length, Math.floor(s.samples / 16 / (st.wordMs || 220)));
+        if (n > s.words && shimAsrText() !== 'error') {
+          s.words = n;
+          var gen = s.gen, text = words.slice(0, n).join(' ');
+          setTimeout(function () {
+            if (shimAsr.sessions[p.session] === s && s.gen === gen) emit('asr', { session: p.session, phase: 'partial', text: text });
+          }, 20);
+        }
+        return {};
+      }
+
+      case 'asrEnd': {
+        s = shimAsrSession(p);
+        shimVoiceLog(type, p);
+        s.samples = 0; s.words = 0; s.gen++;
+        var failed = s.failed;
+        s.failed = false;
+        if (failed) throw new Error(String(st.decodeError || 'décodage impossible'));
+        if (st.endError) throw new Error(String(st.endError));
+        var full = shimAsrText();
+        if (full === 'error') throw new Error('Décodage impossible.');
+        full = full.trim();
+        if (full && !/[.!?…]$/.test(full)) full += '.';
+        return { text: full };
+      }
+
+      case 'asrReset':
+        s = shimAsrSession(p);
+        shimVoiceLog(type, p);
+        s.samples = 0; s.words = 0; s.gen++; s.failed = false;
+        return {};
+
+      case 'asrStop':
+        shimVoiceLog(type, p);
+        delete shimAsr.sessions[p.session];
+        return {};
+    }
+    return undefined;
+  }
+
   function shimCall(type, payload) {
     payload = payload || {};
     return new Promise(function (resolve, reject) {
@@ -536,7 +687,7 @@
           whisperEnabled: p.whisperEnabled, whisperAuto: p.whisperAuto, whisperModel: p.whisperModel, whisperLanguage: p.whisperLanguage,
           voiceModel: p.voiceModel, voiceEffort: p.voiceEffort, voiceVoice: p.voiceVoice, voiceRate: p.voiceRate,
           voicePersona: p.voicePersona, voiceTopic: p.voiceTopic, voiceInstructions: p.voiceInstructions, voiceWeb: p.voiceWeb,
-          voiceWhisperModel: p.voiceWhisperModel, voiceSensitivity: p.voiceSensitivity
+          voiceWhisperModel: p.voiceWhisperModel, voiceSensitivity: p.voiceSensitivity, voiceBargeIn: p.voiceBargeIn
         });
         return {};
 
@@ -832,6 +983,17 @@
       case 'voiceSpeak':
         shimVoiceLog(type, { text: p.text, voice: p.voice, rate: p.rate });
         return shimVoiceSpeak(p);
+
+      case 'asrStatus':
+      case 'asrDownload':
+      case 'asrRemove':
+      case 'asrWarm':
+      case 'asrStart':
+      case 'asrFeed':
+      case 'asrEnd':
+      case 'asrReset':
+      case 'asrStop':
+        return shimAsrHandle(type, p);
 
       case 'log':
         console.log('[shim] log', p.level, p.message);
