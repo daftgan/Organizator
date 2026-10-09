@@ -367,6 +367,77 @@
     });
   }
 
+  /* Conversation vocale simulée (mode Conversation, voice.js). `voiceSay` rend le tour aussitôt puis
+     pousse l'évènement `voice` : thinking, une étape `tool` si window.__fakeVoiceTool, les phrases de
+     window.__fakeVoiceReply (tableau, ou 'error' pour un échec), puis done ; window.__fakeVoiceDelay
+     espace les phrases (350 ms). `voiceSpeak` rend un WAV synthétique (voyelles modulées, durée selon
+     le texte) ; window.__fakeVoiceSpeak = 'error' le fait échouer (repli speechSynthesis),
+     window.__fakeVoiceSpeakDelay retarde la réponse. window.__fakeVoiceVoices remplace la liste des voix.
+     Chaque appel est noté dans window.__voiceCalls ({ type, payload, at }). */
+  var shimVoice = { convs: {}, turn: 0 };
+
+  function shimVoiceLog(type, p) {
+    (window.__voiceCalls = window.__voiceCalls || []).push({ type: type, payload: JSON.parse(JSON.stringify(p || {})), at: Date.now() });
+  }
+
+  function shimVoiceSay(p) {
+    var conv = shimVoice.convs[p.conversationId];
+    if (!conv) throw new Error('Conversation terminée : rouvrez le mode Conversation.');
+    var turn = ++shimVoice.turn;
+    conv.turn = turn;
+    var reply = window.__fakeVoiceReply || [
+      'Avec plaisir, parlons des volcans !',
+      'Un volcan, c’est une ouverture dans la croûte terrestre par laquelle le magma remonte à la surface.',
+      'Vous voulez qu’on parle d’un volcan en particulier, l’Etna ou le Piton de la Fournaise par exemple ?'
+    ];
+    var gap = window.__fakeVoiceDelay || 350;
+    var steps = [{ phase: 'thinking' }];
+    if (window.__fakeVoiceTool) steps.push({ phase: 'tool', text: 'Recherche web…' });
+    if (reply === 'error') {
+      steps.push({ phase: 'error', error: 'Claude Code ne répond pas : vérifiez qu’il est connecté.' });
+    } else {
+      var full = '';
+      reply.forEach(function (t) { full += (full ? ' ' : '') + t; steps.push({ phase: 'sentence', text: t, full: full }); });
+      steps.push({ phase: 'done', full: full });
+    }
+    steps.forEach(function (st, i) {
+      setTimeout(function () {
+        if (conv.turn !== turn || conv.stopped) return;
+        emit('voice', Object.assign({ conversationId: p.conversationId, turn: turn, text: '', full: '', error: '' }, st));
+      }, 120 + i * gap);
+    });
+    return { turn: turn };
+  }
+
+  /* Un WAV mono 16 bits : une « voix » en dents de scie filtrée, modulée en syllabes de 4 à 6 Hz. */
+  function shimVoiceWav(text) {
+    var rate = 22050, secs = Math.max(0.6, Math.min(6, String(text || '').length * 0.055));
+    var n = Math.floor(rate * secs), buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+    function str(o, s) { for (var i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); }
+    str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true);
+    v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    str(36, 'data'); v.setUint32(40, n * 2, true);
+    var lp = 0;
+    for (var i = 0; i < n; i++) {
+      var t = i / rate, f0 = 150 + 25 * Math.sin(t * 2.1);
+      var saw = 2 * ((t * f0) % 1) - 1;
+      lp += 0.18 * (saw - lp);
+      var env = Math.max(0, Math.sin(Math.PI * t * (4 + Math.sin(t * 1.3)))) * Math.min(1, t * 20, (secs - t) * 20);
+      v.setInt16(44 + i * 2, Math.round(lp * env * 0.5 * 32767), true);
+    }
+    var bytes = new Uint8Array(buf), bin = '';
+    for (var k = 0; k < bytes.length; k += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(k, k + 0x8000));
+    return { audio: btoa(bin), ms: Math.round(secs * 1000) };
+  }
+
+  function shimVoiceSpeak(p) {
+    if (window.__fakeVoiceSpeak === 'error') throw new Error('Aucune voix Windows installée.');
+    var out = shimVoiceWav(p.text);
+    var delay = window.__fakeVoiceSpeakDelay || 0;
+    return delay ? new Promise(function (resolve) { setTimeout(function () { resolve(out); }, delay); }) : out;
+  }
+
   function shimCall(type, payload) {
     payload = payload || {};
     return new Promise(function (resolve, reject) {
@@ -421,7 +492,10 @@
           articleEnabled: p.articleEnabled, articleTopics: p.articleTopics, articleAiEnabled: p.articleAiEnabled,
           articleModel: p.articleModel, articleEffort: p.articleEffort,
           windowsNotifications: p.windowsNotifications,
-          whisperEnabled: p.whisperEnabled, whisperAuto: p.whisperAuto, whisperModel: p.whisperModel, whisperLanguage: p.whisperLanguage
+          whisperEnabled: p.whisperEnabled, whisperAuto: p.whisperAuto, whisperModel: p.whisperModel, whisperLanguage: p.whisperLanguage,
+          voiceModel: p.voiceModel, voiceEffort: p.voiceEffort, voiceVoice: p.voiceVoice, voiceRate: p.voiceRate,
+          voicePersona: p.voicePersona, voiceTopic: p.voiceTopic, voiceInstructions: p.voiceInstructions, voiceWeb: p.voiceWeb,
+          voiceWhisperModel: p.voiceWhisperModel, voiceSensitivity: p.voiceSensitivity
         });
         return {};
 
@@ -674,6 +748,46 @@
         if (tj) tj.stopped = true;
         return { cancelled: !!tj };
       }
+
+      case 'voiceStart': {
+        shimVoiceLog(type, p);
+        Object.keys(shimVoice.convs).forEach(function (k) { shimVoice.convs[k].stopped = true; });
+        var cid = uuid();
+        shimVoice.convs[cid] = { turn: 0, stopped: false, options: p };
+        return { conversationId: cid };
+      }
+
+      case 'voiceSay':
+        shimVoiceLog(type, p);
+        return shimVoiceSay(p);
+
+      case 'voiceInterrupt': {
+        shimVoiceLog(type, p);
+        var vc = shimVoice.convs[p.conversationId];
+        if (vc) vc.turn = -1;
+        return {};
+      }
+
+      case 'voiceStop':
+        shimVoiceLog(type, p);
+        if (shimVoice.convs[p.conversationId]) shimVoice.convs[p.conversationId].stopped = true;
+        delete shimVoice.convs[p.conversationId];
+        return {};
+
+      case 'voiceVoices':
+        shimVoiceLog(type, p);
+        return window.__fakeVoiceVoices || {
+          voices: [
+            { id: 'shim-hortense', name: 'Microsoft Hortense', lang: 'fr-FR', gender: 'female' },
+            { id: 'shim-paul', name: 'Microsoft Paul', lang: 'fr-FR', gender: 'male' },
+            { id: 'shim-zira', name: 'Microsoft Zira', lang: 'en-US', gender: 'female' }
+          ],
+          default: 'shim-hortense'
+        };
+
+      case 'voiceSpeak':
+        shimVoiceLog(type, { text: p.text, voice: p.voice, rate: p.rate });
+        return shimVoiceSpeak(p);
 
       case 'log':
         console.log('[shim] log', p.level, p.message);

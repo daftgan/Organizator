@@ -41,7 +41,11 @@
     windowsNotifications: true,
     /* Dictée et transcription des enregistrements joints, par Whisper sur le poste. Small : quelques
        secondes pour une dictée sur un processeur récent ; voir « Dictée et transcription ». */
-    whisperEnabled: true, whisperAuto: true, whisperModel: 'small', whisperLanguage: 'fr'
+    whisperEnabled: true, whisperAuto: true, whisperModel: 'small', whisperLanguage: 'fr',
+    /* Mode Conversation (voice.js) : interlocuteur à voix et avatar. Base pour Whisper : chaque phrase
+       dite doit être transcrite en moins d'une seconde. */
+    voiceModel: 'sonnet', voiceEffort: 'low', voiceVoice: '', voiceRate: 1, voicePersona: 'Alma', voiceTopic: 'libre',
+    voiceInstructions: '', voiceWeb: true, voiceWhisperModel: 'base', voiceSensitivity: 50
   };
 
   /* Agents disponibles. `short` sert dans les listes, `example` dans le champ de modèle libre. */
@@ -321,7 +325,11 @@
       articleModel: S.settings.articleModel, articleEffort: S.settings.articleEffort,
       windowsNotifications: S.settings.windowsNotifications,
       whisperEnabled: S.settings.whisperEnabled, whisperAuto: S.settings.whisperAuto,
-      whisperModel: S.settings.whisperModel, whisperLanguage: S.settings.whisperLanguage
+      whisperModel: S.settings.whisperModel, whisperLanguage: S.settings.whisperLanguage,
+      voiceModel: S.settings.voiceModel, voiceEffort: S.settings.voiceEffort, voiceVoice: S.settings.voiceVoice,
+      voiceRate: S.settings.voiceRate, voicePersona: S.settings.voicePersona, voiceTopic: S.settings.voiceTopic,
+      voiceInstructions: S.settings.voiceInstructions, voiceWeb: S.settings.voiceWeb,
+      voiceWhisperModel: S.settings.voiceWhisperModel, voiceSensitivity: S.settings.voiceSensitivity
     })['catch'](function (e) { toast('Réglages non sauvegardés : ' + e.message); });
     return setInFlight;
   }
@@ -8901,6 +8909,7 @@
     bridge.call('getState').then(function (st) {
       normalize(st || {});
       render();
+      appReady();
       refreshSessions();
       restartSessionsPoll();
       refreshUsage(true);
@@ -8912,9 +8921,37 @@
     })['catch'](function (e) {
       normalize({});
       render();
+      appReady();
       toast('Données illisibles : ' + e.message);
     });
   }
+
+  /* ── Point d'accroche des modules chargés après app.js (voice.js) ─────────
+     Ils lisent et changent les réglages, montrent un toast, branchent leurs boutons sur la
+     délégation `data-act` : rien d'autre ne sort de l'application. `onReady` attend getState. */
+  var readyFns = [], isReady = false;
+
+  function appReady() {
+    isReady = true;
+    readyFns.splice(0).forEach(function (fn) {
+      try { fn(); } catch (e) { console.error('[organizator] module', e); }
+    });
+  }
+
+  window.organizatorApp = {
+    onReady: function (fn) { if (isReady) fn(); else readyFns.push(fn); },
+    settings: function () { return S.settings; },
+    env: function () { return S.env; },
+    /* Change des réglages et les sauvegarde (300 ms de debounce, comme la frappe). */
+    setSettings: function (patch) { Object.assign(S.settings, patch || {}); saveSettingsSoon(); },
+    toast: toast,
+    addActions: function (map) { Object.keys(map || {}).forEach(function (k) { ACTIONS[k] = map[k]; }); },
+    /* Choix du modèle et de l'effort Claude, tels que les Réglages les présentent. */
+    modelSelectHtml: function (value, custom, role, key) { return modelSelectHtml('claude', value, custom, role, key, false); },
+    effortSelectHtml: function (value, role, key) { return effortSelectHtml('claude', value, role, key, false); },
+    customModel: CUSTOM,
+    micError: micError
+  };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();

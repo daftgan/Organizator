@@ -105,6 +105,18 @@ Pour récupérer ses informations à l'oral plutôt qu'au clavier, Organizator e
 
 Chaque modèle se télécharge ou se supprime d'un clic ; le modèle choisi qui manque se télécharge de lui-même à la première dictée, l'avancement s'affichant dans la pastille. Le micro est celui de Windows par défaut ; si l'accès est refusé, le message renvoie à Paramètres › Confidentialité › Microphone.
 
+## Conversation à voix haute
+
+Le bouton **visage** de l'en-tête (ou **Ctrl + Maj + C**) ouvre le mode **Conversation** : un interlocuteur à avatar — Alma par défaut — avec qui l'on parle à voix haute, de tout, comme au téléphone. **Aucun bouton à presser** : le micro écoute en continu, la fin d'une phrase se repère au silence qui suit, et la réponse arrive en voix, dès sa première phrase, pendant que la suite s'écrit encore. On peut lui **couper la parole** : dès qu'on parle par-dessus, il se tait, écoute, et reprend en sachant ce qu'on a entendu de sa réponse, sans la répéter. Un bruit bref (toux, porte) qui l'a coupé le fait reprendre où il en était.
+
+L'avatar montre ce qui se passe : il écoute (il hoche la tête au rythme de la voix), réfléchit (regard en l'air, trois points), cherche sur le web (loupe) et parle (la bouche suit la voix). Sa phrase en cours s'affiche en sous-titre, avec la vôtre dessous ; le volet **Historique** reprend toute la conversation — la partie d'une réponse qu'on n'a pas laissé finir y apparaît barrée. **M** coupe le micro, **Espace** fait taire l'avatar, ↻ repart d'une conversation neuve, Échap referme et coupe tout.
+
+**Sujets** — des pastilles en tête : Discussion libre, Actualité & tech, Histoire & culture, Sciences, Philosophie, Débat (il prend le contre-pied), Pratique de l'anglais (il parle anglais et reprend vos fautes avec douceur), Coaching & organisation, Livres, films, séries, Jeu de rôle. Changer de sujet ouvre une nouvelle conversation.
+
+**Réglages** (⚙ dans l'écran) : prénom de l'interlocuteur, voix (avec **Écouter**) et débit, modèle Claude et effort (Sonnet en effort *low* par défaut : chaque cran de plus retarde la première phrase), recherche web, modèle Whisper de la conversation (**Base** par défaut, le plus rapide), sensibilité du micro avec un vumètre, et des consignes libres (« tutoie-moi », « sois plus bref »…).
+
+Comment ça marche : votre voix est transcrite **sur le poste** par Whisper (voir « Dictée et transcription » — seul le modèle se télécharge) ; le texte part à Claude Code, qui reste ouvert pendant toute la conversation pour répondre sans délai de démarrage et compte dans son quota ; la réponse est lue par une **voix de Windows** (SAPI et voix OneCore : Julie, Paul, Hortense… ; d'autres s'installent dans Paramètres › Heure et langue › Voix). Un casque n'est pas nécessaire : le son de l'avatar est retiré du micro par l'annulation d'écho ; dans une pièce bruyante, baissez la sensibilité.
+
 ## PRs Bitbucket à relire
 
 Le bouton **Mes PRs Bitbucket** du dialogue « Nouvelle tâche » interroge le tableau de bord de Bitbucket Data Center : les pull requests **ouvertes** où vous êtes **relecteur** et sur lesquelles vous **n'avez pas encore donné votre avis** — ni approuvées, ni marquées « needs work ». Bitbucket remet ce statut à zéro quand l'auteur pousse de nouveaux commits, si bien qu'une PR corrigée revient d'elle-même. Elles sont regroupées par **ticket Jira** (la clé lue dans le nom de la branche, sinon dans le titre : `feature/UDM-1449-…`, `[UDM-1532] …`), une PR sans ticket faisant son propre groupe, et présentées dans l'ordre d'ouverture, la plus ancienne en tête. Chaque ligne se coche ; un ticket **déjà en file** (une tâche non terminée porte le même ticket, ou l'adresse d'une de ses PRs) est grisé, ou marqué « +n PR » quand de nouvelles PRs s'y rattachent : le cocher les ajoute à la tâche existante au lieu d'en créer une seconde. Les brouillons sont proposés mais décochés. « Créer N tâches » les pose dans la catégorie choisie au-dessus, à la place prévue pour la nouvelle tâche.
@@ -135,7 +147,7 @@ powershell -ExecutionPolicy Bypass -File publish.ps1
 
 ## Structure
 
-- `src/Organizator/` — hôte WPF (.NET 8) + WebView2 : persistance, lancement de PowerShell, lecture des sessions Claude Code et Copilot, détection des artefacts et rendu des rapports (Markdig), dictée et transcription (Whisper.net, NAudio).
+- `src/Organizator/` — hôte WPF (.NET 8) + WebView2 : persistance, lancement de PowerShell, lecture des sessions Claude Code et Copilot, détection des artefacts et rendu des rapports (Markdig), dictée et transcription (Whisper.net, NAudio), conversation à voix haute (Claude Code en stream-json, synthèse SAPI).
 - `src/Organizator/wwwroot/` — l'interface (HTML/CSS/JS sans framework), embarquée dans l'exécutable.
 - `docs/ARCHITECTURE.md` — architecture et contrat des messages JS ↔ .NET.
 - `Mockup/` — le prototype de design d'origine.

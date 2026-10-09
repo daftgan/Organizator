@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="organic.css">
 <link rel="stylesheet" href="fonts.css">
 <link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="voice.css">
 </head>
 <body>
 
@@ -41,6 +42,9 @@
           <span class="btn-badge" hidden></span>
           <span class="btn-dot" hidden></span>
         </button>
+        <button class="icon-btn" id="voice-btn" type="button" data-act="voice-open" aria-haspopup="dialog" aria-expanded="false" title="Conversation (Ctrl + Maj + C)" aria-label="Conversation">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9.5" cy="12" r="7"></circle><path d="M7 10.2v.6M12 10.2v.6M7.2 14.3c1.3 1.2 3.3 1.2 4.6 0"></path><path d="M19 9.6a3.6 3.6 0 0 1 0 4.8M21.6 7.4a6.8 6.8 0 0 1 0 9.2"></path></svg>
+        </button>
         <button class="icon-btn" id="settings-btn" type="button" title="Réglages" aria-label="Réglages">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         </button>
@@ -63,5 +67,6 @@
 
 <script src="bridge.js"></script>
 <script src="app.js"></script>
+<script src="voice.js"></script>
 </body>
 </html>
