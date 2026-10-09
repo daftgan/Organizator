@@ -48,12 +48,15 @@ public sealed class BridgeHost
     private readonly WindowsToasts _toasts;
     private readonly FindingChat _findings;
     private readonly WhisperTranscriber _whisper;
+    private readonly VoiceChat _voice;
+    private readonly SpeechVoice _speech;
 
     // Revizator (H2) : modele de l'apprenant et documents, menu RSS du cours, generations par Claude.
     private readonly LearningStore _learning;
     private readonly NewsMenu _learnNews;
     private readonly LearningAgent _learnAgent;
     private readonly TextToSpeech _tts;
+    private readonly LiveAsr _asr;
     private readonly PerfMonitor? _perf;
 
     // Dossier actuellement servi sous https://report.organizator/ (voir ArtifactReader.Locate).
@@ -118,20 +121,43 @@ public sealed class BridgeHost
         // Dictee et transcription des enregistrements : telechargement du modele et calcul s'affichent au fil de l'eau.
         _whisper = new WhisperTranscriber(store.DataDir, log, HostVersion);
         _whisper.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("whisper", payload));
+        // Conversation vocale : les phrases de la reponse arrivent une a une, la page les dit aussitot.
+        _voice = new VoiceChat(launcher, log, store.DataDir);
+        _voice.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("voice", payload));
+        _speech = new SpeechVoice(log);
         // Revizator : persistance, menu du jour et generations ; l'avancement repasse par le fil de l'interface.
         _learning = new LearningStore(store.DataDir, log);
         _learnNews = new NewsMenu(_learning, log);
         _learnAgent = new LearningAgent(launcher, _learning, _learnNews, log, store.DataDir);
         _learnAgent.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("learn", payload));
         // Synthese vocale anglaise (Revizator) : telechargement des voix et phrases pretes arrivent au fil de l'eau.
-        _tts = new TextToSpeech(store.DataDir, log, HostVersion);
+        // Runtime sherpa-onnx partage par la synthese (Kokoro) et la transcription en direct.
+        var sherpa = new SherpaRuntime(store.DataDir, log, HostVersion);
+        _tts = new TextToSpeech(store.DataDir, log, HostVersion, sherpa);
         _tts.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("tts", payload));
+        // Transcription en direct : texte partiel et telechargements des modeles arrivent au fil de l'eau.
+        _asr = new LiveAsr(store.DataDir, log, HostVersion, sherpa);
+        _asr.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("asr", payload));
         _core.WebMessageReceived += OnWebMessageReceived;
     }
 
     /// <summary>Dossier des pieces jointes, servi a l'UI sous <see cref="TaskAttachments.Host"/>.</summary>
     public string AttachmentsRoot => _attachments.Root;
 
+    /// <summary>Fermeture de l'application : la conversation vocale et la synthese s'arretent (processus claude tue).</summary>
+    public void Shutdown()
+    {
+        try
+        {
+            _voice.Dispose();
+            _speech.Dispose();
+            _asr.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Arret de la conversation vocale incomplet : " + ex.Message);
+        }
+    }
     /// <summary>Dossier <c>learning\</c> de Revizator, servi a l'UI sous <see cref="LearningStore.Host"/>.</summary>
     public string LearningRoot => _learning.Root;
     /// <summary>Cache des phrases synthetisees, servi a l'UI sous <see cref="TextToSpeech.Host"/>.</summary>
@@ -313,6 +339,12 @@ public sealed class BridgeHost
         "whisperWarm" => WarmWhisper(payload),
         "transcribe" => await TranscribeAsync(payload).ConfigureAwait(true),
         "cancelTranscribe" => new JsonObject { ["cancelled"] = _whisper.Cancel(Str(payload, "job")) },
+        "voiceStart" => StartVoice(payload),
+        "voiceSay" => new JsonObject { ["turn"] = _voice.Say(Str(payload, "conversationId"), Str(payload, "text"), Str(payload, "heard")) },
+        "voiceInterrupt" => InterruptVoice(payload),
+        "voiceStop" => StopVoice(payload),
+        "voiceVoices" => await _speech.VoicesJsonAsync().ConfigureAwait(true),
+        "voiceSpeak" => await SpeakAsync(payload).ConfigureAwait(true),
         // Revizator (H2) : persistance, menu du jour, generations par Claude.
         "learnLoad" => await Task.Run(() => _learning.Load()).ConfigureAwait(true),
         "learnSave" => await Task.Run(() => _learning.Save(payload)).ConfigureAwait(true),
@@ -332,6 +364,16 @@ public sealed class BridgeHost
         "speakScript" => await SpeakScriptTtsAsync(payload).ConfigureAwait(true),
         "cancelSpeak" => new JsonObject { ["cancelled"] = _tts.Cancel(Str(payload, "job")) },
         "ttsClearCache" => await Task.Run(_tts.ClearCache).ConfigureAwait(true),
+        // Transcription en direct (sherpa-onnx, Parakeet en pseudo-flux) : modele, sessions, paquets de PCM.
+        "asrStatus" => await Task.Run(_asr.Status).ConfigureAwait(true),
+        "asrDownload" => await _asr.DownloadAsync(Str(payload, "lang")).ConfigureAwait(true),
+        "asrRemove" => new JsonObject { ["removed"] = await _asr.RemoveAsync(Str(payload, "lang")).ConfigureAwait(true) },
+        "asrWarm" => WarmAsr(payload),
+        "asrStart" => new JsonObject { ["session"] = await _asr.StartAsync(Str(payload, "lang")).ConfigureAwait(true) },
+        "asrFeed" => FeedAsr(payload),
+        "asrEnd" => new JsonObject { ["text"] = await _asr.EndAsync(Str(payload, "session")).ConfigureAwait(true) },
+        "asrReset" => await ResetAsrAsync(payload).ConfigureAwait(true),
+        "asrStop" => StopAsr(payload),
         "log" => LogFromWeb(payload),
         "perf" => RecordPerf(payload),
         _ => throw new InvalidOperationException($"Type de message inconnu : {type}"),
@@ -710,6 +752,35 @@ public sealed class BridgeHost
         var gapMs = int.TryParse(Str(payload, "gapMs"), System.Globalization.NumberStyles.Integer,
             System.Globalization.CultureInfo.InvariantCulture, out var gap) ? gap : 450;
         return await _tts.SpeakScriptAsync(Str(payload, "job") ?? "", lines, TtsSpeed(payload), gapMs).ConfigureAwait(true);
+    }
+
+    // --------------------------------------------------------- transcription en direct
+
+    /// <summary>Le modele (unique, <c>lang</c> ignore) se charge en arriere-plan (libere apres 10 min sans usage).</summary>
+    private JsonNode WarmAsr(JsonObject payload)
+    {
+        _asr.Warm(Str(payload, "lang"));
+        return new JsonObject();
+    }
+
+    /// <summary>Un paquet de ~100 ms (base64 d'Int16 LE mono 16 kHz) : ajoute a l'enonce ; partiel recalcule (~600 ms) par l'evenement <c>asr</c>.</summary>
+    private JsonNode FeedAsr(JsonObject payload)
+    {
+        _asr.Feed(Str(payload, "session"), Str(payload, "pcm"));
+        return new JsonObject();
+    }
+
+    /// <summary>Enonce abandonne (bruit) : l'audio recu est oublie, la session reste ouverte.</summary>
+    private async Task<JsonNode> ResetAsrAsync(JsonObject payload)
+    {
+        await _asr.ResetAsync(Str(payload, "session")).ConfigureAwait(true);
+        return new JsonObject();
+    }
+
+    private JsonNode StopAsr(JsonObject payload)
+    {
+        _asr.Stop(Str(payload, "session"));
+        return new JsonObject();
     }
 
     private static float TtsSpeed(JsonObject payload)
@@ -1780,6 +1851,63 @@ public sealed class BridgeHost
 
     private static string QuoteProcessArgument(string value)
         => "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+
+    // ------------------------------------------------------------- conversation vocale
+
+    /// <summary>
+    /// Ouvre une conversation vocale (voir <see cref="VoiceChat"/>) : chaque champ absent prend la valeur
+    /// des reglages. <c>mode</c> : <c>free</c> (defaut) ou <c>tutor</c>, avec <c>tutor</c> =
+    /// <c>{ scenario, level, lang, explain, lesson, context, history }</c> ; <c>name</c> : nom de la session.
+    /// Le processus claude demarre en arriere-plan ; les reponses arrivent par l'evenement <c>voice</c>.
+    /// </summary>
+    private JsonNode StartVoice(JsonObject payload)
+    {
+        var settings = _store.LoadSettings();
+
+        // Mode tutor (Revizator) : le prompt vient du tuteur (TutorGenre), sans web ni consignes libres.
+        var mode = VoiceChat.SanitizeMode(Str(payload, "mode"));
+        var tutor = mode == VoiceChat.TutorMode ? (payload["tutor"] as JsonObject)?.DeepClone() as JsonObject ?? new JsonObject() : null;
+        var options = new VoiceOptions(
+            Model: AgentProvider.RequireModel(Str(payload, "model") ?? settings.VoiceModel),
+            Effort: AgentProvider.RequireEffort(AgentProvider.Claude, Str(payload, "effort") ?? settings.VoiceEffort),
+            Persona: VoiceChat.SanitizePersona(Str(payload, "persona") ?? settings.VoicePersona),
+            Topic: VoiceChat.SanitizeTopic(Str(payload, "topic") ?? settings.VoiceTopic),
+            Instructions: tutor is null ? Limit(Str(payload, "instructions") ?? settings.VoiceInstructions, 2000) : "",
+            Web: tutor is null && (payload["web"] is JsonValue web && web.TryGetValue<bool>(out var allowed) ? allowed : settings.VoiceWeb),
+            Mode: mode,
+            Tutor: tutor,
+            Name: VoiceChat.SanitizeName(Str(payload, "name")));
+        return new JsonObject { ["conversationId"] = _voice.Start(options) };
+    }
+
+    private JsonNode InterruptVoice(JsonObject payload)
+    {
+        _voice.Interrupt(Str(payload, "conversationId"), Str(payload, "heard"));
+        return new JsonObject();
+    }
+
+    private JsonNode StopVoice(JsonObject payload)
+    {
+        _voice.Stop(Str(payload, "conversationId"));
+        return new JsonObject();
+    }
+
+    /// <summary>Synthese d'une phrase en WAV, sur le fil STA de <see cref="SpeechVoice"/> : <c>{ audio, ms }</c>.</summary>
+    private async Task<JsonNode> SpeakAsync(JsonObject payload)
+    {
+        var rate = payload["rate"] is JsonValue value
+            ? value.TryGetValue<int>(out var whole) ? whole
+            : value.TryGetValue<double>(out var real) && double.IsFinite(real) ? (int)Math.Round(Math.Clamp(real, -10, 10))
+            : 0
+            : _store.LoadSettings().VoiceRate;
+        var voice = Str(payload, "voice");
+        if (string.IsNullOrWhiteSpace(voice))
+        {
+            voice = _store.LoadSettings().VoiceVoice;
+        }
+
+        return await _speech.SpeakJsonAsync(Str(payload, "text"), voice, Math.Clamp(rate, -10, 10)).ConfigureAwait(true);
+    }
 
     private JsonNode LogFromWeb(JsonObject payload)
     {

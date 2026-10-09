@@ -1,0 +1,355 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Organizator — mode Conversation (voice.js)
+   Plein écran, dans les teintes « organic » : fond crème, galets ronds, pastilles.
+   Le thème sombre suit le système (ou :root[data-theme="dark"]) : l'écran se regarde
+   longtemps, souvent le soir.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.vc-backdrop, .vc-avatar-host {
+  --vc-bg: var(--color-bg);
+  --vc-glow-1: color-mix(in srgb, var(--color-accent-300) 45%, transparent);
+  --vc-glow-2: color-mix(in srgb, var(--color-accent-2-300) 50%, transparent);
+  --vc-surface: var(--color-neutral-100);
+  --vc-field: #fffaf1;
+  --vc-line: var(--color-neutral-200);
+  --vc-ink: var(--color-text);
+  --vc-muted: var(--color-neutral-600);
+  --vc-chip: var(--color-neutral-300);
+  --vc-chip-on-bg: var(--color-accent-100);
+  --vc-chip-on-ink: var(--color-accent-700);
+  --vc-skin: var(--color-accent-300);
+  --vc-cheek: var(--color-accent-400);
+  --vc-feature: var(--color-neutral-900);
+  --vc-mouth: var(--color-accent-800);
+  --vc-tongue: var(--color-accent-400);
+  --vc-brow: var(--color-accent-800);
+  --vc-leaf: var(--color-accent-2-500);
+  --vc-stem: var(--color-accent-2-700);
+  --vc-track: var(--color-neutral-200);
+  --vc-listen: var(--color-accent-2-500);
+  --vc-user: var(--color-accent-2-700);
+  --vc-think: var(--color-neutral-400);
+  --vc-speak: var(--color-accent-500);
+  --vc-bubble-user: var(--color-accent-2-100);
+  --vc-bubble-user-ink: var(--color-accent-2-900);
+  --vc-bubble-bot: #fffaf1;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .vc-backdrop,
+  :root:not([data-theme="light"]) .vc-avatar-host {
+    --vc-bg: #1d1a17;
+    --vc-glow-1: color-mix(in srgb, var(--color-accent-700) 34%, transparent);
+    --vc-glow-2: color-mix(in srgb, var(--color-accent-2-800) 45%, transparent);
+    --vc-surface: #27231f;
+    --vc-field: #1d1a17;
+    --vc-line: #3a342d;
+    --vc-ink: #f3e9da;
+    --vc-muted: #a99f8f;
+    --vc-chip: #4a433a;
+    --vc-chip-on-bg: color-mix(in srgb, var(--color-accent-500) 22%, transparent);
+    --vc-chip-on-ink: var(--color-accent-300);
+    --vc-skin: #f2ad80;
+    --vc-cheek: var(--color-accent-500);
+    --vc-feature: #2a2018;
+    --vc-mouth: #5a2c10;
+    --vc-tongue: var(--color-accent-500);
+    --vc-brow: #5a2c10;
+    --vc-leaf: var(--color-accent-2-400);
+    --vc-stem: var(--color-accent-2-500);
+    --vc-track: #332e28;
+    --vc-listen: var(--color-accent-2-400);
+    --vc-user: var(--color-accent-2-300);
+    --vc-think: #6d6458;
+    --vc-speak: var(--color-accent-400);
+    --vc-bubble-user: color-mix(in srgb, var(--color-accent-2-600) 30%, #27231f);
+    --vc-bubble-user-ink: var(--color-accent-2-100);
+    --vc-bubble-bot: #1d1a17;
+  }
+}
+:root[data-theme="dark"] .vc-backdrop,
+:root[data-theme="dark"] .vc-avatar-host {
+  --vc-bg: #1d1a17;
+  --vc-glow-1: color-mix(in srgb, var(--color-accent-700) 34%, transparent);
+  --vc-glow-2: color-mix(in srgb, var(--color-accent-2-800) 45%, transparent);
+  --vc-surface: #27231f;
+  --vc-field: #1d1a17;
+  --vc-line: #3a342d;
+  --vc-ink: #f3e9da;
+  --vc-muted: #a99f8f;
+  --vc-chip: #4a433a;
+  --vc-chip-on-bg: color-mix(in srgb, var(--color-accent-500) 22%, transparent);
+  --vc-chip-on-ink: var(--color-accent-300);
+  --vc-skin: #f2ad80;
+  --vc-cheek: var(--color-accent-500);
+  --vc-feature: #2a2018;
+  --vc-mouth: #5a2c10;
+  --vc-tongue: var(--color-accent-500);
+  --vc-brow: #5a2c10;
+  --vc-leaf: var(--color-accent-2-400);
+  --vc-stem: var(--color-accent-2-500);
+  --vc-track: #332e28;
+  --vc-listen: var(--color-accent-2-400);
+  --vc-user: var(--color-accent-2-300);
+  --vc-think: #6d6458;
+  --vc-speak: var(--color-accent-400);
+  --vc-bubble-user: color-mix(in srgb, var(--color-accent-2-600) 30%, #27231f);
+  --vc-bubble-user-ink: var(--color-accent-2-100);
+  --vc-bubble-bot: #1d1a17;
+}
+
+/* La page dessous ne défile plus pendant la conversation. */
+html.vc-open, html.vc-open body { overflow: hidden; }
+/* La gouttière réservée à la barre de défilement (app.css) laisserait une bande claire à droite. */
+html.vc-open { scrollbar-gutter: auto; }
+
+/* ── Ossature ───────────────────────────────────────────────────────────── */
+.vc-backdrop {
+  position: fixed; inset: 0; z-index: 65; color: var(--vc-ink);
+  background:
+    radial-gradient(60vmax 45vmax at 12% 8%, var(--vc-glow-1), transparent 70%),
+    radial-gradient(55vmax 40vmax at 92% 96%, var(--vc-glow-2), transparent 70%),
+    var(--vc-bg);
+  animation: rise 0.2s ease-out;
+}
+.vc { position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0; font-family: var(--font-body); }
+
+.vc-bar { display: flex; align-items: center; gap: 16px; padding: 22px clamp(20px, 4vw, 56px) 6px; flex: none; }
+.vc-head { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.vc-name { font-family: var(--font-heading); font-size: clamp(26px, 3vw, 34px); line-height: 1.05; }
+.vc-sub { font-size: 13px; color: var(--vc-muted); margin-top: 3px; }
+.vc-tools { display: flex; gap: 10px; }
+.vc .icon-btn { border-color: var(--vc-chip); color: var(--vc-ink); }
+.vc .icon-btn:hover { background: color-mix(in srgb, var(--vc-ink) 7%, transparent); }
+.vc .icon-btn.on { background: var(--vc-chip-on-bg); border-color: var(--color-accent-500); color: var(--vc-chip-on-ink); }
+
+/* Sujets : des pastilles, comme les catégories. */
+.vc-topics {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; flex: none;
+  padding: 8px clamp(20px, 4vw, 56px) 0;
+}
+.vc-topic {
+  padding: 6px 14px; border-radius: 999px; font: 600 13px/1.3 var(--font-body); cursor: pointer;
+  border: 2px solid var(--vc-chip); background: transparent; color: var(--vc-muted);
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.vc-topic:hover { color: var(--vc-ink); border-color: color-mix(in srgb, var(--vc-ink) 35%, transparent); }
+.vc-topic.on { background: var(--vc-chip-on-bg); border-color: var(--color-accent-500); color: var(--vc-chip-on-ink); }
+
+.vc-main { flex: 1; min-height: 0; display: flex; position: relative; }
+
+/* ── Scène : avatar, état, sous-titres ──────────────────────────────────── */
+.vc-stage {
+  flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 8px; padding: 8px 24px 22px; text-align: center;
+}
+.vc-avatar { width: min(330px, 44vh, 74vw); aspect-ratio: 1; flex: none; }
+.vc-face { display: block; width: 100%; height: 100%; overflow: visible; }
+/* L'avatar du moteur (voice-engine.js) : monté dans n'importe quel conteneur, il porte ses teintes
+   (variables ci-dessus) et sa phase (data-phase, is-muted) ; sans taille imposée, il prend la largeur. */
+.vc-avatar-host { display: block; aspect-ratio: 1; max-width: 100%; }
+.vc-avatar .vc-avatar-host { width: 100%; height: 100%; }
+
+.vc-status {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 24px;
+  font-size: 14px; font-weight: 600; color: var(--vc-muted); letter-spacing: 0.01em;
+}
+.vc-status-dot { width: 9px; height: 9px; border-radius: 999px; background: var(--vc-listen); flex: none; }
+[data-phase="user"] .vc-status-dot { background: var(--vc-user); animation: blink 0.9s ease-in-out infinite; }
+[data-phase="thinking"] .vc-status-dot, [data-phase="transcribing"] .vc-status-dot,
+[data-phase="starting"] .vc-status-dot { background: var(--vc-think); animation: blink 1.2s ease-in-out infinite; }
+[data-phase="tool"] .vc-status-dot { background: var(--color-accent-400); animation: blink 1.2s ease-in-out infinite; }
+[data-phase="speaking"] .vc-status-dot { background: var(--vc-speak); }
+[data-phase="error"] .vc-status-dot { background: #b23a2e; }
+.is-muted .vc-status-dot { background: var(--vc-think); animation: none; }
+
+.vc-caption {
+  margin: 4px 0 0; max-width: 760px; min-height: 2.8em;
+  font-size: clamp(19px, 2.1vw, 24px); font-weight: 600; line-height: 1.4; color: var(--vc-ink);
+  transition: opacity 0.4s ease;
+}
+.vc-caption.dim { opacity: 0.5; }
+.vc-you {
+  margin: 0; max-width: 640px; display: flex; gap: 10px; align-items: baseline; justify-content: center;
+  font-size: 15px; line-height: 1.45; color: var(--vc-muted);
+}
+.vc-you[hidden] { display: none; }
+.vc-you-label {
+  flex: none; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 999px; background: var(--vc-bubble-user); color: var(--vc-bubble-user-ink);
+}
+/* En direct : la phrase s'écrit pendant qu'on parle (transcription en flux), trois points qui respirent. */
+.vc-you.live .vc-you-text { color: var(--vc-ink); }
+.vc-you-dots { display: none; gap: 3px; align-self: center; }
+.vc-you.live .vc-you-dots { display: inline-flex; }
+.vc-you-dots i { width: 5px; height: 5px; border-radius: 999px; background: var(--vc-user); animation: vc-dot 1.1s ease-in-out infinite; }
+.vc-you-dots i:nth-child(2) { animation-delay: 0.15s; }
+.vc-you-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes vc-dot { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+.vc-you.live .vc-you-label { background: var(--vc-user); color: var(--vc-bg); }
+
+.vc-notice {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;
+  max-width: 620px; margin-top: 6px; padding: 12px 16px; border-radius: var(--radius-lg);
+  background: var(--vc-surface); border: 2px solid var(--color-accent-400);
+  font-size: 14px; line-height: 1.45; text-align: left;
+}
+.vc-notice[hidden] { display: none; }
+.vc-notice-text { flex: 1 1 260px; }
+.vc-notice.flash { animation: vc-flash 0.7s ease-out; }
+@keyframes vc-flash { 30% { transform: scale(1.03); border-color: var(--color-accent-600); } }
+.vc-progress { flex: 1 1 160px; height: 8px; border-radius: 999px; background: var(--vc-track); overflow: hidden; }
+.vc-progress i { display: block; height: 100%; background: var(--color-accent-500); border-radius: 999px; transition: width 0.2s ease; }
+.vc-notice-pct { font-size: 12px; color: var(--vc-muted); font-variant-numeric: tabular-nums; }
+
+.vc-controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 10px; }
+.vc-ctl {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 8px 10px 8px 14px; border-radius: 999px; font: 600 13px/1.2 var(--font-body);
+  border: 2px solid var(--vc-chip); background: transparent; color: var(--vc-ink);
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+.vc-ctl svg { flex: none; }
+.vc-ctl:hover { background: color-mix(in srgb, var(--vc-ink) 7%, transparent); }
+.vc-ctl:disabled { opacity: 0.4; cursor: default; background: transparent; }
+.vc-ctl.on { background: var(--vc-chip-on-bg); border-color: var(--color-accent-500); color: var(--vc-chip-on-ink); }
+.vc-ctl kbd {
+  font: 600 10.5px/1 var(--font-mono); padding: 3px 6px; border-radius: 6px;
+  background: color-mix(in srgb, var(--vc-ink) 8%, transparent); color: var(--vc-muted);
+}
+.vc-hint { margin: 4px 0 0; font-size: 12.5px; color: var(--vc-muted); max-width: 520px; }
+
+/* ── Avatar ─────────────────────────────────────────────────────────────── */
+.vc-ring-track { fill: none; stroke: var(--vc-track); stroke-width: 2; }
+.vc-ring {
+  fill: none; stroke: var(--vc-listen); stroke-width: 4; stroke-linecap: round;
+  transition: stroke 0.35s ease, opacity 0.35s ease;
+}
+[data-phase="user"] .vc-ring { stroke: var(--vc-user); }
+[data-phase="thinking"] .vc-ring, [data-phase="transcribing"] .vc-ring, [data-phase="starting"] .vc-ring {
+  stroke: var(--vc-think); stroke-dasharray: 10 16;
+}
+[data-phase="tool"] .vc-ring { stroke: var(--color-accent-400); stroke-dasharray: 4 12; }
+[data-phase="speaking"] .vc-ring { stroke: var(--vc-speak); }
+[data-phase="error"] .vc-ring { stroke: #b23a2e; opacity: 0.6; }
+.is-muted .vc-ring, [data-phase="idle"] .vc-ring { stroke: var(--vc-think); opacity: 0.45; }
+
+.vc-shadow { fill: var(--vc-ink); opacity: 0.08; }
+.vc-skin { fill: var(--vc-skin); }
+.vc-sheen { fill: #fff; opacity: 0.22; }
+.vc-cheek { fill: var(--vc-cheek); opacity: 0.45; }
+.vc-eye { fill: var(--vc-feature); }
+.vc-glint { fill: #fff; }
+.vc-brow { fill: none; stroke: var(--vc-brow); stroke-width: 4.5; stroke-linecap: round; }
+.vc-mouth { fill: var(--vc-mouth); stroke: var(--vc-mouth); stroke-width: 3.6; stroke-linejoin: round; stroke-linecap: round; }
+.vc-tongue { fill: var(--vc-tongue); }
+.vc-stem { fill: none; stroke: var(--vc-stem); stroke-width: 3.5; stroke-linecap: round; }
+.vc-leaf { fill: var(--vc-leaf); }
+.vc-leaf-2 { opacity: 0.75; }
+.vc-dots { opacity: 0; }
+.vc-dots circle { fill: var(--vc-think); }
+.vc-lens { opacity: 0; }
+.vc-lens-glass { fill: color-mix(in srgb, var(--vc-surface) 55%, transparent); stroke: var(--vc-ink); stroke-width: 4.5; }
+.vc-lens-handle { stroke: var(--vc-ink); stroke-width: 7; stroke-linecap: round; }
+.vc-lens-shine { fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; opacity: 0.8; }
+
+/* ── Volet : historique, réglages ───────────────────────────────────────── */
+.vc-drawer {
+  flex: none; width: min(380px, 100%); overflow-y: auto; display: flex; flex-direction: column;
+  margin: 8px clamp(14px, 2vw, 24px) 18px 0; padding: 18px 20px;
+  border-radius: var(--radius-lg); background: var(--vc-surface); box-shadow: var(--shadow-md);
+  animation: rise 0.18s ease-out;
+}
+.vc-drawer[hidden], .vc-pane[hidden] { display: none; }
+.vc-pane { display: flex; flex-direction: column; min-height: 0; }
+.vc-pane-title { font-family: var(--font-heading); font-size: 22px; margin: 0 0 12px; }
+
+.vc-history-list { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+.vc-empty { font-size: 13.5px; color: var(--vc-muted); margin: 0; }
+.vc-msg {
+  max-width: 92%; padding: 9px 13px; border-radius: 18px; font-size: 14px; line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.vc-msg-who { display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; opacity: 0.6; margin-bottom: 2px; }
+.vc-msg-user { align-self: flex-end; background: var(--vc-bubble-user); color: var(--vc-bubble-user-ink); border-bottom-right-radius: 6px; }
+.vc-msg-bot { align-self: flex-start; background: var(--vc-bubble-bot); border: 1px solid var(--vc-line); border-bottom-left-radius: 6px; }
+.vc-msg-error { align-self: center; font-size: 12.5px; color: var(--color-accent-700); background: transparent; padding: 2px 8px; }
+.vc-unheard { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--vc-ink) 45%, transparent); opacity: 0.45; }
+.vc-sep { display: flex; align-items: center; gap: 10px; font-size: 11.5px; color: var(--vc-muted); margin: 4px 0; }
+.vc-sep::before, .vc-sep::after { content: ''; flex: 1; height: 2px; border-radius: 999px; background: var(--vc-line); }
+
+.vc-field { padding: 10px 0; border-bottom: 2px solid var(--vc-line); }
+.vc-field:last-child { border-bottom: none; }
+.vc-field-inline { display: flex; align-items: center; gap: 14px; }
+.vc-field-inline > div { flex: 1; min-width: 0; }
+.vc-label { display: block; font-size: 13.5px; font-weight: 600; margin-bottom: 6px; }
+.vc-field-inline .vc-label { margin-bottom: 0; }
+.vc-help { font-size: 12px; color: var(--vc-muted); margin-top: 5px; line-height: 1.45; }
+.vc-row { display: flex; align-items: center; gap: 8px; }
+.vc-row .set-select { flex: 1; width: auto; min-width: 0; }
+.vc .input { background: var(--vc-field); color: var(--vc-ink); border-color: var(--vc-line); }
+.vc .input:hover { border-color: color-mix(in srgb, var(--vc-ink) 35%, transparent); }
+.vc select.input { color-scheme: light dark; }
+.vc .btn-secondary { color: var(--vc-ink); border-color: var(--vc-chip); }
+.vc .btn-small { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.vc-model-free { margin-top: 8px; font-family: var(--font-mono); font-size: 12.5px; }
+.vc-instr { resize: vertical; min-height: 84px; line-height: 1.45; }
+.vc-range { flex: 1; min-width: 0; accent-color: var(--color-accent-500); cursor: pointer; }
+.vc-out { flex: none; min-width: 34px; text-align: right; font: 600 13px/1 var(--font-mono); color: var(--vc-muted); }
+.vc .switch { flex: none; border-color: var(--vc-chip); background: var(--vc-line); }
+.vc .switch.on { background: var(--color-accent-500); border-color: var(--color-accent-500); }
+
+/* Vumètre : le niveau du micro, et le trait qu'il doit franchir pour être pris pour de la parole. */
+.vc-meter { position: relative; height: 10px; margin-top: 10px; border-radius: 999px; background: var(--vc-track); overflow: hidden; }
+.vc-meter-level {
+  position: absolute; inset: 0; transform-origin: left center; transform: scaleX(0);
+  background: var(--vc-listen); border-radius: 999px;
+}
+.vc-meter-level.hot { background: var(--vc-speak); }
+.vc-meter-thr { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1px; border-radius: 2px; background: var(--vc-ink); opacity: 0.7; }
+
+/* Choix en segments (« Couper la parole »). */
+.vc-seg { display: flex; flex-direction: column; gap: 6px; }
+.vc-seg-btn {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; cursor: pointer;
+  padding: 8px 12px; border-radius: 14px; font: 600 13px/1.3 var(--font-body);
+  border: 2px solid var(--vc-chip); background: transparent; color: var(--vc-ink);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.vc-seg-btn::before {
+  content: ''; flex: none; width: 14px; height: 14px; border-radius: 999px; box-sizing: border-box;
+  border: 2px solid var(--vc-chip);
+}
+.vc-seg-btn:hover { background: color-mix(in srgb, var(--vc-ink) 6%, transparent); }
+.vc-seg-btn.on { background: var(--vc-chip-on-bg); border-color: var(--color-accent-500); color: var(--vc-chip-on-ink); }
+.vc-seg-btn.on::before { border: 4px solid var(--color-accent-500); }
+.vc-seg-hint { font-weight: 500; font-size: 11.5px; color: var(--vc-muted); }
+
+/* Modèles de transcription en direct : les lignes .wm-* des Réglages, plus une jauge de progression.
+   Hors overlay (Réglages › Révizator), elles prennent les teintes de l'application. */
+.asr-models { display: flex; flex-direction: column; }
+.asr-row .wm-text { flex: 1; }
+/* « Parakeet v3 · anglais et français · ~650 Mo » : une phrase qui passe à la ligne au besoin, le nom entier. */
+.asr-row .wm-name { display: block; line-height: 1.4; }
+.asr-name { white-space: nowrap; }
+.asr-note { font-size: 12px; color: var(--color-neutral-600); line-height: 1.45; padding: 4px 0; }
+.asr-err { color: var(--color-accent-700); }
+.asr-prog { display: inline-block; width: 90px; height: 7px; border-radius: 999px; background: var(--color-neutral-200); overflow: hidden; }
+.asr-prog i { display: block; height: 100%; border-radius: 999px; background: var(--color-accent-500); transition: width 0.2s ease; }
+.vc .wm-row { border-top-color: var(--vc-line); }
+.vc .wm-size, .vc .wm-note, .vc .wm-state, .vc .asr-note { color: var(--vc-muted); }
+.vc .wm-state.is-ok { color: var(--vc-listen); }
+.vc .asr-err { color: var(--color-accent-400); }
+.vc .asr-prog { background: var(--vc-track); }
+
+/* Fenêtre étroite : le volet passe par-dessus la scène. */
+@media (max-width: 860px) {
+  .vc-drawer { position: absolute; top: 0; right: 0; bottom: 0; margin: 8px 12px 12px; width: min(380px, calc(100% - 24px)); z-index: 2; box-shadow: var(--shadow-lg); }
+  .vc-bar { padding-top: 16px; }
+  .vc-hint { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vc-backdrop, .vc-drawer, .vc-notice.flash { animation: none; }
+  .vc-you-dots i { animation: none; opacity: 0.7; }
+}

@@ -367,6 +367,273 @@
     });
   }
 
+  /* Conversation vocale simulée (moteur voice-engine.js : mode Conversation, Tuteur). `voiceSay` rend le tour aussitôt puis
+     pousse l'évènement `voice` : thinking, une étape `tool` si window.__fakeVoiceTool, les phrases de
+     window.__fakeVoiceReply (tableau, ou 'error' pour un échec), puis done ; window.__fakeVoiceDelay
+     espace les phrases (350 ms). `voiceSpeak` rend un WAV synthétique (voyelles modulées, durée selon
+     le texte) ; window.__fakeVoiceSpeak = 'error' le fait échouer (repli speechSynthesis),
+     window.__fakeVoiceSpeakDelay retarde la réponse. window.__fakeVoiceVoices remplace la liste des voix.
+     Chaque appel est noté dans window.__voiceCalls ({ type, payload, at }). */
+  var shimVoice = { convs: {}, turn: 0 };
+
+  function shimVoiceLog(type, p) {
+    (window.__voiceCalls = window.__voiceCalls || []).push({ type: type, payload: JSON.parse(JSON.stringify(p || {})), at: Date.now() });
+  }
+
+  function shimVoiceSay(p) {
+    var conv = shimVoice.convs[p.conversationId];
+    if (!conv) throw new Error('Conversation terminée : rouvrez le mode Conversation.');
+    var turn = ++shimVoice.turn;
+    conv.turn = turn;
+    var tutor = conv.options && conv.options.mode === 'tutor';
+    var reply = tutor ? shimTutorReply(conv, p) : (window.__fakeVoiceReply || [
+      'Avec plaisir, parlons des volcans !',
+      'Un volcan, c’est une ouverture dans la croûte terrestre par laquelle le magma remonte à la surface.',
+      'Vous voulez qu’on parle d’un volcan en particulier, l’Etna ou le Piton de la Fournaise par exemple ?'
+    ]);
+    var gap = window.__fakeVoiceDelay || 350;
+    var steps = [{ phase: 'thinking' }];
+    if (window.__fakeVoiceTool) steps.push({ phase: 'tool', text: 'Recherche web…' });
+    if (reply === 'error') {
+      steps.push({ phase: 'error', error: 'Claude Code ne répond pas : vérifiez qu’il est connecté.' });
+    } else {
+      var full = '';
+      reply.forEach(function (t) { full += (full ? ' ' : '') + t; steps.push({ phase: 'sentence', text: t, full: full }); });
+      var meta = tutor ? shimTutorMeta(p, full) : null;
+      if (meta) steps.push({ phase: 'meta', meta: meta });
+      steps.push({ phase: 'done', full: full });
+    }
+    steps.forEach(function (st, i) {
+      setTimeout(function () {
+        if (conv.turn !== turn || conv.stopped) return;
+        emit('voice', Object.assign({ conversationId: p.conversationId, turn: turn, text: '', full: '', error: '' }, st));
+      }, 120 + i * gap);
+    });
+    return { turn: turn };
+  }
+
+  /* Mode tutor (Tuteur de Révizator) : réplique anglaise, puis la phase `meta` (traduction, reformulation,
+     aide, fin) entre la dernière phrase et `done`, comme l'hôte. window.__fakeTutorReply (tableau) remplace
+     la réplique ; window.__fakeTutorMeta remplace la meta ('none' : pas de meta). La reformulation
+     factice reprend « since two weeks » → « for two weeks » quand l'apprenant l'a dit. */
+  function shimTutorReply(conv, p) {
+    if (window.__fakeTutorReply) return window.__fakeTutorReply;
+    var t = conv.options.tutor || {}, sc = t.scenario || {};
+    if (/^\s*\(/.test(String(p.text || ''))) {
+      return ['Hi there, welcome!', 'I’m ' + (sc.tutorRole || 'your tutor') + ', so what can I do for you today?'];
+    }
+    if (/since two weeks/i.test(p.text)) return ['Oh, for two weeks, that’s quite a while.', 'How are you finding it so far?'];
+    return ['That sounds really interesting.', 'Could you tell me a little more about it?'];
+  }
+
+  function shimTutorMeta(p, full) {
+    var fm = window.__fakeTutorMeta;
+    if (fm === 'none') return null;
+    if (fm) return fm;
+    var text = String(p.text || '');
+    if (/^\s*\(/.test(text)) return { replyFr: 'Bonjour, bienvenue ! Que puis-je faire pour vous aujourd’hui ? (simulation)', recast: { said: '', better: '' }, tipFr: '', end: false };
+    var m = /since two weeks/i.exec(text);
+    return {
+      replyFr: 'Traduction (simulation) : ' + full,
+      recast: m ? { said: m[0], better: 'for two weeks' } : { said: '', better: '' },
+      tipFr: m ? 'Pour une durée, « for » + durée ; « since » + point de départ.' : '',
+      end: /\b(bye|goodbye)\b/i.test(text)
+    };
+  }
+
+  /* Un WAV mono 16 bits : une « voix » en dents de scie filtrée, modulée en syllabes de 4 à 6 Hz. */
+  function shimVoiceWav(text) {
+    var rate = 22050, secs = Math.max(0.6, Math.min(6, String(text || '').length * 0.055));
+    var n = Math.floor(rate * secs), buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+    function str(o, s) { for (var i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); }
+    str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true);
+    v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    str(36, 'data'); v.setUint32(40, n * 2, true);
+    var lp = 0;
+    for (var i = 0; i < n; i++) {
+      var t = i / rate, f0 = 150 + 25 * Math.sin(t * 2.1);
+      var saw = 2 * ((t * f0) % 1) - 1;
+      lp += 0.18 * (saw - lp);
+      var env = Math.max(0, Math.sin(Math.PI * t * (4 + Math.sin(t * 1.3)))) * Math.min(1, t * 20, (secs - t) * 20);
+      v.setInt16(44 + i * 2, Math.round(lp * env * 0.5 * 32767), true);
+    }
+    var bytes = new Uint8Array(buf), bin = '';
+    for (var k = 0; k < bytes.length; k += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(k, k + 0x8000));
+    return { audio: btoa(bin), ms: Math.round(secs * 1000) };
+  }
+
+  function shimVoiceSpeak(p) {
+    if (window.__fakeVoiceSpeak === 'error') throw new Error('Aucune voix Windows installée.');
+    var out = shimVoiceWav(p.text);
+    var delay = window.__fakeVoiceSpeakDelay || 0;
+    return delay ? new Promise(function (resolve) { setTimeout(function () { resolve(out); }, delay); }) : out;
+  }
+
+  /* Transcription en direct simulée (StreamingAsr de l'hôte, Parakeet v3 en pseudo-flux) : un seul modèle
+     ('parakeet', langues en et fr), téléchargement avec l'avancement (évènement `asr`, `lang` = id du
+     modèle), sessions. window.__fakeAsr impose l'état : un objet { runtime, models } rendu par asrStatus (et
+     modifié par asrDownload / asrRemove ; un état à deux modèles 'en' / 'fr' simule l'hôte d'avant), ou
+     'error' pour un hôte sans transcription en direct (tous les messages asr* échouent). Réglages
+     facultatifs dans ce même objet : startError (asrStart échoue avec ce message), endError (asrEnd
+     échoue), decodeError (évènement `asr` { session, phase:'error', error } au premier paquet, puis asrEnd
+     échoue avec ce message), downloadError (asrDownload rend { ok:false, error }, comme l'hôte), wordMs
+     (audio par mot, 220 ms), partialMs (écart entre deux recalculs, 600 ms), revise ({ mot: 'variante' } :
+     le premier partiel entend la variante, les suivants la corrigent). Partiels « par recalcul » : au plus
+     un toutes les partialMs, quand ≥ 300 ms d'audio nouveau est arrivé, le texte complet de l'énoncé jusque-
+     là (les mots de window.__fakeTranscript, ponctuation et casse comprises, un par wordMs d'audio reçu),
+     poussé par l'évènement `asr` { session, phase:'partial', text } ; il remplace le précédent. asrEnd rend
+     la phrase entière (point final ajouté s'il manque) et remet la session à zéro ; aucun partiel ensuite.
+     Journal : window.__voiceCalls (asrFeed noté { session, samples }). */
+  var shimAsr = {
+    seq: 0, sessions: {},
+    state: {
+      runtime: { downloaded: false, version: '1.13.8', size: 31457280 },
+      models: [
+        { id: 'parakeet', label: 'Parakeet v3 (anglais, français…)', langs: ['en', 'fr'], repo: 'csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8',
+          size: 681574400, downloaded: false, downloading: false, received: 0, total: 0 }
+      ]
+    }
+  };
+
+  function shimAsrState() {
+    var f = window.__fakeAsr;
+    if (f === 'error') throw new Error('Type de message inconnu : transcription en flux absente de cet hôte.');
+    if (f && typeof f === 'object') {
+      if (!Array.isArray(f.models)) f.models = [];
+      if (!f.runtime) f.runtime = { downloaded: f.models.some(function (m) { return m.downloaded; }) };
+      return f;
+    }
+    return shimAsr.state;
+  }
+
+  /* Par id ('parakeet'), sinon le modèle qui sert la langue ; `lang` absent : le premier (modèle unique). */
+  function shimAsrModel(st, lang) {
+    if (lang == null || lang === '') return st.models[0] || null;
+    return st.models.filter(function (m) { return m.id === lang; })[0]
+      || st.models.filter(function (m) { return Array.isArray(m.langs) && m.langs.indexOf(lang) >= 0; })[0] || null;
+  }
+
+  function shimAsrText() {
+    return window.__fakeTranscript != null ? String(window.__fakeTranscript) : 'texte dicté de démonstration';
+  }
+
+  function shimAsrSession(p) {
+    var s = shimAsr.sessions[p.session];
+    if (!s) throw new Error('Session de transcription en direct inconnue : ' + p.session);
+    return s;
+  }
+
+  function shimAsrHandle(type, p) {
+    var st = shimAsrState(), m, s;
+    switch (type) {
+      case 'asrStatus':
+        shimVoiceLog(type, p);
+        return JSON.parse(JSON.stringify({ repo: st.repo || '', runtime: st.runtime, models: st.models }));
+
+      case 'asrDownload':
+        shimVoiceLog(type, p);
+        m = shimAsrModel(st, p.lang);
+        if (!m) throw new Error('Modèle de transcription en direct inconnu : ' + p.lang);
+        return new Promise(function (resolve) {
+          m.downloading = true;
+          [0.25, 0.5, 0.75].forEach(function (f, i) {
+            setTimeout(function () {
+              m.received = Math.round(m.size * f); m.total = m.size;
+              emit('asr', { phase: 'download', lang: m.id, received: m.received, total: m.total });
+            }, 150 * (i + 1));
+          });
+          setTimeout(function () {
+            m.downloading = false;
+            if (st.downloadError) {
+              emit('asr', { phase: 'download-failed', lang: m.id, error: String(st.downloadError) });
+              resolve({ ok: false, error: String(st.downloadError) });
+              return;
+            }
+            m.downloaded = true; st.runtime.downloaded = true;
+            emit('asr', { phase: 'downloaded', lang: m.id });
+            resolve({ ok: true });
+          }, 600);
+        });
+
+      case 'asrRemove':
+        shimVoiceLog(type, p);
+        m = shimAsrModel(st, p.lang);
+        var had = !!(m && m.downloaded);
+        if (m) m.downloaded = false;
+        return { removed: had };
+
+      case 'asrWarm':
+        shimVoiceLog(type, p);
+        window.__asrWarm = (window.__asrWarm || 0) + 1;
+        return {};
+
+      case 'asrStart':
+        shimVoiceLog(type, p);
+        if (st.startError) throw new Error(String(st.startError));
+        m = shimAsrModel(st, p.lang);
+        if (!m || !m.downloaded) throw new Error('Le modèle de transcription en direct (' + p.lang + ') n’est pas téléchargé.');
+        var id = 'asr-' + (++shimAsr.seq);
+        shimAsr.sessions[id] = { lang: p.lang, samples: 0, decoded: 0, decodedAt: 0, partials: 0, gen: 0 };
+        return { session: id };
+
+      case 'asrFeed': {
+        s = shimAsrSession(p);
+        var samples = Math.floor(atob(String(p.pcm || '')).length / 2);
+        shimVoiceLog(type, { session: p.session, samples: samples });
+        s.samples += samples;
+        if (st.decodeError) {
+          if (!s.failed) {
+            s.failed = true;
+            setTimeout(function () { emit('asr', { session: p.session, phase: 'error', error: String(st.decodeError) }); }, 20);
+          }
+          return {};
+        }
+        /* Recalcul : ≥ 300 ms d'audio nouveau et partialMs écoulées depuis le précédent. */
+        var now = Date.now();
+        if (shimAsrText() !== 'error' && s.samples - s.decoded >= 4800 && now - s.decodedAt >= (st.partialMs || 600)) {
+          s.decoded = s.samples; s.decodedAt = now;
+          var words = shimAsrText().split(/\s+/).filter(Boolean);
+          var n = Math.min(words.length, Math.floor(s.samples / 16 / (st.wordMs || 220)));
+          var first = !s.partials++, rv = st.revise || {};
+          var text = words.slice(0, n).map(function (w) { return first && rv[w] ? rv[w] : w; }).join(' ');
+          var gen = s.gen;
+          if (text) setTimeout(function () {
+            if (shimAsr.sessions[p.session] === s && s.gen === gen) emit('asr', { session: p.session, phase: 'partial', text: text });
+          }, 20);
+        }
+        return {};
+      }
+
+      case 'asrEnd': {
+        s = shimAsrSession(p);
+        shimVoiceLog(type, p);
+        s.samples = 0; s.decoded = 0; s.decodedAt = 0; s.partials = 0; s.gen++;
+        var failed = s.failed;
+        s.failed = false;
+        if (failed) throw new Error(String(st.decodeError || 'décodage impossible'));
+        if (st.endError) throw new Error(String(st.endError));
+        var full = shimAsrText();
+        if (full === 'error') throw new Error('Décodage impossible.');
+        full = full.trim();
+        if (full && !/[.!?…]$/.test(full)) full += '.';
+        return { text: full };
+      }
+
+      case 'asrReset':
+        s = shimAsrSession(p);
+        shimVoiceLog(type, p);
+        s.samples = 0; s.decoded = 0; s.decodedAt = 0; s.partials = 0; s.gen++; s.failed = false;
+        return {};
+
+      case 'asrStop':
+        shimVoiceLog(type, p);
+        delete shimAsr.sessions[p.session];
+        return {};
+    }
+    return undefined;
+  }
+
   function shimCall(type, payload) {
     payload = payload || {};
     return new Promise(function (resolve, reject) {
@@ -430,7 +697,10 @@
           articleEnabled: p.articleEnabled, articleTopics: p.articleTopics, articleAiEnabled: p.articleAiEnabled,
           articleModel: p.articleModel, articleEffort: p.articleEffort,
           windowsNotifications: p.windowsNotifications,
-          whisperEnabled: p.whisperEnabled, whisperAuto: p.whisperAuto, whisperModel: p.whisperModel, whisperLanguage: p.whisperLanguage
+          whisperEnabled: p.whisperEnabled, whisperAuto: p.whisperAuto, whisperModel: p.whisperModel, whisperLanguage: p.whisperLanguage,
+          voiceModel: p.voiceModel, voiceEffort: p.voiceEffort, voiceVoice: p.voiceVoice, voiceRate: p.voiceRate,
+          voicePersona: p.voicePersona, voiceTopic: p.voiceTopic, voiceInstructions: p.voiceInstructions, voiceWeb: p.voiceWeb,
+          voiceWhisperModel: p.voiceWhisperModel, voiceSensitivity: p.voiceSensitivity, voiceBargeIn: p.voiceBargeIn
         });
         return {};
 
@@ -686,6 +956,57 @@
         if (tj) tj.stopped = true;
         return { cancelled: !!tj };
       }
+
+      case 'voiceStart': {
+        shimVoiceLog(type, p);
+        Object.keys(shimVoice.convs).forEach(function (k) { shimVoice.convs[k].stopped = true; });
+        var cid = uuid();
+        shimVoice.convs[cid] = { turn: 0, stopped: false, options: p };
+        return { conversationId: cid };
+      }
+
+      case 'voiceSay':
+        shimVoiceLog(type, p);
+        return shimVoiceSay(p);
+
+      case 'voiceInterrupt': {
+        shimVoiceLog(type, p);
+        var vc = shimVoice.convs[p.conversationId];
+        if (vc) vc.turn = -1;
+        return {};
+      }
+
+      case 'voiceStop':
+        shimVoiceLog(type, p);
+        if (shimVoice.convs[p.conversationId]) shimVoice.convs[p.conversationId].stopped = true;
+        delete shimVoice.convs[p.conversationId];
+        return {};
+
+      case 'voiceVoices':
+        shimVoiceLog(type, p);
+        return window.__fakeVoiceVoices || {
+          voices: [
+            { id: 'shim-hortense', name: 'Microsoft Hortense', lang: 'fr-FR', gender: 'female' },
+            { id: 'shim-paul', name: 'Microsoft Paul', lang: 'fr-FR', gender: 'male' },
+            { id: 'shim-zira', name: 'Microsoft Zira', lang: 'en-US', gender: 'female' }
+          ],
+          default: 'shim-hortense'
+        };
+
+      case 'voiceSpeak':
+        shimVoiceLog(type, { text: p.text, voice: p.voice, rate: p.rate });
+        return shimVoiceSpeak(p);
+
+      case 'asrStatus':
+      case 'asrDownload':
+      case 'asrRemove':
+      case 'asrWarm':
+      case 'asrStart':
+      case 'asrFeed':
+      case 'asrEnd':
+      case 'asrReset':
+      case 'asrStop':
+        return shimAsrHandle(type, p);
 
       case 'log':
         console.log('[shim] log', p.level, p.message);

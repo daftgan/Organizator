@@ -340,6 +340,7 @@ public partial class MainWindow : Window
         _scanner = null;
         _perf?.Dispose();
         _perf = null;
+        _bridge?.Shutdown();
 
         Close();
     }

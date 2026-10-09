@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.IO;
-using System.IO.Compression;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -26,7 +25,8 @@ public sealed record TtsLine(string Id, string Voice, string Text);
 ///
 /// <list type="bullet">
 /// <item><description>Rien n'est embarque dans l'exe : les deux DLL natives (onnxruntime 1.28.2 et
-/// sherpa-onnx-c-api, 21 Mo) sont extraites du paquet NuGet du runtime win-x64, le modele est pris
+/// sherpa-onnx-c-api, 21 Mo) sont extraites du paquet NuGet du runtime win-x64 par
+/// <see cref="SherpaRuntime"/> (partage avec la transcription en direct), le modele est pris
 /// fichier par fichier sur le miroir Hugging Face de l'auteur de sherpa-onnx, a une revision epinglee.
 /// Chaque fichier est controle (taille et SHA-256 en dur), ecrit en <c>.part</c> puis renomme : un
 /// fichier present est entier. Un seul telechargement, partage par tous ceux qui l'attendent.</description></item>
@@ -48,7 +48,7 @@ public sealed class TextToSpeech
     /// <summary>Hote virtuel de la WebView sur le cache des phrases synthetisees.</summary>
     public const string Host = "tts.organizator";
 
-    public const string RuntimeVersion = "1.13.8";
+    public const string RuntimeVersion = SherpaRuntime.Version;
     public const string ModelId = "kokoro-v1_0";
     public const string ModelLabel = "Kokoro v1.0";
 
@@ -82,20 +82,10 @@ public sealed class TextToSpeech
     private const string ModelRevision = "f7b96bb6bef5c5da4d3aa4f4e0498fbbf62dc78b";
     private const string ModelBase = "https://huggingface.co/csukuangfj/kokoro-multi-lang-v1_0/resolve/" + ModelRevision + "/";
 
-    // Le paquet NuGet du runtime win-x64, dont on n'extrait que les deux DLL ; son SHA-512 est celui
-    // que NuGet verifie (org.k2fsa.sherpa.onnx.runtime.win-x64.1.13.8.nupkg.sha512).
-    private const string RuntimeUrl = "https://api.nuget.org/v3-flatcontainer/org.k2fsa.sherpa.onnx.runtime.win-x64/1.13.8/org.k2fsa.sherpa.onnx.runtime.win-x64.1.13.8.nupkg";
-    private const long RuntimeSize = 8_535_869;
-    private const string RuntimeSha512 = "7ZpIieyGnrhTBTPDeQsq5S36Qe3wxGHFAB/Hl3Q7zrhJ7ayb4co0oCI+ZY6MDC1p519T3DqUIPRUO6g47GSKkw==";
-    private const string RuntimeEntry = "runtimes/win-x64/native/";
+    // Le runtime (paquet NuGet win-x64, deux DLL controlees) est telecharge et charge par SherpaRuntime.
+    private const long RuntimeSize = SherpaRuntime.DownloadSize;
 
     private sealed record Asset(string Path, long Size, string Sha256);
-
-    private static readonly Asset[] RuntimeFiles =
-    [
-        new("onnxruntime.dll", 17_799_168, "7f66f939a881baf4f46a2216496798edf4a1429878b646d12674aa62f27d8a25"),
-        new("sherpa-onnx-c-api.dll", 4_605_952, "2729a0da3fbd20fb4e14e157f7cc0e00af848b55f04121319d445c138aeba214"),
-    ];
 
     // Petits fichiers d'abord : un echec reseau se voit avant les 325 Mo du modele. espeak-ng-data est
     // reduit aux 9 fichiers de l'anglais (0,8 Mo au lieu de 18) : meme transcription Whisper, US et GB.
@@ -120,34 +110,21 @@ public sealed class TextToSpeech
     private static readonly long ModelSize = ModelFiles.Sum(f => f.Size);
 
     // Le code natif (espeak-ng) borne ses chemins : on garde de la marge sous MAX_PATH.
-    private const int NativePathLimit = 240;
+    private const int NativePathLimit = SherpaRuntime.NativePathLimit;
 
     private static readonly TimeSpan IdleRelease = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan ProgressEvery = TimeSpan.FromMilliseconds(250);
-    private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(60);
 
     // Le gain s'arrete vers 6 fils : au-dela, le calcul deborde sur les coeurs E et LP-E, plus lents.
     private static readonly int Threads = Math.Clamp(Environment.ProcessorCount / 2, 2, 6);
-
-    private static readonly HttpClient Http = new(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(20) })
-    {
-        Timeout = Timeout.InfiniteTimeSpan,
-    };
-
-    // Les DLL natives ne se chargent qu'une fois par processus : le resolveur de DllImport ne se pose
-    // qu'une fois, et une DLL liberee laisserait des appels lies a une adresse morte.
-    private static readonly object NativeLock = new();
-    private static IntPtr _nativeApi;
-    private static string? _nativeDir;
 
     private static readonly FieldInfo? TtsHandle = typeof(OfflineTts).GetField("_handle", BindingFlags.Instance | BindingFlags.NonPublic);
 
     private readonly HostLog _log;
     private readonly string _root;
-    private readonly string _runtimeDir;
+    private readonly SherpaRuntime _runtime;
     private readonly string _modelDir;
     private readonly string _cacheDir;
-    private readonly string _removeMarker;
     private readonly string _version;
     private readonly object _lock = new();
     private readonly object _cacheLock = new();
@@ -161,15 +138,17 @@ public sealed class TextToSpeech
     private long _cacheBytes = -1;
     private int _cacheFiles;
 
-    public TextToSpeech(string dataDir, HostLog log, string version)
+    /// <param name="runtime">Runtime sherpa-onnx partage avec la transcription en direct (un propre sinon).</param>
+    public TextToSpeech(string dataDir, HostLog log, string version, SherpaRuntime? runtime = null)
     {
         _log = log;
         _root = Path.Combine(dataDir, "tts");
-        _runtimeDir = Path.Combine(_root, "runtime-" + RuntimeVersion);
+        _runtime = runtime ?? new SherpaRuntime(dataDir, log, version);
         _modelDir = Path.Combine(_root, ModelId);
         _cacheDir = Path.Combine(_root, "cache");
-        _removeMarker = _runtimeDir + ".remove";
         _version = version;
+        // Le runtime reste tant que les voix sont installees.
+        _runtime.RegisterUser("voix Kokoro", ModelPresent);
         _idle = new Timer(_ => ReleaseIfIdle(), null, Timeout.Infinite, Timeout.Infinite);
 
         try
@@ -182,7 +161,6 @@ public sealed class TextToSpeech
             _log.Warn("TTS : dossier du cache impossible a creer : " + ex.Message);
         }
 
-        DropRemovedRuntime();
         _ = Task.Run(() =>
         {
             try
@@ -323,7 +301,7 @@ public sealed class TextToSpeech
 
     public bool IsReady => RuntimePresent() && ModelPresent();
 
-    private bool RuntimePresent() => !File.Exists(_removeMarker) && AllPresent(RuntimeFiles, _runtimeDir);
+    private bool RuntimePresent() => _runtime.Present;
 
     private bool ModelPresent() => AllPresent(ModelFiles, _modelDir);
 
@@ -392,16 +370,11 @@ public sealed class TextToSpeech
         string? part = null;
         try
         {
-            Directory.CreateDirectory(_runtimeDir);
             Directory.CreateDirectory(_modelDir);
 
-            // Runtime supprime dans cette session (DLL chargees, donc restees) : il resert tel quel.
-            if (File.Exists(_removeMarker))
-            {
-                File.Delete(_removeMarker);
-            }
-
-            var runtimeMissing = !AllPresent(RuntimeFiles, _runtimeDir);
+            // Runtime supprime dans cette session (DLL chargees, donc restees) : il resert tel quel
+            // (SherpaRuntime.EnsureAsync leve la marque d'effacement).
+            var runtimeMissing = !_runtime.FilesPresent;
             var missing = ModelFiles.Where(f => !Present(f, _modelDir)).ToList();
             download.Total = (runtimeMissing ? RuntimeSize : 0) + missing.Sum(f => f.Size);
             _log.Info($"TTS : telechargement des voix ({download.Total / 1_000_000} Mo : "
@@ -409,14 +382,12 @@ public sealed class TextToSpeech
                 + $"{missing.Count} fichiers du modele {ModelId} a la revision {ModelRevision[..8]})");
             EmitDownload(download, "", force: true);
 
-            if (runtimeMissing)
+            // Partage avec la transcription en direct : un seul telechargement, ses octets comptent ici.
+            await _runtime.EnsureAsync(read =>
             {
-                part = Path.Combine(_runtimeDir, "runtime.nupkg.part");
-                await FetchAsync(download, RuntimeUrl, part, RuntimeSize, HashAlgorithmName.SHA512, RuntimeSha512, base64: true, "runtime", ct).ConfigureAwait(false);
-                ExtractRuntime(part);
-                File.Delete(part);
-                part = null;
-            }
+                Interlocked.Add(ref download.Received, read);
+                EmitDownload(download, "runtime", force: false);
+            }, ct).ConfigureAwait(false);
 
             foreach (var asset in missing)
             {
@@ -453,106 +424,13 @@ public sealed class TextToSpeech
     }
 
     /// <summary>Un fichier, en <c>.part</c>, empreinte calculee au fil de l'eau ; le renommage revient a l'appelant.</summary>
-    private async Task FetchAsync(Download download, string url, string part, long size, HashAlgorithmName algorithm,
+    private Task FetchAsync(Download download, string url, string part, long size, HashAlgorithmName algorithm,
         string expected, bool base64, string name, CancellationToken ct)
-    {
-        // Un serveur qui ne repond plus ferait attendre indefiniment : 60 s sans octet, on abandonne.
-        using var stall = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        try
+        => SherpaRuntime.FetchAsync(url, part, size, size, algorithm, expected, base64, name, _version, read =>
         {
-            stall.CancelAfter(StallTimeout);
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.UserAgent.ParseAdd("Organizator/" + _version);
-            using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, stall.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new InvalidOperationException($"le serveur a répondu {(int)response.StatusCode} {response.ReasonPhrase} pour {name}");
-            }
-
-            if (response.Content.Headers.ContentLength is long length && length != size)
-            {
-                throw new InvalidOperationException($"{name} : taille inattendue ({length} octets au lieu de {size})");
-            }
-
-            using var hash = IncrementalHash.CreateHash(algorithm);
-            long received = 0;
-            await using (var source = await response.Content.ReadAsStreamAsync(stall.Token).ConfigureAwait(false))
-            await using (var file = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16, useAsync: true))
-            {
-                var buffer = new byte[1 << 16];
-                while (true)
-                {
-                    stall.CancelAfter(StallTimeout);
-                    var read = await source.ReadAsync(buffer, stall.Token).ConfigureAwait(false);
-                    if (read <= 0)
-                    {
-                        break;
-                    }
-
-                    if (received + read > size)
-                    {
-                        throw new InvalidOperationException($"{name} : plus long que prévu ({size} octets)");
-                    }
-
-                    hash.AppendData(buffer, 0, read);
-                    await file.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
-                    received += read;
-                    Interlocked.Add(ref download.Received, read);
-                    EmitDownload(download, name, force: false);
-                }
-            }
-
-            if (received != size)
-            {
-                throw new InvalidOperationException($"{name} : téléchargement incomplet ({received} octets sur {size})");
-            }
-
-            var digest = hash.GetHashAndReset();
-            var actual = base64 ? Convert.ToBase64String(digest) : Convert.ToHexString(digest).ToLowerInvariant();
-            if (!string.Equals(actual, expected, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException($"{name} : empreinte inattendue (fichier altéré, ou changé sur le serveur)");
-            }
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            throw new InvalidOperationException($"le serveur ne répond plus ({name})");
-        }
-    }
-
-    /// <summary>Les deux DLL win-x64 du paquet NuGet, controlees une a une.</summary>
-    private void ExtractRuntime(string nupkg)
-    {
-        using var zip = ZipFile.OpenRead(nupkg);
-        foreach (var asset in RuntimeFiles)
-        {
-            var entry = zip.GetEntry(RuntimeEntry + asset.Path)
-                ?? throw new InvalidOperationException($"{asset.Path} absent du paquet du runtime");
-            var target = Path.Combine(_runtimeDir, asset.Path);
-            var part = target + ".part";
-            try
-            {
-                using (var source = entry.Open())
-                using (var file = File.Create(part))
-                {
-                    source.CopyTo(file);
-                }
-
-                var info = new FileInfo(part);
-                if (info.Length != asset.Size || !string.Equals(Sha256Of(part), asset.Sha256, StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException($"{asset.Path} : empreinte inattendue dans le paquet du runtime");
-                }
-
-                File.Move(part, target, overwrite: true);
-            }
-            catch
-            {
-                TryDelete(part);
-                throw;
-            }
-        }
-    }
+            Interlocked.Add(ref download.Received, read);
+            EmitDownload(download, name, force: false);
+        }, ct);
 
     private void EmitDownload(Download download, string file, bool force)
     {
@@ -604,7 +482,7 @@ public sealed class TextToSpeech
             return true;
         }
 
-        var anything = Directory.Exists(_modelDir) || (Directory.Exists(_runtimeDir) && !File.Exists(_removeMarker));
+        var anything = Directory.Exists(_modelDir) || _runtime.Installed;
         if (!anything)
         {
             return false;
@@ -618,67 +496,23 @@ public sealed class TextToSpeech
         try
         {
             ReleaseEngines(always: true);
-            await Task.Run(() =>
+            var runtimeRemoved = await Task.Run(() =>
             {
                 if (Directory.Exists(_modelDir))
                 {
                     Directory.Delete(_modelDir, recursive: true);
                 }
 
-                bool loaded;
-                lock (NativeLock)
-                {
-                    loaded = _nativeApi != IntPtr.Zero && string.Equals(_nativeDir, _runtimeDir, StringComparison.OrdinalIgnoreCase);
-                }
-
-                if (loaded)
-                {
-                    File.WriteAllText(_removeMarker, "DLL chargees par le processus : a effacer au prochain demarrage." + Environment.NewLine);
-                }
-                else if (Directory.Exists(_runtimeDir))
-                {
-                    Directory.Delete(_runtimeDir, recursive: true);
-                }
+                // Le runtime ne part que si la transcription en direct n'en a plus besoin.
+                return _runtime.RemoveIfUnused();
             }).ConfigureAwait(false);
 
-            _log.Info("TTS : voix supprimees (modele et runtime)");
+            _log.Info(runtimeRemoved ? "TTS : voix supprimees (modele et runtime)" : "TTS : voix supprimees (modele ; runtime garde)");
             return true;
         }
         finally
         {
             _gate.Release();
-        }
-    }
-
-    /// <summary>Au demarrage, rien n'est encore charge : le runtime supprime la fois precedente s'efface.</summary>
-    private void DropRemovedRuntime()
-    {
-        if (!File.Exists(_removeMarker))
-        {
-            return;
-        }
-
-        lock (NativeLock)
-        {
-            if (_nativeApi != IntPtr.Zero && string.Equals(_nativeDir, _runtimeDir, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-        }
-
-        try
-        {
-            if (Directory.Exists(_runtimeDir))
-            {
-                Directory.Delete(_runtimeDir, recursive: true);
-            }
-
-            File.Delete(_removeMarker);
-            _log.Info("TTS : runtime supprime a la session precedente efface");
-        }
-        catch (Exception ex)
-        {
-            _log.Warn("TTS : effacement du runtime supprime impossible : " + ex.Message);
         }
     }
 
@@ -1102,7 +936,7 @@ public sealed class TextToSpeech
     private Engine LoadEngine(string accent)
     {
         var paths = NativeModelPaths();
-        PrepareNative();
+        _runtime.PrepareNative("Moteur de synthèse absent ou incomplet : supprimez puis retéléchargez les voix.", "TTS");
         var before = PrivateBytes();
         var watch = Stopwatch.StartNew();
         var us = accent == AccentUs;
@@ -1253,7 +1087,7 @@ public sealed class TextToSpeech
             }
         }
 
-        var dir = NativePath(_modelDir);
+        var dir = SherpaRuntime.NativePath(_modelDir, "des voix", "de synthèse");
         var espeak = Path.Combine(dir, "espeak-ng-data");
         var paths = new ModelPaths(
             Path.Combine(dir, "model.onnx"),
@@ -1281,65 +1115,6 @@ public sealed class TextToSpeech
 
         return paths;
     }
-
-    /// <summary>Le chemin tel quel s'il est ASCII et court, sinon son nom court 8.3 ; refus lisible si celui-ci n'y suffit pas.</summary>
-    private static string NativePath(string path)
-    {
-        var full = Path.GetFullPath(path);
-        if (IsAscii(full) && full.Length < NativePathLimit - 60)
-        {
-            return full;
-        }
-
-        var buffer = new StringBuilder(1024);
-        var length = GetShortPathNameW(full, buffer, (uint)buffer.Capacity);
-        var shortPath = length > 0 && length < buffer.Capacity ? buffer.ToString() : "";
-        if (shortPath.Length == 0 || !IsAscii(shortPath))
-        {
-            throw new InvalidOperationException($"Le dossier des voix ({full}) contient des caractères que le moteur de synthèse ne sait pas lire, et Windows n'en donne pas de nom court : "
-                + @"lancez Organizator avec un dossier de données au nom simple (par exemple --data C:\OrganizatorData).");
-        }
-
-        return shortPath;
-    }
-
-    private static bool IsAscii(string value) => value.All(c => c >= 32 && c < 127);
-
-    /// <summary>
-    /// Charge les deux DLL par leur chemin complet — <c>System32\onnxruntime.dll</c> (Windows ML 1.17)
-    /// n'est pas la bonne — et dit au runtime ou trouver <c>sherpa-onnx-c-api</c> ; une fois par processus.
-    /// </summary>
-    private void PrepareNative()
-    {
-        lock (NativeLock)
-        {
-            if (_nativeApi != IntPtr.Zero)
-            {
-                if (!string.Equals(_nativeDir, _runtimeDir, StringComparison.OrdinalIgnoreCase))
-                {
-                    _log.Info("TTS : DLL natives deja chargees depuis " + _nativeDir);
-                }
-
-                return;
-            }
-
-            if (!AllPresent(RuntimeFiles, _runtimeDir) || File.Exists(_removeMarker))
-            {
-                throw new InvalidOperationException("Moteur de synthèse absent ou incomplet : supprimez puis retéléchargez les voix.");
-            }
-
-            NativeLibrary.Load(Path.Combine(_runtimeDir, "onnxruntime.dll"));
-            var api = NativeLibrary.Load(Path.Combine(_runtimeDir, "sherpa-onnx-c-api.dll"));
-            _nativeApi = api;
-            _nativeDir = _runtimeDir;
-            NativeLibrary.SetDllImportResolver(typeof(OfflineTts).Assembly, (name, _, _) =>
-                name.StartsWith("sherpa-onnx-c-api", StringComparison.OrdinalIgnoreCase) ? _nativeApi : IntPtr.Zero);
-            _log.Info("TTS : DLL natives chargees depuis " + _runtimeDir);
-        }
-    }
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern uint GetShortPathNameW(string longPath, StringBuilder shortPath, uint length);
 
     // ------------------------------------------------------------------ cache
 
@@ -1814,12 +1589,6 @@ public sealed class TextToSpeech
     }
 
     // ------------------------------------------------------------------ outils
-
-    private static string Sha256Of(string path)
-    {
-        using var stream = File.OpenRead(path);
-        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-    }
 
     private void Emit(JsonObject payload)
     {
