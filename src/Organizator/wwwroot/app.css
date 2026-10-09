@@ -187,6 +187,12 @@ textarea, input, button { font-family: inherit; }
 /* Un nom de dépôt trop long est tronqué, jamais le numéro de la PR. */
 .pr-chip-repo { min-width: 0; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pr-chip-more { font-size: 12px; font-weight: 600; color: var(--color-neutral-600); cursor: default; }
+/* Consommation de la tâche : discrète, à droite des autres pastilles ; le détail est dans l'infobulle. */
+.usage-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px;
+  color: var(--color-neutral-600); font-size: 11.5px; font-variant-numeric: tabular-nums; cursor: default; white-space: nowrap;
+}
+.usage-chip svg { flex: none; opacity: 0.7; }
 .doing-chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 3px 12px; border-radius: 999px;
   background: var(--color-accent-2-700); color: var(--color-bg); font-size: 12px; font-weight: 600;
@@ -914,6 +920,12 @@ textarea.chat-note { flex: 1; resize: vertical; line-height: 1.45; font-size: 13
   font-family: var(--font-mono); font-size: 11px; color: rgba(255, 255, 255, 0.45);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.convo-usage {
+  display: flex; align-items: center; gap: 5px; margin-top: 3px;
+  font-family: var(--font-mono); font-size: 11px; color: rgba(255, 255, 255, 0.55);
+}
+.convo-usage svg { flex: none; opacity: 0.75; }
+.panel-kicker-usage { text-transform: none; letter-spacing: 0.02em; color: rgba(255, 255, 255, 0.55); }
 .convo-state {
   display: flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 600; margin-bottom: 4px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -975,17 +987,82 @@ textarea.chat-note { flex: 1; resize: vertical; line-height: 1.45; font-size: 13
 .artifact-caret { display: inline-block; transition: transform 0.15s ease; }
 .artifact-toggle.open .artifact-caret { transform: rotate(90deg); }
 .artifact-files { margin-top: 8px; }
+.artifact-toggle-sub { margin-left: auto; font-size: 11px; color: rgba(255, 255, 255, 0.35); }
+/* Le rapport le plus récemment cité, quand il y en a plusieurs. */
+.artifact-row.is-latest { border-color: rgba(246, 160, 107, 0.55); background: rgba(246, 160, 107, 0.08); }
+.artifact-latest {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--color-accent-300); margin-bottom: 2px;
+}
 .artifact-back { margin-top: 18px; }
 
-.log { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 18px 20px; font-family: var(--font-mono); font-size: 13px; line-height: 1.65; }
-.msg { margin-bottom: 16px; }
-.msg-role { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 5px; }
+/* Journal : une conversation à lire, pas un terminal — police de l'interface, vos messages dans
+   une bulle, les réponses de l'agent en Markdown rendu, ses outils regroupés sur une ligne. */
+.log { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 18px 20px 10px; font-family: var(--font-body); font-size: 13.5px; line-height: 1.6; }
+.msg { margin-bottom: 20px; }
+.msg-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.msg-role { font-size: 10.5px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; }
+.msg-time { font-family: var(--font-mono); font-size: 10.5px; color: rgba(255, 255, 255, 0.32); }
 .msg.user .msg-role { color: var(--color-accent-300); }
 .msg.assistant .msg-role { color: var(--color-accent-2-300); }
-.msg-body { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
-.msg.user .msg-body { color: rgba(255, 255, 255, 0.95); }
-.msg.assistant .msg-body { color: rgba(255, 255, 255, 0.8); }
-.tool-line { color: rgba(255, 255, 255, 0.45); }
+.msg-body { overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
+.msg.user .msg-body {
+  color: rgba(255, 255, 255, 0.92); background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08); border-left: 3px solid var(--color-accent-400);
+  border-radius: 10px; padding: 10px 14px;
+}
+.msg.assistant .msg-body { color: rgba(255, 255, 255, 0.84); }
+.msg-body.is-folded {
+  max-height: 290px; overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent);
+  mask-image: linear-gradient(to bottom, #000 72%, transparent);
+}
+.msg-unfold {
+  margin-top: 6px; padding: 2px 0; border: none; background: none; cursor: pointer;
+  color: var(--color-accent-300); font: inherit; font-size: 12px;
+}
+.msg-unfold:hover { color: #fff; }
+.md p { margin: 0 0 8px; }
+.md > :last-child { margin-bottom: 0; }
+.md strong { color: rgba(255, 255, 255, 0.96); font-weight: 650; }
+.md code {
+  font-family: var(--font-mono); font-size: 0.86em; padding: 1px 5px; border-radius: 4px;
+  background: rgba(255, 255, 255, 0.09); color: rgba(255, 255, 255, 0.92);
+}
+.md-h { color: rgba(255, 255, 255, 0.96); font-weight: 700; line-height: 1.35; margin: 14px 0 6px; }
+.md > .md-h:first-child { margin-top: 0; }
+.md-h1 { font-size: 16px; }
+.md-h2 { font-size: 15px; }
+.md-h3 { font-size: 14px; }
+.md-h4 { font-size: 13.5px; color: rgba(255, 255, 255, 0.85); }
+.md-code {
+  margin: 6px 0 10px; padding: 10px 12px; overflow-x: auto; white-space: pre;
+  background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.5; color: rgba(255, 255, 255, 0.86);
+}
+.md-code code { background: none; padding: 0; font-size: inherit; }
+.md-list { margin: 0 0 8px; padding-left: 22px; }
+.md-list li { margin: 2px 0; }
+.md-list li::marker { color: rgba(255, 255, 255, 0.4); }
+.md-list .md-d1 { margin-left: 16px; }
+.md-list .md-d2 { margin-left: 32px; }
+.md-list .md-d3 { margin-left: 48px; }
+.md-box { font-family: var(--font-mono); color: rgba(255, 255, 255, 0.6); }
+.md-quote { margin: 0 0 8px; padding: 2px 0 2px 12px; border-left: 3px solid rgba(255, 255, 255, 0.2); color: rgba(255, 255, 255, 0.7); }
+.md-hr { border: none; border-top: 1px solid rgba(255, 255, 255, 0.12); margin: 12px 0; }
+.md-table-wrap { overflow-x: auto; margin: 6px 0 10px; }
+.md-table { border-collapse: collapse; font-size: 12.5px; }
+.md-table th, .md-table td { border: 1px solid rgba(255, 255, 255, 0.14); padding: 4px 9px; text-align: left; vertical-align: top; }
+.md-table th { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.92); font-weight: 650; }
+.md-link { color: var(--color-accent-2-300); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.md-link:hover { color: #fff; }
+.msg-tools {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 2px 0 9px;
+  font-family: var(--font-mono); font-size: 11px; color: rgba(255, 255, 255, 0.46);
+}
+.msg-tools-icon { display: flex; opacity: 0.75; margin-right: 1px; }
+.msg-tool { padding: 1px 7px; border-radius: 999px; background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.08); }
+.msg-tool-n { margin-left: 3px; opacity: 0.7; }
 .log-note { color: rgba(255, 255, 255, 0.5); font-size: 12.5px; line-height: 1.7; }
 
 .panel-foot { padding: 14px 16px; background: rgba(255, 255, 255, 0.05); display: flex; gap: 10px; align-items: center; flex: none; }
@@ -1624,3 +1701,35 @@ html { scrollbar-gutter: stable; }
 .dictate-btn:hover { background: rgba(255, 255, 255, 0.25); }
 .dictate-ok { background: var(--color-accent-500); color: #fff; }
 .dictate-ok:hover { background: var(--color-accent-600); }
+
+/* ── Pages (File, Révizator…) ─────────────────────────────────────────────
+   L'onglet de page se pose à côté du titre ; une autre page que la file masque la recherche, les
+   filtres, les revues, les catégories et la file elle-même, et rend son corps dans #page-host. La
+   cloche, les remarques et les réglages restent dans la barre, à droite de la barre propre à la page. */
+.brand { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; min-width: 0; }
+.page-tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--color-neutral-200); border: 1px solid var(--color-divider); align-self: center; margin-top: 6px; }
+.page-tabs[hidden] { display: none; }
+.page-tab {
+  display: inline-flex; align-items: center; gap: 7px; border: 0; cursor: pointer; background: transparent;
+  padding: 7px 15px; border-radius: 999px; font-family: var(--font-heading); font-size: 15px; line-height: 1.1;
+  color: var(--color-neutral-700); transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.page-tab svg { display: block; flex: none; }
+.page-tab:hover { color: var(--color-text); background: color-mix(in srgb, var(--color-text) 6%, transparent); }
+.page-tab.on { background: var(--color-surface); color: var(--color-accent-700); box-shadow: var(--shadow-sm); }
+.page-tab-badge {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; display: inline-grid; place-items: center;
+  font-family: var(--font-body); font-size: 11px; font-weight: 700; background: var(--color-accent); color: var(--color-bg);
+}
+.page-bar { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 10px; }
+.page-bar[hidden] { display: none; }
+.app[data-page]:not([data-page="queue"]) .filter-right { flex: 0 0 auto; min-width: 0; }
+.app[data-page]:not([data-page="queue"]) #search,
+.app[data-page]:not([data-page="queue"]) #filters-btn,
+.app[data-page]:not([data-page="queue"]) #reviews-btn,
+.app[data-page]:not([data-page="queue"]) #cats-btn,
+.app[data-page]:not([data-page="queue"]) #filter-chips,
+.app[data-page]:not([data-page="queue"]) .list-wrap { display: none !important; }
+.page-host { flex: 1; min-width: 0; padding: 0 clamp(20px, 4vw, 56px) 60px; }
+.page-host[hidden] { display: none; }
+.page-error { padding: 24px; border-radius: var(--radius-lg); background: var(--color-surface); color: var(--color-accent-800); }

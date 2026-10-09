@@ -29,6 +29,8 @@ public static class InheritedEnvironment
         "CLAUDE_CODE_MESSAGING_TOKEN",
         "CLAUDE_CODE_EXECPATH",
         "CLAUDE_CODE_SSE_PORT",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
         "CLAUDE_PID",
         "CLAUDE_EFFORT",
         "AI_AGENT",

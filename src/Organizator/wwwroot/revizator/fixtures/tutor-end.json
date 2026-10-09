@@ -1,0 +1,45 @@
+{
+  "reply": "Thank you, Dagan, and enjoy your stay in Edinburgh! I hope the rain stops so you can enjoy the city tomorrow.",
+  "replyFr": "Merci, Dagan, et bon séjour à Édimbourg ! J’espère que la pluie s’arrêtera pour que vous puissiez profiter de la ville demain.",
+  "recast": {
+    "said": "",
+    "better": ""
+  },
+  "tipFr": "",
+  "end": true,
+  "summary": {
+    "errors": [
+      {
+        "said": "I have a reservation since two weeks",
+        "better": "I’ve had a reservation for two weeks",
+        "explanationFr": "Avec une durée, on emploie “for” (pendant). “Since” indique un point de départ, comme “since Monday”.",
+        "category": "gram.for_since_ago"
+      },
+      {
+        "said": "at what hour is the breakfast",
+        "better": "What time is breakfast?",
+        "explanationFr": "Dans une question, on met l’auxiliaire avant le sujet. “What time” est plus naturel que “at what hour”, et on n’utilise pas “the” avec breakfast.",
+        "category": "gram.question.aux"
+      },
+      {
+        "said": "if there is a parking",
+        "better": "if there is parking",
+        "explanationFr": "“Parking” est un nom indénombrable en anglais, on ne met donc pas d’article “a”.",
+        "category": "gram.countable"
+      },
+      {
+        "said": "I am very exciting to visit the city tomorrow",
+        "better": "I’m really excited to visit the city tomorrow",
+        "explanationFr": "Les adjectifs en -ed décrivent un ressenti (“excited”). Les adjectifs en -ing décrivent ce qui le cause (“exciting”).",
+        "category": "gram.other"
+      }
+    ],
+    "phrases": [
+      "What time is breakfast served?",
+      "Is there parking available?",
+      "I’m really looking forward to visiting the city."
+    ],
+    "feedbackFr": "Vous avez très bien mené cette réception : vous avez donné votre nom, demandé les horaires du petit-déjeuner et le parking, le tout de façon claire et polie. Vos réponses étaient complètes et faciles à suivre, ce qui est un vrai atout à l’oral. Pour progresser, travaillez surtout les questions avec l’auxiliaire et la distinction entre “excited” et “exciting”.",
+    "levelEstimate": "B1"
+  }
+}

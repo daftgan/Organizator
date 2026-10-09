@@ -1,0 +1,160 @@
+{
+  "id": "exercise-20261008-9c3e71",
+  "kind": "exercise",
+  "createdAt": 1791453600000,
+  "day": "2026-10-08",
+  "model": "claude-sonnet-5-5",
+  "ms": 27870,
+  "cost": 0.031,
+  "turns": 2,
+  "skill": "listen",
+  "type": "listen.partial_dictation",
+  "title": "The little words you don’t hear",
+  "level": "B1",
+  "minutes": 10,
+  "instructionsFr": "Écoutez chaque phrase et écrivez les mots manquants : ce sont souvent de petits mots grammaticaux, réduits ou liés à l’oral. Réécoutez autant que nécessaire, au besoin au ralenti. Les deux dernières phrases sont à écrire en entier.",
+  "topic": "Formes faibles et contractions",
+  "passage": {
+    "title": "",
+    "paragraphs": [],
+    "glossary": []
+  },
+  "script": {
+    "title": "",
+    "contextFr": "",
+    "speakers": [],
+    "lines": []
+  },
+  "items": [
+    {
+      "id": "i1",
+      "kind": "partial_dictation",
+      "prompt": "So I think ___ have to put the release ___ until next Wednesday.",
+      "promptFr": "",
+      "options": [],
+      "answer": "we’ll | off",
+      "accepted": [
+        "we will | off"
+      ],
+      "explanationFr": "« we’ll » se réduit presque à /wɪl/ ; dans « put off » (repousser), la particule « off » est vite avalée.",
+      "audioText": "So I think we’ll have to put the release off until next Wednesday.",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i2",
+      "kind": "partial_dictation",
+      "prompt": "Honestly, ___ rather do that ___ rush a fix.",
+      "promptFr": "",
+      "options": [],
+      "answer": "I’d | than",
+      "accepted": [
+        "I would | than"
+      ],
+      "explanationFr": "« I’d rather » (je préfère) : le « d » s’entend à peine. « than » se réduit à /ðən/.",
+      "audioText": "Honestly, I’d rather do that than rush a fix.",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i3",
+      "kind": "partial_dictation",
+      "prompt": "We ___ have tested it before the release.",
+      "promptFr": "",
+      "options": [],
+      "answer": "should",
+      "accepted": [],
+      "explanationFr": "« should have » se dit /ˈʃʊdəv/ : le « have » devient un simple /əv/, et beaucoup entendent « should of ».",
+      "audioText": "We should have tested it before the release.",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i4",
+      "kind": "partial_dictation",
+      "prompt": "___ you send me the slides ___ the meeting?",
+      "promptFr": "",
+      "options": [],
+      "answer": "Could | after",
+      "accepted": [
+        "Can | after"
+      ],
+      "explanationFr": "« Could you » se lie en /ˈkʊdʒu/ : le d et le y fusionnent en « dj ».",
+      "audioText": "Could you send me the slides after the meeting?",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i5",
+      "kind": "partial_dictation",
+      "prompt": "There ___ a lot of people ___ the call this morning.",
+      "promptFr": "",
+      "options": [],
+      "answer": "were | on",
+      "accepted": [],
+      "explanationFr": "« were » se réduit à /wə/ en milieu de phrase ; on est « on a call » (au téléphone, en visio), pas « in ».",
+      "audioText": "There were a lot of people on the call this morning.",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i6",
+      "kind": "partial_dictation",
+      "prompt": "I ___ know about it ___ last week.",
+      "promptFr": "",
+      "options": [],
+      "answer": "didn’t | until",
+      "accepted": [
+        "did not | until"
+      ],
+      "explanationFr": "« didn’t » garde un t final à peine audible ; « until » se réduit à /ənˈtɪl/. « not … until » = ne… qu’à partir de.",
+      "audioText": "I didn’t know about it until last week.",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i7",
+      "kind": "dictation",
+      "prompt": "",
+      "promptFr": "",
+      "options": [],
+      "answer": "Can you let the sales team know?",
+      "accepted": [],
+      "explanationFr": "« let someone know » = prévenir quelqu’un. Écoutez la liaison « let the » : le t disparaît presque.",
+      "audioText": "Can you let the sales team know?",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i8",
+      "kind": "dictation",
+      "prompt": "",
+      "promptFr": "",
+      "options": [],
+      "answer": "It’s been a while since we last talked.",
+      "accepted": [
+        "It has been a while since we last talked."
+      ],
+      "explanationFr": "« It’s been » = it has been : la contraction réduit « has » à un simple /s/.",
+      "audioText": "It’s been a while since we last talked.",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    }
+  ]
+}

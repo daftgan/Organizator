@@ -1,0 +1,16 @@
+{
+  "reply": "Ah, yes, Dagan, I have you right here, two nights, all set. Could I see your passport, and a card for the deposit, please?",
+  "replyFr": "Ah, oui, Dagan, je vous ai bien là, pour deux nuits, tout est prêt. Puis-je voir votre passeport, et une carte pour la caution, s'il vous plaît ?",
+  "recast": {
+    "said": "I have a reservation since two weeks",
+    "better": "I made a reservation two weeks ago"
+  },
+  "tipFr": "",
+  "end": false,
+  "summary": {
+    "errors": [],
+    "phrases": [],
+    "feedbackFr": "",
+    "levelEstimate": ""
+  }
+}

@@ -376,8 +376,17 @@
     });
   }
 
+  /* Simulations ajoutées par les pages (Révizator) : shimRegister(type, fn) ; fn(payload, emit) rend la
+     réponse, une Promise, ou undefined pour laisser la main au shim d’origine (ex. « transcribe »). */
+  var shimExtra = Object.create(null);
+  function shimRegister(type, fn) { if (type && typeof fn === 'function') shimExtra[type] = fn; }
+
   function shimHandle(type, p) {
     var settings, data;
+    if (shimExtra[type]) {
+      var extra = shimExtra[type](p, emit);
+      if (extra !== undefined) return extra;
+    }
     switch (type) {
       case 'getState':
         data = lsRead(LS_DATA, { tasks: [], types: [], convos: [], remarks: [], notifications: [], lastType: null });
@@ -484,6 +493,9 @@
           ? window.__fakeSessions.filter(function (s) { return s.sessionId === p.sessionId; })[0]
           : null;
         if (fake && fake.exists === false) return { exists: false, title: fake.title || '', messages: [] };
+        /* window.__fakeLogs[sessionId] impose les messages du journal (essais du rendu). */
+        var log = window.__fakeLogs && window.__fakeLogs[p.sessionId];
+        if (Array.isArray(log)) return { exists: true, title: (fake && fake.title) || 'Session de démonstration', messages: log.slice() };
         return {
           exists: true,
           title: (fake && fake.title) || 'Session de démonstration',
@@ -692,4 +704,9 @@
     on: on,
     isShim: !wv
   };
+  /* Hors WebView2 seulement : de quoi simuler les messages d’une page et pousser ses événements. */
+  if (!wv) {
+    window.bridge.shimRegister = shimRegister;
+    window.bridge.shimEmit = emit;
+  }
 })();

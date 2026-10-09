@@ -106,6 +106,10 @@
     /* Résultat d'une revue de code : une planchette cochée. */
     review: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4.5H7a2 2 0 0 0-2 2V19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6.5a2 2 0 0 0-2-2h-2"></path><rect x="9" y="3" width="6" height="3.5" rx="1"></rect><path d="M8.5 12.5l1.6 1.6 2.9-2.9M8.5 17.5h7"></path></svg>',
     eye: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"></path><circle cx="12" cy="12" r="3"></circle></svg>',
+    /* Consommation d'une tâche (jauge). */
+    gauge: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 17.5a8.5 8.5 0 1 1 15 0"></path><path d="M12 13.5l4-4.5"></path></svg>',
+    /* Appels d'outils regroupés dans le journal. */
+    tool: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L3.5 17.3a1.8 1.8 0 0 0 2.6 2.6l5.8-5.8a4 4 0 0 0 5.2-5.4l-2.6 2.6-2.4-.4-.4-2.4z"></path></svg>',
     pullRequest: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2.4"></circle><circle cx="6" cy="19" r="2.4"></circle><circle cx="18" cy="19" r="2.4"></circle><path d="M6 7.5v9M18 16.5V11a3 3 0 0 0-3-3h-4.5M13 5.5L10.5 8 13 10.5"></path></svg>',
     /* Sous-tâches : le crochet « ↳ » de l'avancement, et le même avec un plus pour en ajouter une. */
     subtask: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4v9a3 3 0 0 0 3 3h11"></path><path d="M15 12l4 4-4 4"></path></svg>',
@@ -160,7 +164,7 @@
       catFormOpen: false, catName: '', catPalette: 'terracotta',
       catsOpen: false, catKeywordDraft: {}, catKeywordEdit: '',
       settingsOpen: false, settingsTab: 'display',
-      termTaskId: null, termConvId: null, artifactView: false, artifactConvId: null, artifactFilesOpen: false,
+      termTaskId: null, termConvId: null, artifactView: false, artifactConvId: null, artifactFilesOpen: false, artifactWorkOpen: false,
       /* Lecteur d'artefacts ouvert : { path, cwd, view, busy, error, back } — voir « Lecteur d'artefacts » */
       reader: null,
       newConvoOpen: false, newConvoCwd: '', newConvoPrompt: '', newConvoProvider: 'claude', newConvoModel: '', newConvoEffort: '', newConvoKeywords: [], newConvoCustom: false,
@@ -179,6 +183,8 @@
       /* Aperçu des PRs Bitbucket dans Nouvelle tâche : { busy, error, host, account, jiraUrl, groups, checked } */
       prImport: null,
       transcript: null,
+      /* Messages longs dépliés dans le journal (clé : conversation, rang, longueur). */
+      logOpen: {},
       sessionExists: {},
       activity: {},
       usage: { reports: null, busy: false, fetchedAt: 0, error: '' },
@@ -1272,6 +1278,8 @@
   /* Un champ qui se dicte : une zone de texte du rendu (data-focus-key la retrouve après un rendu). */
   function dictTarget(el) {
     if (!el || el.tagName !== 'TEXTAREA' || el.disabled || el.readOnly) return null;
+    /* data-dict="off" : un champ où l'on doit écrire soi-même (exercice d'écrit de Révizator). */
+    if (el.getAttribute('data-dict') === 'off') return null;
     return el.getAttribute('data-focus-key') ? el : null;
   }
 
@@ -1347,8 +1355,11 @@
       toast('Dictée impossible : pas d’accès au micro dans cette fenêtre.');
       return;
     }
+    if (voiceRec) { toast('Le micro est déjà pris par un enregistrement en cours.'); return; }
     var d = dict = {
       key: field.getAttribute('data-focus-key'), el: field, phase: 'starting', job: uid('dj'),
+      /* data-dict-lang="en" : un champ qui se dicte toujours dans cette langue (Révizator), quel que soit le réglage. */
+      lang: field.getAttribute('data-dict-lang') || '',
       selStart: field.selectionStart, selEnd: field.selectionEnd, chunks: [], startedAt: Date.now(), level: 0
     };
     /* Le modèle se télécharge (premier usage) ou se charge pendant qu'on parle. */
@@ -1438,7 +1449,7 @@
     if (!blob.size || Date.now() - d.startedAt < 400) { endDictation(d); toast('Rien d’enregistré.'); return; }
     wav16k(blob).then(readBase64).then(function (data) {
       if (d.cancelled) return null;
-      return bridge.call('transcribe', { job: d.job, data: data, model: S.settings.whisperModel, language: S.settings.whisperLanguage }, 3600000);
+      return bridge.call('transcribe', { job: d.job, data: data, model: S.settings.whisperModel, language: d.lang || S.settings.whisperLanguage }, 3600000);
     }).then(function (r) {
       if (r && !d.cancelled) insertDictation(d, r.text);
     }, function (e) {
@@ -1477,6 +1488,78 @@
       v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
     }
     return new Blob([buf], { type: 'audio/wav' });
+  }
+
+  /* Un enregistrement du micro pour une autre page que la file (exercice oral, tuteur) : même chaîne
+     que la dictée — getUserMedia, MediaRecorder, WAV 16 kHz mono — mais sans champ ni transcription.
+     opts : { maxMs, noiseSuppression, onTick(ms, level) }. Rend { stop() → Promise<{ data (base64),
+     seconds, blob }>, cancel(), startedAt } ; une seule prise de son à la fois, dictée comprise. */
+  var voiceRec = null;
+
+  function recordVoice(opts) {
+    opts = opts || {};
+    var md = navigator.mediaDevices;
+    if (dict || voiceRec) return Promise.reject(new Error('le micro est déjà en cours d’enregistrement'));
+    if (!md || !md.getUserMedia || typeof MediaRecorder === 'undefined') return Promise.reject(new Error('pas d’accès au micro dans cette fenêtre'));
+    var r = voiceRec = { chunks: [], level: 0, startedAt: Date.now(), done: null };
+    var maxMs = Math.max(1000, Math.min(Number(opts.maxMs) || 300000, DICTATE_MAX_MS));
+    var ns = opts.noiseSuppression !== false;
+    return md.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: ns, autoGainControl: true } })
+      .then(function (stream) {
+        if (voiceRec !== r) { stream.getTracks().forEach(function (t) { t.stop(); }); throw new Error('enregistrement annulé'); }
+        r.stream = stream;
+        r.recorder = new MediaRecorder(stream);
+        r.recorder.ondataavailable = function (ev) { if (ev.data && ev.data.size) r.chunks.push(ev.data); };
+        var stopped = new Promise(function (resolve) { r.recorder.onstop = resolve; });
+        r.recorder.start(1000);
+        try {
+          r.ctx = new (window.AudioContext || window.webkitAudioContext)();
+          r.analyser = r.ctx.createAnalyser();
+          r.analyser.fftSize = 1024;
+          r.ctx.createMediaStreamSource(stream).connect(r.analyser);
+          r.wave = new Float32Array(r.analyser.fftSize);
+        } catch (err) { r.analyser = null; }
+        r.startedAt = Date.now();
+        var finish = function (keep) {
+          if (r.done) return r.done;
+          if (r.timer) { clearInterval(r.timer); r.timer = null; }
+          try { if (r.recorder.state !== 'inactive') r.recorder.stop(); } catch (e) { /* déjà arrêté */ }
+          var seconds = (Date.now() - r.startedAt) / 1000;
+          r.done = stopped.then(function () {
+            if (r.stream) { r.stream.getTracks().forEach(function (t) { t.stop(); }); r.stream = null; }
+            if (r.ctx) { try { r.ctx.close(); } catch (e) { /* déjà fermé */ } r.ctx = null; }
+            if (voiceRec === r) voiceRec = null;
+            if (!keep) throw new Error('enregistrement annulé');
+            var blob = new Blob(r.chunks, { type: (r.recorder && r.recorder.mimeType) || 'audio/webm' });
+            if (!blob.size || seconds < 0.4) throw new Error('rien d’enregistré');
+            return wav16k(blob).then(function (wav) {
+              return readBase64(wav).then(function (data) { return { data: data, seconds: seconds, blob: wav }; });
+            });
+          });
+          return r.done;
+        };
+        r.timer = setInterval(function () {
+          var ms = Date.now() - r.startedAt;
+          if (r.analyser) {
+            r.analyser.getFloatTimeDomainData(r.wave);
+            var sum = 0;
+            for (var i = 0; i < r.wave.length; i++) sum += r.wave[i] * r.wave[i];
+            r.level = Math.max(Math.min(1, Math.sqrt(sum / r.wave.length) * 5), r.level * 0.8);
+          }
+          if (opts.onTick) { try { opts.onTick(ms, r.level); } catch (e) { /* affichage seulement */ } }
+          if (ms >= maxMs && opts.onLimit) { try { opts.onLimit(); } catch (e) { /* idem */ } }
+          if (ms >= maxMs) finish(true);
+        }, 100);
+        return {
+          startedAt: r.startedAt,
+          level: function () { return r.level; },
+          stop: function () { return finish(true); },
+          cancel: function () { finish(false)['catch'](function () { /* annulé */ }); }
+        };
+      }, function (e) {
+        if (voiceRec === r) voiceRec = null;
+        throw new Error(micError(e));
+      });
   }
 
   /* Au curseur — ou là où il était au départ si l'on a cliqué ailleurs —, avec les espaces qu'il faut
@@ -2729,20 +2812,46 @@
 
   function isReport(path) { return REPORT_EXT[extOf(path)] === 1; }
 
-  /* `kind` : 'report' pour les livrables seuls, 'file' pour le reste, absent pour tout. */
+  /* Ce qu'on ne vient jamais lire : notes de mémoire et réglages de Claude (…\.claude\…), fichiers
+     temporaires et scratchpads des agents, chemins restés en variable ($SP\…). */
+  function isScratchPath(path) {
+    var s = String(path || '').replace(/\//g, '\\').toLowerCase();
+    return /\$/.test(s) || /(^|\\)\.claude\\/.test(s) || /(^|\\)scratchpad\\/.test(s) || /(^|\\)(tmp|temp)\\/.test(s);
+  }
+
+  /* Le rapport d'une conversation, c'est le document que l'agent principal nomme dans une réponse
+     finale (« rapport écrit dans review-UDM-1601.md ») : l'hôte le marque `cited`. Les autres
+     documents — notes intermédiaires des sous-agents, brouillons, mémoire — sont des documents de
+     travail, gardés à portée mais repliés. Une liste relevée avant ce marquage (pas de `cited`
+     du tout) retient les documents de la session elle-même, hors brouillons. */
+  function mainReport(artifact, legacy) {
+    if (artifact.action === 'deleted' || isScratchPath(artifact.path)) return false;
+    return legacy ? !artifact.agent : artifact.cited > 0;
+  }
+
+  /* `kind` : 'report' pour les rapports (livrables cités), 'work' pour les autres documents,
+     'doc' pour les deux, 'file' pour le reste (le code touché en chemin), absent pour tout. */
   function artifactEntries(convs, kind) {
     var entries = [];
     convs.forEach(function (c) {
-      artifactsOf(c).forEach(function (artifact) {
+      var list = artifactsOf(c);
+      var legacy = !list.some(function (a) { return a && a.cited != null; });
+      list.forEach(function (artifact) {
         if (!artifact || !artifact.path) return;
-        var report = isReport(artifact.path);
-        if ((kind === 'report' && !report) || (kind === 'file' && report)) return;
+        var doc = isReport(artifact.path);
+        var main = doc && mainReport(artifact, legacy);
+        if (kind === 'report' && !main) return;
+        if (kind === 'work' && (!doc || main)) return;
+        if (kind === 'doc' && !doc) return;
+        if (kind === 'file' && doc) return;
         entries.push({
           path: String(artifact.path),
           action: String(artifact.action || 'modified'),
           tool: String(artifact.tool || 'outil'),
           agent: String(artifact.agent || ''),
-          report: report,
+          report: doc,
+          main: main,
+          cited: Number(artifact.cited) || 0,
           cwd: String(c.cwd || ''),
           convoId: c.id,
           convoTitle: c.title || 'Nouvelle session'
@@ -2752,33 +2861,153 @@
     return entries;
   }
 
-  function artifactRowHtml(artifact) {
+  /* ── Consommation ───────────────────────────────────────────────────────
+     Avec les fichiers produits, l'hôte relève ce qu'a consommé chaque session (`convo.usage`) : les
+     jetons de chaque appel du modèle, sous-agents compris, et leur coût au tarif public de l'API —
+     ce qu'aurait coûté la session facturée à l'usage ; l'abonnement, lui, compte en quotas. Copilot
+     donne ses requêtes premium, et ses jetons dans le bilan qu'il écrit à la fermeture. */
+  function normalizeUsage(u) {
+    if (!u || typeof u !== 'object') return null;
+    function n(v) { v = Number(v); return isFinite(v) && v > 0 ? v : 0; }
+    var out = {
+      input: n(u.input), output: n(u.output), cacheRead: n(u.cacheRead), cacheWrite: n(u.cacheWrite),
+      cost: n(u.cost), unpriced: n(u.unpriced), premium: n(u.premium),
+      models: (Array.isArray(u.models) ? u.models : []).filter(function (m) { return m && m.model; }).slice(0, 8).map(function (m) {
+        return { model: String(m.model), tokens: n(m.tokens), cost: n(m.cost) };
+      })
+    };
+    return usageTokens(out) || out.premium ? out : null;
+  }
+
+  function usageTokens(u) { return u ? u.input + u.output + u.cacheRead + u.cacheWrite : 0; }
+
+  function sameUsage(a, b) { return JSON.stringify(a || null) === JSON.stringify(b || null); }
+
+  /* Somme de plusieurs conversations ; null si rien n'a été consommé. */
+  function usageOf(convs) {
+    var sum = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, unpriced: 0, premium: 0, models: [], convos: 0 };
+    var byModel = {};
+    convs.forEach(function (c) {
+      var u = c && c.usage;
+      if (!u) return;
+      sum.convos++;
+      ['input', 'output', 'cacheRead', 'cacheWrite', 'cost', 'unpriced', 'premium'].forEach(function (k) { sum[k] += u[k] || 0; });
+      (u.models || []).forEach(function (m) {
+        var x = byModel[m.model] || (byModel[m.model] = { model: m.model, tokens: 0, cost: 0 });
+        x.tokens += m.tokens; x.cost += m.cost;
+      });
+    });
+    if (!sum.convos) return null;
+    sum.models = Object.keys(byModel).map(function (k) { return byModel[k]; }).sort(function (a, b) { return b.cost - a.cost || b.tokens - a.tokens; });
+    return usageTokens(sum) || sum.premium ? sum : null;
+  }
+
+  function fmtNum(v, digits) {
+    return v.toLocaleString('fr-FR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  }
+
+  function fmtCost(d) {
+    if (d < 0.005) return '< 0,01 $';
+    return fmtNum(d, d < 10 ? 2 : (d < 100 ? 1 : 0)) + ' $';
+  }
+
+  function fmtTokens(n) {
+    if (n < 1000) return Math.round(n) + '';
+    if (n < 1e6) return fmtNum(n / 1e3, n < 1e4 ? 1 : 0) + ' k';
+    if (n < 1e9) return fmtNum(n / 1e6, n < 1e7 ? 1 : 0) + ' M';
+    return fmtNum(n / 1e9, 1) + ' Md';
+  }
+
+  function premiumText(p) { return fmtNum(p, p % 1 ? 1 : 0) + ' req. premium'; }
+
+  /* « ≈ 2,40 $ · 18 M jetons », « 3 req. premium · 99 M jetons ». */
+  function usageText(u) {
+    var parts = [];
+    if (u.cost > 0) parts.push('≈ ' + fmtCost(u.cost));
+    if (u.premium > 0) parts.push(premiumText(u.premium));
+    var tokens = usageTokens(u);
+    if (tokens) parts.push(fmtTokens(tokens) + ' jetons');
+    return parts.join(' · ');
+  }
+
+  function usageTip(u, what) {
+    var lines = [what + ' : ' + usageText(u)];
+    if (u.cost > 0) lines.push('Coût estimé au tarif public de l’API Anthropic (l’abonnement compte en quotas, pas en dollars).');
+    if (usageTokens(u)) {
+      lines.push('Jetons : ' + fmtTokens(u.input) + ' en entrée, ' + fmtTokens(u.output) + ' en sortie, '
+        + fmtTokens(u.cacheRead) + ' lus dans le cache, ' + fmtTokens(u.cacheWrite) + ' écrits dans le cache.');
+    }
+    if (u.premium > 0) lines.push('Copilot : ' + premiumText(u.premium) + ' décomptées par GitHub.');
+    u.models.slice(0, 4).forEach(function (m) {
+      lines.push('· ' + m.model + ' : ' + fmtTokens(m.tokens) + ' jetons' + (m.cost > 0 ? ', ≈ ' + fmtCost(m.cost) : ''));
+    });
+    if (u.unpriced > 0) lines.push(fmtTokens(u.unpriced) + ' jetons d’un modèle sans tarif connu, non chiffrés.');
+    return lines.join('\n');
+  }
+
+  /* Pastille de la carte : la tâche, et pour une parente ses sous-tâches avec. */
+  function usageChipHtml(t, convs) {
+    var all = convs;
+    var kids = isSub(t) ? [] : childrenOf(t.id);
+    if (kids.length) {
+      var ids = {};
+      kids.forEach(function (k) { ids[k.id] = true; });
+      all = convs.concat(S.data.convos.filter(function (c) { return ids[c.taskId]; }));
+    }
+    var u = usageOf(all);
+    if (!u) return '';
+    return '<span class="usage-chip" title="' + esc(usageTip(u, kids.length ? 'Consommation de la tâche et de ses sous-tâches' : 'Consommation de la tâche')
+      + '\n' + u.convos + (u.convos > 1 ? ' conversations' : ' conversation')) + '">' + ICON.gauge
+      + '<span>' + esc(usageText(u)) + '</span></span>';
+  }
+
+  /* Rapports d'un ensemble de conversations : un par fichier (le même rapport cité par deux
+     conversations n'en fait qu'un), le plus récemment cité en tête. */
+  function reportsOf(convs) {
+    var seen = {}, out = [];
+    artifactEntries(convs, 'report').forEach(function (a) {
+      var key = artifactFullPath(a.path, a.cwd).toLowerCase();
+      var had = seen[key];
+      if (had) { if (a.cited > had.cited) { out[out.indexOf(had)] = a; seen[key] = a; } return; }
+      seen[key] = a;
+      out.push(a);
+    });
+    return out.sort(function (a, b) { return b.cited - a.cited; });
+  }
+
+  function artifactRowHtml(artifact, latest) {
     var openable = artifact.action !== 'deleted';
     var tag = openable ? 'button' : 'div';
     var folder = folderOf(artifact.path);
-    /* « écrit par <agent> » : le fichier vient d'un sous-agent de la session, pas de l'agent principal. */
-    var meta = (ARTIFACT_ACTIONS[artifact.action] || artifact.action) + (artifact.agent ? ' par ' + artifact.agent : '')
+    /* « écrit par <agent> » : le fichier vient d'un sous-agent de la session, pas de l'agent principal.
+       Un rapport dit quand l'agent l'a cité pour la dernière fois. */
+    var meta = (artifact.main && artifact.cited > 1 ? 'cité ' + fmtTime(artifact.cited) + ' · ' : '')
+      + (ARTIFACT_ACTIONS[artifact.action] || artifact.action) + (artifact.agent ? ' par ' + artifact.agent : '')
       + (folder ? ' · ' + folder : '');
     var attributes = openable
-      ? ' type="button" class="artifact-row artifact-openable" data-act="open-artifact" data-path="' + esc(artifact.path)
+      ? ' type="button" class="artifact-row artifact-openable' + (latest ? ' is-latest' : '') + '" data-act="open-artifact" data-path="' + esc(artifact.path)
         + '" data-cwd="' + esc(artifact.cwd) + '" title="Lire ici"'
       : ' class="artifact-row artifact-deleted" title="Ce fichier a été supprimé"';
     return '<' + tag + attributes + '>'
       + '<span class="artifact-row-icon">' + ICON.artifacts + '</span>'
-      + '<div class="artifact-main"><div class="artifact-title" title="' + esc(artifact.path) + '">' + esc(lastSegment(artifact.path)) + '</div>'
+      + '<div class="artifact-main">' + (latest ? '<div class="artifact-latest">Dernier rapport</div>' : '')
+      + '<div class="artifact-title" title="' + esc(artifact.path) + '">' + esc(lastSegment(artifact.path)) + '</div>'
       + '<div class="artifact-meta">' + esc(meta) + '</div></div>'
       + (openable ? '<span class="artifact-open-hint">Lire</span>' : '')
       + '</' + tag + '>';
   }
 
-  /* La carte ne porte l'icône que si un rapport est sorti de la tâche : les fichiers de code
-     touchés en chemin se consultent depuis le panneau, ils n'ont pas à encombrer la file. */
+  /* La carte ne porte l'icône que si la tâche a rendu un rapport : brouillons et fichiers de code
+     se consultent depuis le panneau, ils n'ont pas à encombrer la file. Un seul rapport s'ouvre
+     d'un clic dans le lecteur ; avec plusieurs, le panneau les liste, le plus récent en tête. */
   function artifactBtnHtml(t, convs) {
-    var count = artifactEntries(convs, 'report').length;
+    var reports = reportsOf(convs);
+    var count = reports.length;
     if (!count) return '';
+    var tip = count > 1 ? count + ' rapports — le dernier : ' + lastSegment(reports[0].path) : 'Lire le rapport : ' + lastSegment(reports[0].path);
     return '<button type="button" class="icon-btn artifact-btn has" data-act="open-artifacts" data-id="' + esc(t.id)
-      + '" title="' + esc(count + (count > 1 ? ' rapports produits' : ' rapport produit')) + '">'
-      + ICON.artifacts + '<span class="artifact-count">' + esc(count) + '</span></button>';
+      + '" title="' + esc(tip + '\nMaj + clic : tous les fichiers de la tâche') + '">'
+      + ICON.artifacts + (count > 1 ? '<span class="artifact-count">' + esc(count) + '</span>' : '') + '</button>';
   }
 
   /* Rapports de revue de la tâche, le plus probable en tête : un Markdown nommé review-… ou revue-…
@@ -2789,8 +3018,11 @@
 
   function reviewReportsOf(convs) {
     var seen = {};
-    var list = artifactEntries(convs, 'report').filter(function (a) {
+    /* Tous les documents : un rapport de revue écrit par le « rapporteur » d'une équipe et jamais
+       cité par l'agent principal reste un rapport de revue. */
+    var list = artifactEntries(convs, 'doc').filter(function (a) {
       var name = lastSegment(a.path);
+      if (isScratchPath(a.path)) return false;
       if (a.action === 'deleted' || !REVIEW_NAME.test(name) || !/^(md|markdown)$/.test(extOf(name))) return false;
       var full = artifactFullPath(a.path, a.cwd).toLowerCase();
       if (seen[full]) return false;
@@ -2958,10 +3190,16 @@
   function render() {
     var t0 = perfNow();
     renderPass(function () {
+      var page = currentPage();
       $('#app').classList.toggle('compact', !!S.settings.compact);
+      $('#app').setAttribute('data-page', page);
       $('#shell').classList.toggle('with-panel', !!S.ui.termTaskId);
-      renderFilters();
-      renderList();
+      renderPageTabs();
+      if (page === 'queue') {
+        renderFilters();
+        renderList();
+      }
+      renderPageBody(page);
       renderPanel();
       renderReader();
       renderDialogs();
@@ -2973,6 +3211,121 @@
     });
     syncDictate();
     perfRender(t0);
+  }
+
+  /* ── Pages ───────────────────────────────────────────────────────────
+     La file est la page d'accueil. D'autres pages (Révizator, dans revizator/core.js) s'enregistrent
+     par window.__organizator.registerPage avant le premier rendu : un onglet dans l'en-tête, un corps
+     rendu dans #page-host à la place des filtres et de la file, leurs actions (data-act), leurs rôles
+     de saisie (data-role) et, au besoin, un onglet des Réglages. Le panneau, le lecteur, les dialogues,
+     la cloche et les cartes de l'en-tête restent communs. La page ouverte est retenue d'un lancement
+     à l'autre (localStorage : une commodité d'affichage, rien d'important n'en dépend). */
+  var PAGES = [], pageShownKey = null, booted = false;
+  var PAGE_INPUT = Object.create(null), PAGE_CHANGE = Object.create(null), PAGE_KEYS = [];
+  var EXTRA_SETTINGS = Object.create(null);
+  var PAGE_STORE_KEY = 'organizator.page';
+
+  function pageDef(id) {
+    for (var i = 0; i < PAGES.length; i++) if (PAGES[i].id === id) return PAGES[i];
+    return null;
+  }
+
+  function currentPage() {
+    var p = S.ui.page;
+    return p && p !== 'queue' && pageDef(p) ? p : 'queue';
+  }
+
+  function renderPageTabs() {
+    var nav = $('#page-tabs');
+    if (!nav) return;
+    if (!PAGES.length) { setHtml(nav, ''); nav.hidden = true; return; }
+    var cur = currentPage();
+    var all = [{ id: 'queue', label: 'File', title: 'La file de tâches' }].concat(PAGES);
+    nav.hidden = false;
+    setHtml(nav, all.map(function (p) {
+      var on = p.id === cur;
+      return '<button type="button" role="tab" class="page-tab' + (on ? ' on' : '') + '" data-act="go-page" data-page="' + esc(p.id) + '"'
+        + ' aria-selected="' + (on ? 'true' : 'false') + '"' + (p.title ? ' title="' + esc(p.title) + '"' : '') + '>'
+        + (p.icon || '') + '<span>' + esc(p.label) + '</span>'
+        + (p.badge ? pageBadgeHtml(p) : '') + '</button>';
+    }).join(''));
+  }
+
+  function pageBadgeHtml(p) {
+    var b = '';
+    try { b = p.badge(); } catch (e) { b = ''; }
+    return b ? '<span class="page-tab-badge">' + esc(b) + '</span>' : '';
+  }
+
+  function renderPageBody(page) {
+    var host = $('#page-host');
+    if (!host) return;
+    var def = page === 'queue' ? null : pageDef(page);
+    var bar = $('#page-bar');
+    if (bar) {
+      bar.hidden = !(def && def.renderBar);
+      if (bar.hidden) setHtml(bar, '');
+      else { try { def.renderBar(bar); } catch (e) { setHtml(bar, ''); } }
+    }
+    host.hidden = !def;
+    if (!def) { if (pageShownKey) { host.innerHTML = ''; host.rvHtml = null; } pageShownKey = null; return; }
+    var enter = pageShownKey !== def.id;
+    pageShownKey = def.id;
+    try { def.render(host, enter); } catch (e) {
+      host.innerHTML = '<div class="page-error">Affichage impossible : ' + esc(e && e.message) + '</div>';
+      host.rvHtml = null;
+      if (window.console) console.error(e);
+    }
+  }
+
+  function goPage(id, quiet) {
+    var next = id && id !== 'queue' && pageDef(id) ? id : 'queue';
+    var prev = currentPage();
+    if (next === prev) { if (!quiet) render(); return; }
+    var pd = pageDef(prev), nd = pageDef(next);
+    if (pd && pd.onHide) { try { pd.onHide(); } catch (e) { /* page fautive : on change quand même */ } }
+    S.ui.page = next;
+    try { localStorage.setItem(PAGE_STORE_KEY, next); } catch (e) { /* stockage refusé : la page n'est pas retenue */ }
+    window.scrollTo(0, 0);
+    if (nd && nd.onShow) { try { nd.onShow(); } catch (e) { /* idem */ } }
+    render();
+  }
+
+  function registerPage(def) {
+    if (!def || !def.id || def.id === 'queue' || pageDef(def.id) || typeof def.render !== 'function') return null;
+    PAGES.push(def);
+    if (!S.ui.page) {
+      try { S.ui.page = localStorage.getItem(PAGE_STORE_KEY) || ''; } catch (e) { S.ui.page = ''; }
+    }
+    if (booted) render();
+    return pageApi;
+  }
+
+  /* Actions et rôles des pages : un préfixe propre à chacune évite les collisions avec la file. */
+  function addPageAction(name, fn) { if (name && typeof fn === 'function' && !ACTIONS[name]) ACTIONS[name] = fn; }
+  function addPageInput(role, fn) { if (role && typeof fn === 'function') PAGE_INPUT[role] = fn; }
+  function addPageChange(role, fn) { if (role && typeof fn === 'function') PAGE_CHANGE[role] = fn; }
+  function addPageKey(fn) { if (typeof fn === 'function') PAGE_KEYS.push(fn); }
+
+  /* Un onglet de plus dans les Réglages : { id, label, lead, html(settings), onOpen() }. */
+  function addSettingsTab(tab) {
+    if (!tab || !tab.id || EXTRA_SETTINGS[tab.id] || typeof tab.html !== 'function') return;
+    EXTRA_SETTINGS[tab.id] = tab;
+    var at = SETTINGS_TABS.map(function (t) { return t.id; }).indexOf('folders');
+    SETTINGS_TABS.splice(at < 0 ? SETTINGS_TABS.length : at, 0, { id: tab.id, label: tab.label, lead: tab.lead || '' });
+  }
+
+  function openSettingsTab(id) {
+    S.ui.settingsOpen = true;
+    if (id) S.ui.settingsTab = id;
+    render();
+    var x = EXTRA_SETTINGS[settingsTab()];
+    if (x && x.onOpen) x.onOpen();
+  }
+
+  /* Un dialogue, le lecteur ou la cloche ouverts gardent le clavier pour eux. */
+  function overlayOpen() {
+    return !!(S.ui.settingsOpen || S.ui.catsOpen || S.ui.composerOpen || S.ui.chat || S.ui.reader || S.ui.notifsOpen);
   }
 
   /* ── Rendus de fond ──────────────────────────────────────────────────
@@ -3001,7 +3354,8 @@
     if (activityTimer) { clearTimeout(activityTimer); activityTimer = null; }
     var t0 = perfNow();
     renderPass(function () {
-      renderList();
+      /* Sur une autre page, la file n'est pas affichée : rien à redessiner, les notifications suivent quand même. */
+      if (currentPage() === 'queue') renderList();
       renderPanel();
       renderRemarksBtn();
       renderReviewsBtn();
@@ -3231,6 +3585,7 @@
         + (kidSt ? '<span class="sub-st st-' + esc(kidSt) + '"></span>' : '')
         + '<span class="sub-caret">' + ICON.caret + '</span></button>');
     }
+    h.push(usageChipHtml(t, convs));
     h.push('</div>');
 
     if (editing) {
@@ -3633,7 +3988,7 @@
     var pending = feedback ? pendingRemarks().length : 0;
     return '<div class="convo-list">' + convs.map(function (c) {
       var artifactCount = artifactsOf(c).length;
-      var reportCount = artifactEntries([c], 'report').length;
+      var reportCount = reportsOf([c]).length;
       return '<div class="convo">'
         + '<button type="button" class="convo-open" data-act="resume-convo" data-id="' + esc(c.id)
         + '" title="Reprendre cette session dans PowerShell">'
@@ -3646,6 +4001,8 @@
         + stateHtml(c)
         + saidHtml(c)
         + '<div class="convo-meta">' + esc(convoMeta(c)) + '</div>'
+        + (c.usage ? '<div class="convo-usage" title="' + esc(usageTip(c.usage, 'Consommation de la conversation')) + '">'
+          + ICON.gauge + '<span>' + esc(usageText(c.usage)) + '</span></div>' : '')
         + '</button>'
         + (pending ? '<button type="button" class="convo-btn" data-act="send-remarks-here" data-id="' + esc(c.id)
           + '" title="Envoyer les remarques en attente dans cette session">↪</button>' : '')
@@ -3662,16 +4019,28 @@
   function artifactsPanelHtml(taskId) {
     var selected = S.ui.artifactConvId ? convoById(S.ui.artifactConvId) : null;
     var convs = selected && selected.taskId === taskId ? [selected] : convosOf(taskId);
-    var reports = artifactEntries(convs, 'report');
+    var reports = reportsOf(convs);
+    var work = artifactEntries(convs, 'work');
     var files = artifactEntries(convs, 'file');
     var h = ['<div class="panel-body">'];
-    h.push('<div class="panel-kicker">' + (selected ? 'Rapports de la session' : 'Rapports produits') + ' · ' + reports.length + '</div>');
+    h.push('<div class="panel-kicker">' + (selected ? 'Rapports de la session' : 'Rapports') + ' · ' + reports.length + '</div>');
     if (reports.length) {
-      h.push('<div class="artifact-list">' + reports.map(artifactRowHtml).join('') + '</div>');
+      h.push('<div class="artifact-list">' + reports.map(function (a, i) { return artifactRowHtml(a, i === 0 && reports.length > 1); }).join('') + '</div>');
     } else {
-      h.push('<div class="panel-note">' + (files.length
-        ? 'Aucun document produit : l’agent n’a touché que des fichiers de code.'
+      h.push('<div class="panel-note">' + (work.length || files.length
+        ? 'Aucun rapport : l’agent n’a cité aucun document dans ses réponses. Ce qu’il a écrit en chemin est ci-dessous.'
         : 'Aucun fichier produit n’a encore été détecté dans les sessions de cette tâche.') + '</div>');
+    }
+
+    /* Brouillons, notes des sous-agents, mémoire : à portée, mais repliés. */
+    if (work.length) {
+      h.push('<button type="button" class="artifact-toggle' + (S.ui.artifactWorkOpen ? ' open' : '')
+        + '" data-act="toggle-artifact-work"><span class="artifact-caret">›</span>'
+        + esc(work.length + (work.length > 1 ? ' documents de travail' : ' document de travail'))
+        + '<span class="artifact-toggle-sub">brouillons, notes des sous-agents, mémoire</span></button>');
+      if (S.ui.artifactWorkOpen) {
+        h.push('<div class="artifact-list artifact-files">' + work.map(function (a) { return artifactRowHtml(a); }).join('') + '</div>');
+      }
     }
 
     if (files.length) {
@@ -3679,7 +4048,7 @@
         + '" data-act="toggle-artifact-files"><span class="artifact-caret">›</span>'
         + esc(files.length + (files.length > 1 ? ' fichiers modifiés' : ' fichier modifié')) + '</button>');
       if (S.ui.artifactFilesOpen) {
-        h.push('<div class="artifact-list artifact-files">' + files.map(artifactRowHtml).join('') + '</div>');
+        h.push('<div class="artifact-list artifact-files">' + files.map(function (a) { return artifactRowHtml(a); }).join('') + '</div>');
       }
     }
 
@@ -3698,7 +4067,8 @@
       h.push('<button type="button" class="new-convo-btn" data-act="new-convo">+ Nouvelle conversation</button>');
     }
 
-    h.push('<div class="panel-kicker">Conversations</div>');
+    var spent = usageOf(convs);
+    h.push('<div class="panel-kicker">Conversations' + (spent ? '<span class="panel-kicker-usage" title="' + esc(usageTip(spent, 'Consommation de la tâche')) + '"> · ' + esc(usageText(spent)) + '</span>' : '') + '</div>');
     if (!convs.length) {
       h.push('<div class="panel-note">Aucune conversation pour cette tâche.</div>');
     } else {
@@ -3788,16 +4158,177 @@
     return '<div class="panel-body">' + h.join('') + '</div>';
   }
 
-  /* Le corps d'un message est rendu ligne par ligne : l'hôte fusionne les
-     entrées assistant consécutives, si bien qu'un message mêle du texte et
-     des lignes « [outil : X] », rendues atténuées. Les sauts de ligne sont
-     conservés tels quels (.msg-body est en white-space: pre-wrap). */
-  var TOOL_LINE = /^\s*\[outil\s*:/;
+  /* ── Journal ────────────────────────────────────────────────────────────
+     Le journal se lit comme une conversation : vos messages dans une bulle, les réponses de
+     l'agent rendues en Markdown (titres, listes, code, tableaux, citations, liens), et ses appels
+     d'outils — que l'hôte écrit « [outil : X] », une ligne chacun — regroupés en une ligne
+     discrète (« Read ×3 · Edit · Bash »). Le rendu se fait ici, texte échappé d'abord : rien de
+     ce que l'agent écrit ne devient du HTML actif, seuls les liens http(s) deviennent cliquables
+     (ouverts dans le navigateur). Un message très long — la tâche entière et ses pièces jointes,
+     une liste de remarques — se replie après LOG_FOLD_LINES lignes ; « Afficher tout » le déplie. */
+  var TOOL_LINE = /^\s*\[outil\s*:\s*([^\]]*)\]\s*$/;
+  var LIST_LINE = /^(\s*)([-*+•]|\d{1,3}[.)])\s+(.*)$/;
+  var LOG_FOLD_LINES = 14;
+  var LOG_FOLD_CHARS = 1400;
+  /* Rendu Markdown d'un message, par texte : le journal est relu toutes les deux secondes. */
+  var logHtmlMemo = {};
+  var logHtmlMemoSize = 0;
 
-  function msgBodyHtml(txt) {
-    return String(txt == null ? '' : txt).split('\n').map(function (line) {
-      return TOOL_LINE.test(line) ? '<span class="tool-line">' + esc(line) + '</span>' : esc(line);
-    }).join('\n');
+  function mdLinkHtml(url, label) {
+    return '<a class="md-link" draggable="false" data-act="open-url" data-url="' + esc(url)
+      + '" title="' + esc(url) + '">' + esc(label) + '</a>';
+  }
+
+  /* Une ligne : code entre accents graves, liens, gras, italique, barré. Le code et les liens sont
+     mis de côté avant l'échappement, pour que leur contenu ne soit pas réinterprété. */
+  function mdInline(raw) {
+    var keep = [];
+    function hold(html) { keep.push(html); return '\u0000' + (keep.length - 1) + '\u0000'; }
+    var s = String(raw == null ? '' : raw).replace(/\u0000/g, '');
+    s = s.replace(/`([^`\n]+)`/g, function (m, code) { return hold('<code>' + esc(code) + '</code>'); });
+    s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, function (m, label, url) { return hold(mdLinkHtml(url, label)); });
+    s = s.replace(/https?:\/\/[^\s<>"'`\u0000]+/g, function (m) {
+      var url = m.replace(/[.,;:!?)\]]+$/, '');
+      return hold(mdLinkHtml(url, url)) + m.slice(url.length);
+    });
+    s = esc(s)
+      .replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^\w])__([^_\n]+?)__(?!\w)/g, '$1<strong>$2</strong>')
+      .replace(/(^|[^\w*])\*([^*\s][^*\n]*?)\*(?![\w*])/g, '$1<em>$2</em>')
+      .replace(/~~([^~\n]+?)~~/g, '<del>$1</del>');
+    return s.replace(/\u0000(\d+)\u0000/g, function (m, i) { return keep[+i]; });
+  }
+
+  /* Appels d'outils consécutifs : un nom par outil, dans l'ordre d'apparition, avec leur nombre.
+     Un outil MCP (« mcp__bitbucket__get_diff ») se lit par son dernier segment. */
+  function logToolsHtml(names) {
+    var order = [], n = {};
+    names.forEach(function (x) { if (!n[x]) { n[x] = 0; order.push(x); } n[x]++; });
+    return '<div class="msg-tools" title="' + esc(names.length + (names.length > 1 ? ' appels d’outils : ' : ' appel d’outil : ') + order.join(', ')) + '">'
+      + '<span class="msg-tools-icon">' + ICON.tool + '</span>'
+      + order.map(function (x) {
+        var short = /^mcp__/.test(x) ? x.split('__').pop() : x;
+        return '<span class="msg-tool">' + esc(short) + (n[x] > 1 ? '<span class="msg-tool-n">×' + n[x] + '</span>' : '') + '</span>';
+      }).join('') + '</div>';
+  }
+
+  function mdTableHtml(rows) {
+    function cells(line) {
+      return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); });
+    }
+    var head = cells(rows[0]);
+    return '<div class="md-table-wrap"><table class="md-table"><thead><tr>'
+      + head.map(function (c) { return '<th>' + mdInline(c) + '</th>'; }).join('') + '</tr></thead><tbody>'
+      + rows.slice(1).map(function (r) {
+        return '<tr>' + cells(r).map(function (c) { return '<td>' + mdInline(c) + '</td>'; }).join('') + '</tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  /* Blocs : code délimité, lignes d'outils, titres, filets, tableaux, citations, listes (cases à
+     cocher comprises, numérotation gardée d'un bloc à l'autre), paragraphes. */
+  function mdBlocksHtml(text) {
+    var lines = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n');
+    var out = [], para = [], list = null, i = 0;
+    function flushPara() { if (para.length) { out.push('<p>' + para.map(mdInline).join('<br>') + '</p>'); para = []; } }
+    function flushList() { if (list) { out.push('<' + list.tag + ' class="md-list">' + list.items.join('') + '</' + list.tag + '>'); list = null; } }
+    function flush() { flushPara(); flushList(); }
+    while (i < lines.length) {
+      var line = lines[i];
+      var fence = /^\s*(`{3,}|~{3,})\s*[\w+#.-]*\s*$/.exec(line);
+      if (fence) {
+        flush();
+        var close = new RegExp('^\\s*' + (fence[1].charAt(0) === '`' ? '`' : '~') + '{' + fence[1].length + ',}\\s*$');
+        var code = [];
+        for (i++; i < lines.length && !close.test(lines[i]); i++) code.push(lines[i]);
+        i++;
+        out.push('<pre class="md-code"><code>' + esc(code.join('\n')) + '</code></pre>');
+        continue;
+      }
+      if (TOOL_LINE.test(line)) {
+        flush();
+        var names = [];
+        while (i < lines.length && (TOOL_LINE.test(lines[i]) || (!lines[i].trim() && TOOL_LINE.test(lines[i + 1] || '')))) {
+          var t = TOOL_LINE.exec(lines[i]);
+          if (t) names.push(t[1].trim() || '?');
+          i++;
+        }
+        out.push(logToolsHtml(names));
+        continue;
+      }
+      if (!line.trim()) { flush(); i++; continue; }
+      var h = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
+      if (h) { flush(); out.push('<div class="md-h md-h' + Math.min(h[1].length, 4) + '">' + mdInline(h[2]) + '</div>'); i++; continue; }
+      if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { flush(); out.push('<hr class="md-hr">'); i++; continue; }
+      if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1] || '')) {
+        flush();
+        var rows = [line];
+        for (i += 2; i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i]); i++) rows.push(lines[i]);
+        out.push(mdTableHtml(rows));
+        continue;
+      }
+      if (/^\s{0,3}>/.test(line)) {
+        flush();
+        var quote = [];
+        for (; i < lines.length && /^\s{0,3}>/.test(lines[i]); i++) quote.push(lines[i].replace(/^\s{0,3}>\s?/, ''));
+        out.push('<blockquote class="md-quote">' + quote.map(mdInline).join('<br>') + '</blockquote>');
+        continue;
+      }
+      var li = LIST_LINE.exec(line);
+      if (li) {
+        flushPara();
+        var tag = /\d/.test(li[2]) ? 'ol' : 'ul';
+        var depth = Math.min(3, Math.floor(li[1].replace(/\t/g, '  ').length / 2));
+        if (list && list.tag !== tag && !depth) flushList();
+        if (!list) list = { tag: tag, items: [] };
+        var box = /^\[([ xX])\]\s+(.*)$/.exec(li[3]);
+        var item = box ? '<span class="md-box">' + (box[1] === ' ' ? '☐' : '☑') + '</span> ' + mdInline(box[2]) : mdInline(li[3]);
+        /* Lignes suivantes en retrait : la suite du même élément. */
+        for (i++; i < lines.length && /^\s{2,}\S/.test(lines[i]) && !LIST_LINE.test(lines[i]) && !TOOL_LINE.test(lines[i]); i++) {
+          item += '<br>' + mdInline(lines[i].trim());
+        }
+        list.items.push('<li' + (depth ? ' class="md-d' + depth + '"' : '')
+          + (tag === 'ol' && !depth ? ' value="' + parseInt(li[2], 10) + '"' : '') + '>' + item + '</li>');
+        continue;
+      }
+      flushList();
+      para.push(line.trim());
+      i++;
+    }
+    flush();
+    return out.join('');
+  }
+
+  function logMsgHtml(text) {
+    var key = String(text == null ? '' : text);
+    var hit = logHtmlMemo[key];
+    if (hit != null) return hit;
+    if (logHtmlMemoSize > 600) { logHtmlMemo = {}; logHtmlMemoSize = 0; }
+    logHtmlMemoSize++;
+    return (logHtmlMemo[key] = mdBlocksHtml(key));
+  }
+
+  function logLong(text) {
+    var s = String(text || '');
+    return s.length > LOG_FOLD_CHARS || s.split('\n').length > LOG_FOLD_LINES;
+  }
+
+  function logMessagesHtml(c, messages) {
+    var open = S.ui.logOpen || {};
+    return messages.map(function (m, i) {
+      var user = m.role === 'user';
+      var k = c.id + ':' + i + ':' + String(m.text || '').length;
+      var fold = user && logLong(m.text) && !open[k];
+      var at = fmtTime(m.ts);
+      return '<div class="msg ' + (user ? 'user' : 'assistant') + '">'
+        + '<div class="msg-head"><span class="msg-role">' + (user ? 'Vous' : 'Agent') + '</span>'
+        + (at ? '<span class="msg-time">' + esc(at) + '</span>' : '') + '</div>'
+        + '<div class="msg-body md' + (fold ? ' is-folded' : '') + '">' + logMsgHtml(m.text) + '</div>'
+        + (user && logLong(m.text)
+          ? '<button type="button" class="msg-unfold" data-act="log-fold" data-k="' + esc(k) + '">'
+            + (fold ? 'Afficher tout ▾' : 'Replier ▴') + '</button>'
+          : '')
+        + '</div>';
+    }).join('');
   }
 
   function panelTranscriptHtml(c) {
@@ -3812,12 +4343,7 @@
     } else if (!tr.messages || !tr.messages.length) {
       body = '<div class="log-note">Cette session n’a pas encore de messages. Reprenez-la dans PowerShell pour commencer.</div>';
     } else {
-      body = tr.messages.map(function (m) {
-        var user = m.role === 'user';
-        return '<div class="msg ' + (user ? 'user' : 'assistant') + '">'
-          + '<div class="msg-role">' + (user ? 'vous ›' : 'agent ›') + '</div>'
-          + '<div class="msg-body">' + msgBodyHtml(m.text) + '</div></div>';
-      }).join('') + logStateHtml(c);
+      body = logMessagesHtml(c, tr.messages) + logStateHtml(c);
     }
     var footState = stateText(c);
     return '<div class="log">' + body + '</div>'
@@ -4605,6 +5131,9 @@
     else if (tab === 'article') h.push(articleSettingsHtml(s));
     else if (tab === 'voice') h.push(voiceSettingsHtml(s));
     else if (tab === 'folders') h.push(folderSettingsHtml(s));
+    else if (EXTRA_SETTINGS[tab]) {
+      try { h.push(EXTRA_SETTINGS[tab].html(s)); } catch (e) { h.push('<div class="set-note">Réglages illisibles : ' + esc(e && e.message) + '</div>'); }
+    }
     else h.push(bitbucketSettingsHtml(s));
     h.push('</div></div>');
     h.push('<div class="dialog-actions"><button type="button" class="btn btn-primary" data-act="close-settings">Fermer</button></div>');
@@ -6319,6 +6848,7 @@
     S.ui.artifactView = true;
     S.ui.artifactConvId = convoId || null;
     S.ui.artifactFilesOpen = false;
+    S.ui.artifactWorkOpen = false;
     S.ui.newConvoOpen = false;
     S.ui.transcript = null;
     render();
@@ -6750,6 +7280,13 @@
             changed = true;
             dirty = true;
           }
+          /* La consommation vient des mêmes transcripts : elle suit la même empreinte. */
+          var used = normalizeUsage(info.usage);
+          if (!sameUsage(c.usage, used)) {
+            if (used) c.usage = used; else delete c.usage;
+            changed = true;
+            dirty = true;
+          }
           artifactStamps[c.id] = String(info.artifactsStamp || '');
         }
         var before = displayState(c);
@@ -6925,6 +7462,8 @@
   function openNotification(id) {
     var n = notificationById(id);
     S.ui.notifsOpen = false;
+    /* Une notification mène à une tâche : la file doit être à l'écran pour qu'on la trouve. */
+    if (n && currentPage() !== 'queue') goPage('queue', true);
     if (!n) { render(); return; }
     n.read = true;
     saveDataSoon();
@@ -7497,12 +8036,15 @@
     return value.filter(function (artifact) {
       return artifact && String(artifact.path || '').trim();
     }).map(function (artifact) {
-      return {
+      var out = {
         path: String(artifact.path).trim(),
         action: String(artifact.action || 'modified'),
         tool: String(artifact.tool || 'outil'),
         agent: String(artifact.agent || '')
       };
+      /* Dernière citation dans une réponse finale de l'agent (ms), 0 jamais ; absent d'un relevé ancien. */
+      if (artifact.cited != null) out.cited = Number(artifact.cited) || 0;
+      return out;
     });
   }
 
@@ -7512,7 +8054,7 @@
     if (left.length !== right.length) return false;
     for (var i = 0; i < left.length; i++) {
       if (left[i].path !== right[i].path || left[i].action !== right[i].action || left[i].tool !== right[i].tool
-        || left[i].agent !== right[i].agent) return false;
+        || left[i].agent !== right[i].agent || left[i].cited !== right[i].cited) return false;
     }
     return true;
   }
@@ -8024,7 +8566,13 @@
     'remove-task': function (el) { removeTask(el.getAttribute('data-id')); },
     'move-bottom': function (el) { moveToBottom(el.getAttribute('data-id')); },
     'open-term': function (el, e) { clickTerm(el.getAttribute('data-id'), e && e.shiftKey); },
-    'open-artifacts': function (el) { openArtifacts(el.getAttribute('data-id')); },
+    /* Un seul rapport : il s'ouvre aussitôt dans le lecteur. Plusieurs, ou Maj + clic : le panneau. */
+    'open-artifacts': function (el, e) {
+      var id = el.getAttribute('data-id');
+      var reports = reportsOf(convosOf(id));
+      if (reports.length === 1 && !(e && e.shiftKey)) openReader(reports[0].path, reports[0].cwd);
+      else openArtifacts(id);
+    },
     'open-artifact': function (el) {
       openReader(el.getAttribute('data-path') || '', el.getAttribute('data-cwd') || '');
     },
@@ -8065,6 +8613,7 @@
     },
 
     'toggle-artifact-files': function () { S.ui.artifactFilesOpen = !S.ui.artifactFilesOpen; render(); },
+    'toggle-artifact-work': function () { S.ui.artifactWorkOpen = !S.ui.artifactWorkOpen; render(); },
 
     'close-composer': closeComposer,
     'open-cat': function () { S.ui.catFormOpen = true; render(); },
@@ -8267,6 +8816,11 @@
       if (convo) openArtifacts(convo.taskId, convo.id);
     },
     'open-transcript': function (el) { openTranscript(el.getAttribute('data-id')); },
+    'log-fold': function (el) {
+      var k = el.getAttribute('data-k');
+      if (S.ui.logOpen[k]) delete S.ui.logOpen[k]; else S.ui.logOpen[k] = true;
+      render();
+    },
     'remove-convo': function (el) { removeConvo(el.getAttribute('data-id')); },
 
     'open-remarks': toggleFeedback,
@@ -8286,7 +8840,10 @@
       render();
       /* Les modèles ont pu se télécharger (première dictée) depuis la lecture du démarrage. */
       if (S.ui.settingsTab === 'voice') refreshWhisper();
+      var x = EXTRA_SETTINGS[S.ui.settingsTab];
+      if (x && x.onOpen) x.onOpen();
     },
+    'go-page': function (el) { goPage(el.getAttribute('data-page')); },
     'refresh-usage': function () { refreshUsage(true); },
     'open-article': function (el) { toggleArticle(feedOf(el)); },
     'toggle-notifs': function () {
@@ -8363,6 +8920,7 @@
     var el = e.target;
     var role = el.getAttribute ? el.getAttribute('data-role') : null;
     if (!role) return;
+    if (PAGE_INPUT[role]) { PAGE_INPUT[role](el, e); return; }
     if (role === 'edit-text') {
       var t = taskById(el.getAttribute('data-id'));
       if (!t) return;
@@ -8465,6 +9023,7 @@
     var el = e.target;
     var role = el && el.getAttribute ? el.getAttribute('data-role') : null;
     if (!role) return;
+    if (PAGE_CHANGE[role]) { PAGE_CHANGE[role](el, e); return; }
     var provider = el.getAttribute('data-provider') === 'copilot' ? 'copilot' : 'claude';
     var v = el.value;
 
@@ -8564,6 +9123,14 @@
     }
     /* Le lecteur d'artefacts couvre la fenêtre : Échap le referme (depuis le cadre, il l'envoie par message). */
     if (e.key === 'Escape' && S.ui.reader) { closeReader(); return; }
+
+    /* Une autre page que la file : ses raccourcis, une fois les dialogues servis. */
+    if (currentPage() !== 'queue') {
+      if (!overlayOpen()) {
+        for (var k = 0; k < PAGE_KEYS.length; k++) { if (PAGE_KEYS[k](e, el, role)) return; }
+      }
+      return;
+    }
 
     if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       if (!S.ui.editingId) return;
@@ -8746,6 +9313,8 @@
       c.keywords = keywordIdsFor(taskById(c.taskId), c.keywords || c.keyword);
       delete c.keyword;
       c.artifacts = normalizeArtifacts(c.artifacts);
+      var used = normalizeUsage(c.usage);
+      if (used) c.usage = used; else delete c.usage;
       c.messageCount = typeof c.messageCount === 'number' ? c.messageCount : 0;
       c.created = toMs(c.created);
       c.updated = toMs(c.updated) || c.created;
@@ -8823,6 +9392,8 @@
       S.ui.settingsOpen = true;
       render();
       if (settingsTab() === 'voice') refreshWhisper();
+      var x = EXTRA_SETTINGS[settingsTab()];
+      if (x && x.onOpen) x.onOpen();
     });
     /* La largeur du panneau change le repliement des lignes : les zones de remarques se remesurent. */
     window.addEventListener('resize', function () { fitRemarks($('#panel')); placeNotifs(); });
@@ -8846,6 +9417,7 @@
       ensureArticles();
       if (S.ui.termConvId) loadTranscript(true);
       if (S.ui.reader) loadReader(true);
+      PAGES.forEach(function (p) { if (p.onFocus) { try { p.onFocus(); } catch (e) { /* page fautive */ } } });
     });
 
     /* Discussion sur un constat : la réponse de l'agent arrive au fil de l'eau. */
@@ -8900,7 +9472,11 @@
 
     bridge.call('getState').then(function (st) {
       normalize(st || {});
+      booted = true;
+      PAGES.forEach(function (p) { if (p.onBoot) { try { p.onBoot(); } catch (e) { /* page fautive : la file démarre quand même */ } } });
       render();
+      var shown = pageDef(currentPage());
+      if (shown && shown.onShow) { try { shown.onShow(); } catch (e) { /* idem */ } }
       refreshSessions();
       restartSessionsPoll();
       refreshUsage(true);
@@ -8911,6 +9487,7 @@
       if (S.env.hasClaude !== false && catalogStale('claude')) refreshModels('claude', false);
     })['catch'](function (e) {
       normalize({});
+      booted = true;
       render();
       toast('Données illisibles : ' + e.message);
     });
@@ -8933,4 +9510,25 @@
     insertDictation: insertDictation, dictation: function () { return dict; }, transcribeAttachment: transcribeAttachment,
     buildPrompt: buildPrompt
   });
+  Object.assign(window.__organizator, {
+    mdBlocksHtml: mdBlocksHtml, reportsOf: reportsOf, usageOf: usageOf, usageText: usageText, normalizeUsage: normalizeUsage
+  });
+
+  /* Contrat des pages (voir « Pages » plus haut) : ce qu'une page peut utiliser de l'application.
+     registerPage({ id, label, title, icon, badge(), render(host, enter), onBoot, onShow, onHide, onFocus })
+     rend cet objet. Tout le reste d'app.js reste privé. */
+  var pageApi = {
+    state: S, render: render, toast: toast, goPage: goPage, currentPage: currentPage,
+    addAction: addPageAction, addInput: addPageInput, addChange: addPageChange, addKey: addPageKey,
+    addSettingsTab: addSettingsTab, openSettingsTab: openSettingsTab, overlayOpen: overlayOpen,
+    esc: esc, uid: uid, color: color, setHtml: setHtml, isTyping: isTyping, icon: ICON,
+    fmtDate: fmtDate, fmtTime: fmtTime, fmtDay: fmtDay, fmtSize: fmtSize, fmtClock: fmtClock,
+    setRowHtml: setRowHtml, setFieldHtml: setFieldHtml, switchHtml: switchHtml,
+    modelSelectHtml: modelSelectHtml, effortSelectHtml: effortSelectHtml, catalogFor: catalogFor, catalogHas: catalogHas,
+    customModel: CUSTOM, hasProvider: hasProvider,
+    recordVoice: recordVoice, recording: function () { return !!(voiceRec || dict); }, wav16k: wav16k, readBase64: readBase64,
+    whisperOn: whisperOn, whisperPhaseLabel: whisperPhaseLabel
+  };
+  window.__organizator.registerPage = registerPage;
+  window.__organizator.pageApi = pageApi;
 })();

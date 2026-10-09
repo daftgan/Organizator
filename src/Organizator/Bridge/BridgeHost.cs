@@ -48,6 +48,12 @@ public sealed class BridgeHost
     private readonly WindowsToasts _toasts;
     private readonly FindingChat _findings;
     private readonly WhisperTranscriber _whisper;
+
+    // Revizator (H2) : modele de l'apprenant et documents, menu RSS du cours, generations par Claude.
+    private readonly LearningStore _learning;
+    private readonly NewsMenu _learnNews;
+    private readonly LearningAgent _learnAgent;
+    private readonly TextToSpeech _tts;
     private readonly PerfMonitor? _perf;
 
     // Dossier actuellement servi sous https://report.organizator/ (voir ArtifactReader.Locate).
@@ -112,11 +118,24 @@ public sealed class BridgeHost
         // Dictee et transcription des enregistrements : telechargement du modele et calcul s'affichent au fil de l'eau.
         _whisper = new WhisperTranscriber(store.DataDir, log, HostVersion);
         _whisper.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("whisper", payload));
+        // Revizator : persistance, menu du jour et generations ; l'avancement repasse par le fil de l'interface.
+        _learning = new LearningStore(store.DataDir, log);
+        _learnNews = new NewsMenu(_learning, log);
+        _learnAgent = new LearningAgent(launcher, _learning, _learnNews, log, store.DataDir);
+        _learnAgent.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("learn", payload));
+        // Synthese vocale anglaise (Revizator) : telechargement des voix et phrases pretes arrivent au fil de l'eau.
+        _tts = new TextToSpeech(store.DataDir, log, HostVersion);
+        _tts.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("tts", payload));
         _core.WebMessageReceived += OnWebMessageReceived;
     }
 
     /// <summary>Dossier des pieces jointes, servi a l'UI sous <see cref="TaskAttachments.Host"/>.</summary>
     public string AttachmentsRoot => _attachments.Root;
+
+    /// <summary>Dossier <c>learning\</c> de Revizator, servi a l'UI sous <see cref="LearningStore.Host"/>.</summary>
+    public string LearningRoot => _learning.Root;
+    /// <summary>Cache des phrases synthetisees, servi a l'UI sous <see cref="TextToSpeech.Host"/>.</summary>
+    public string TtsCacheRoot => _tts.CacheRoot;
 
     /// <summary>Envoie un evenement non sollicite : <c>{ event, payload }</c>.</summary>
     public void PostEvent(string name, JsonObject? payload = null)
@@ -294,6 +313,25 @@ public sealed class BridgeHost
         "whisperWarm" => WarmWhisper(payload),
         "transcribe" => await TranscribeAsync(payload).ConfigureAwait(true),
         "cancelTranscribe" => new JsonObject { ["cancelled"] = _whisper.Cancel(Str(payload, "job")) },
+        // Revizator (H2) : persistance, menu du jour, generations par Claude.
+        "learnLoad" => await Task.Run(() => _learning.Load()).ConfigureAwait(true),
+        "learnSave" => await Task.Run(() => _learning.Save(payload)).ConfigureAwait(true),
+        "learnDoc" => await LearnDocAsync(payload).ConfigureAwait(true),
+        "learnDocSave" => await LearnDocSaveAsync(payload).ConfigureAwait(true),
+        "learnDocDelete" => await LearnDocDeleteAsync(payload).ConfigureAwait(true),
+        "learnNews" => await LearnNewsAsync(payload).ConfigureAwait(true),
+        "learnGenerate" => await _learnAgent.GenerateAsync(payload).ConfigureAwait(true),
+        "learnCancel" => new JsonObject { ["cancelled"] = _learnAgent.Cancel(Str(payload, "job")) },
+        "learnJobs" => _learnAgent.Jobs(),
+        "learnWait" => await _learnAgent.WaitAsync(Str(payload, "job")).ConfigureAwait(true),
+        "ttsStatus" => await Task.Run(_tts.Status).ConfigureAwait(true),
+        "ttsDownload" => await DownloadTtsAsync().ConfigureAwait(true),
+        "ttsRemove" => new JsonObject { ["removed"] = await _tts.RemoveAsync().ConfigureAwait(true) },
+        "ttsWarm" => WarmTts(payload),
+        "speak" => await SpeakTtsAsync(payload).ConfigureAwait(true),
+        "speakScript" => await SpeakScriptTtsAsync(payload).ConfigureAwait(true),
+        "cancelSpeak" => new JsonObject { ["cancelled"] = _tts.Cancel(Str(payload, "job")) },
+        "ttsClearCache" => await Task.Run(_tts.ClearCache).ConfigureAwait(true),
         "log" => LogFromWeb(payload),
         "perf" => RecordPerf(payload),
         _ => throw new InvalidOperationException($"Type de message inconnu : {type}"),
@@ -329,7 +367,9 @@ public sealed class BridgeHost
                 ["jiraUrl"] = bitbucket?.JiraUrl ?? "",
                 ["attachmentsDir"] = _attachments.Root,
                 ["attachmentsUrl"] = "https://" + TaskAttachments.Host + "/",
+                ["learnUrl"] = LearningStore.BaseUrl,
                 ["whisper"] = _whisper.Status(),
+                ["ttsUrl"] = "https://" + TextToSpeech.Host + "/",
                 ["models"] = new JsonObject
                 {
                     ["claude"] = _claudeCatalog.Current().ToJson(),
@@ -543,6 +583,10 @@ public sealed class BridgeHost
     /// Transcrit une dictee (<c>data</c> : WAV en base64, enregistre par la page) ou un enregistrement
     /// joint a une tache (<c>path</c>, sous le dossier des pieces jointes seulement). <c>job</c>
     /// identifie l'appel pour l'avancement et pour <c>cancelTranscribe</c>.
+    /// Revizator : <c>detail</c> enrichit la reponse (mots, P(en), debit, pauses), <c>reference</c> (texte
+    /// attendu, 2 000 caracteres au plus, implique <c>detail</c>) ajoute l'alignement, <c>keep</c> garde le WAV
+    /// de la dictee sous <c>learning\audio\&lt;id&gt;.wav</c> et rend <c>id</c> et <c>url</c>, <c>accent: false</c>
+    /// saute P(en).
     /// </summary>
     private async Task<JsonNode> TranscribeAsync(JsonObject payload)
     {
@@ -550,6 +594,12 @@ public sealed class BridgeHost
         var model = WhisperTranscriber.SanitizeModel(Str(payload, "model"));
         var language = WhisperTranscriber.SanitizeLanguage(Str(payload, "language"));
         var path = Str(payload, "path");
+        static bool Flag(JsonObject source, string name) => source[name] is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
+        var reference = Limit(Str(payload, "reference"), 2000);
+        var detail = Flag(payload, "detail") || reference.Length > 0;
+        var keep = Flag(payload, "keep");
+        // P(en) coute un passage d'encodeur de plus : accent = false le saute (tuteur, ou l'attente compte).
+        var accent = payload["accent"] is not JsonValue accentValue || !accentValue.TryGetValue<bool>(out var accentOn) || accentOn;
 
         if (!string.IsNullOrWhiteSpace(path))
         {
@@ -566,7 +616,7 @@ public sealed class BridgeHost
             }
 
             return await _whisper.TranscribeAsync(job, ct => AudioDecoder.FromFile(full, ct), model, language,
-                paragraphs: true, what: "enregistrement " + Path.GetFileName(full)).ConfigureAwait(true);
+                paragraphs: true, what: "enregistrement " + Path.GetFileName(full), detail, reference, accent).ConfigureAwait(true);
         }
 
         byte[] bytes;
@@ -589,9 +639,82 @@ public sealed class BridgeHost
             throw new InvalidOperationException("Dictée trop longue : joignez plutôt l'enregistrement à la tâche.");
         }
 
-        return await _whisper.TranscribeAsync(job, ct => AudioDecoder.FromWav(bytes, ct), model, language,
-            paragraphs: false, what: "dictee").ConfigureAwait(true);
+        var result = await _whisper.TranscribeAsync(job, ct => AudioDecoder.FromWav(bytes, ct), model, language,
+            paragraphs: false, what: detail ? "dictee (detail)" : "dictee", detail, reference, accent).ConfigureAwait(true);
+        if (!keep)
+        {
+            return result;
+        }
+
+        // Enregistrement garde : le WAV recu tel quel, sous learning\audio\ (LearningStore), lu par la page
+        // sous https://learn.organizator/audio/<id>.wav.
+        try
+        {
+            var saved = await Task.Run(() => _learning.SaveAudio(bytes)).ConfigureAwait(true);
+            result["id"] = saved["id"]?.GetValue<string>();
+            result["url"] = saved["url"]?.GetValue<string>();
+            _log.Info($"Revizator : enregistrement garde ({result["id"]}, {bytes.Length} octets)");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            // La transcription reste : seul l'enregistrement n'est pas garde.
+            _log.Warn("Revizator : enregistrement non garde : " + ex.Message);
+            result["id"] = null;
+            result["url"] = null;
+            result["keepError"] = "Enregistrement non gardé : " + ex.Message;
+        }
+
+        return result;
     }
+
+    // ------------------------------------------------------------- synthese vocale
+
+    /// <summary>Telecharge les voix (runtime et modele) ; l'avancement part par l'evenement <c>tts</c>.</summary>
+    private async Task<JsonNode> DownloadTtsAsync()
+    {
+        await _tts.EnsureModelAsync(CancellationToken.None).ConfigureAwait(true);
+        return await Task.Run(_tts.Status).ConfigureAwait(true);
+    }
+
+    /// <summary>L'instance d'un accent se charge en arriere-plan, avant la premiere phrase.</summary>
+    private JsonNode WarmTts(JsonObject payload)
+    {
+        _tts.Warm(Str(payload, "accent") ?? TextToSpeech.AccentUs);
+        return new JsonObject();
+    }
+
+    /// <summary>
+    /// Un texte dit par une voix ; chaque phrase est annoncee par l'evenement <c>tts</c> (<c>sentence</c>)
+    /// des qu'elle est lisible sous <see cref="TextToSpeech.Host"/>. <c>job</c> sert a <c>cancelSpeak</c>.
+    /// </summary>
+    private async Task<JsonNode> SpeakTtsAsync(JsonObject payload)
+        => await _tts.SpeakAsync(Str(payload, "job") ?? "", Str(payload, "text") ?? "", Str(payload, "voice") ?? "",
+            TtsSpeed(payload)).ConfigureAwait(true);
+
+    /// <summary>Un dialogue : synthetise et annonce dans l'ordre du script (<c>line</c> = <c>id</c> de la ligne).</summary>
+    private async Task<JsonNode> SpeakScriptTtsAsync(JsonObject payload)
+    {
+        var lines = new List<TtsLine>();
+        if (payload["lines"] is JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                var line = item as JsonObject ?? new JsonObject();
+                lines.Add(new TtsLine(
+                    Str(line, "id") ?? lines.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    Str(line, "voice") ?? "",
+                    Str(line, "text") ?? ""));
+            }
+        }
+
+        var gapMs = int.TryParse(Str(payload, "gapMs"), System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var gap) ? gap : 450;
+        return await _tts.SpeakScriptAsync(Str(payload, "job") ?? "", lines, TtsSpeed(payload), gapMs).ConfigureAwait(true);
+    }
+
+    private static float TtsSpeed(JsonObject payload)
+        => double.TryParse(Str(payload, "speed"), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var speed) ? (float)speed : 1f;
 
     private JsonNode StartSession(JsonObject payload)
     {
@@ -1173,13 +1296,13 @@ public sealed class BridgeHost
         // sous-agents : le fil de l'interface est aussi celui qui laisse passer la frappe.
         var snapshots = await Task.Run(() =>
         {
-            var list = new List<(SessionSummary Summary, string ArtifactsStamp, IReadOnlyList<AgentArtifact>? Artifacts, IReadOnlyList<AgentRun> Agents)>(requested.Count);
+            var list = new List<(SessionSummary Summary, string ArtifactsStamp, IReadOnlyList<AgentArtifact>? Artifacts, SessionUsage Usage, IReadOnlyList<AgentRun> Agents)>(requested.Count);
             foreach (var (provider, sessionId, cwd) in requested)
             {
                 var summary = Summarize(provider, sessionId, cwd);
-                var (stamp, artifacts) = _artifacts.GetWithStamp(provider, sessionId, cwd);
+                var (stamp, artifacts, usage) = _artifacts.GetWithStamp(provider, sessionId, cwd);
                 var unchanged = known.TryGetValue(sessionId, out var held) && held == stamp;
-                list.Add((summary, stamp, unchanged ? null : artifacts, ActiveAgents(provider, cwd, summary)));
+                list.Add((summary, stamp, unchanged ? null : artifacts, usage, ActiveAgents(provider, cwd, summary)));
             }
 
             return list;
@@ -1214,7 +1337,8 @@ public sealed class BridgeHost
                 ["alive"] = Alive(summary.SessionId),
             };
 
-            // Absente quand l'UI detient deja la liste de cette empreinte.
+            // Absente quand l'UI detient deja la liste de cette empreinte ; la consommation suit la
+            // meme regle (elle vient des memes transcripts).
             if (snapshot.Artifacts is not null)
             {
                 var artifacts = new JsonArray();
@@ -1227,16 +1351,46 @@ public sealed class BridgeHost
                         ["tool"] = artifact.Tool,
                         // Sous-agent qui l'a ecrit ; vide pour la session elle-meme.
                         ["agent"] = artifact.Agent,
+                        // Derniere citation dans une reponse finale de l'agent (ms), 0 sinon.
+                        ["cited"] = artifact.Cited,
                     });
                 }
 
                 entry["artifacts"] = artifacts;
+                entry["usage"] = UsageJson(snapshot.Usage);
             }
 
             result.Add(entry);
         }
 
         return new JsonObject { ["sessions"] = result };
+    }
+
+    /// <summary>Consommation d'une session pour l'UI : jetons, cout estime ($, 4 decimales), requetes premium.</summary>
+    private static JsonObject UsageJson(SessionUsage usage)
+    {
+        var models = new JsonArray();
+        foreach (var model in usage.Models)
+        {
+            models.Add(new JsonObject
+            {
+                ["model"] = model.Model,
+                ["tokens"] = model.Tokens,
+                ["cost"] = Math.Round(model.Cost, 4),
+            });
+        }
+
+        return new JsonObject
+        {
+            ["input"] = usage.Input,
+            ["output"] = usage.Output,
+            ["cacheRead"] = usage.CacheRead,
+            ["cacheWrite"] = usage.CacheWrite,
+            ["cost"] = Math.Round(usage.Cost, 4),
+            ["unpriced"] = usage.Unpriced,
+            ["premium"] = usage.PremiumRequests,
+            ["models"] = models,
+        };
     }
 
     // Une reponse plus longue que cela n'est plus un recapitulatif ; l'UI raccourcit encore selon
@@ -1638,6 +1792,47 @@ public sealed class BridgeHost
     {
         _perf?.RecordWeb(payload);
         return new JsonObject();
+    }
+
+    // ------------------------------------------------------------- Revizator (H2)
+
+    /// <summary><c>learnDoc</c> : <c>{ kind, id }</c> -> <c>{ doc }</c>, <c>null</c> si le document n'existe pas.</summary>
+    private async Task<JsonNode> LearnDocAsync(JsonObject payload)
+    {
+        var kind = Str(payload, "kind");
+        var id = Str(payload, "id");
+        var doc = await Task.Run(() => _learning.ReadDoc(kind, id)).ConfigureAwait(true);
+        return new JsonObject { ["doc"] = doc };
+    }
+
+    /// <summary><c>learnDocSave</c> : <c>{ kind, id, doc }</c> -> <c>{}</c> ; l'UI met a jour un document (reponses d'un bilan...).</summary>
+    private async Task<JsonNode> LearnDocSaveAsync(JsonObject payload)
+    {
+        var kind = Str(payload, "kind");
+        var id = Str(payload, "id");
+        if (payload["doc"] is not JsonObject doc)
+        {
+            throw new InvalidOperationException("Document absent ou invalide : un objet JSON est attendu.");
+        }
+
+        await Task.Run(() => _learning.WriteDoc(kind, id, doc)).ConfigureAwait(true);
+        return new JsonObject();
+    }
+
+    /// <summary><c>learnDocDelete</c> : <c>{ kind, id }</c> -> <c>{ removed }</c>.</summary>
+    private async Task<JsonNode> LearnDocDeleteAsync(JsonObject payload)
+    {
+        var kind = Str(payload, "kind");
+        var id = Str(payload, "id");
+        var removed = await Task.Run(() => _learning.DeleteDoc(kind, id)).ConfigureAwait(true);
+        return new JsonObject { ["removed"] = removed };
+    }
+
+    /// <summary><c>learnNews</c> : <c>{ force? }</c> -> menu RSS du jour (cache de 30 minutes, voir <see cref="NewsMenu"/>).</summary>
+    private async Task<JsonNode> LearnNewsAsync(JsonObject payload)
+    {
+        var force = payload["force"] is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
+        return await _learnNews.GetAsync(force).ConfigureAwait(true);
     }
 
     // -------------------------------------------------------------------- helpers

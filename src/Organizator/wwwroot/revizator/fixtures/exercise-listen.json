@@ -1,0 +1,208 @@
+{
+  "id": "exercise-20261008-ec2780",
+  "kind": "exercise",
+  "createdAt": 1791480543568,
+  "day": "2026-10-08",
+  "model": "claude-sonnet-5-5",
+  "ms": 31216,
+  "cost": 0.0832,
+  "turns": 3,
+  "skill": "listen",
+  "type": "listen.dialogue",
+  "title": "Moving the team meeting",
+  "level": "B1+",
+  "minutes": 10,
+  "instructionsFr": "Écoutez le dialogue entre trois collègues, puis répondez aux six questions. Vous pouvez réécouter l'enregistrement autant de fois que nécessaire.",
+  "topic": "Réorganiser une réunion d'équipe",
+  "passage": {
+    "title": "",
+    "paragraphs": [],
+    "glossary": []
+  },
+  "script": {
+    "title": "Moving the team meeting",
+    "contextFr": "Trois collègues, Emma, Jack et Priya, cherchent un nouveau créneau pour la réunion d'équipe de jeudi, car un client important a demandé une démonstration au même moment.",
+    "speakers": [
+      {
+        "id": "A",
+        "name": "Emma",
+        "accent": "en-GB",
+        "gender": "female"
+      },
+      {
+        "id": "B",
+        "name": "Jack",
+        "accent": "en-US",
+        "gender": "male"
+      },
+      {
+        "id": "C",
+        "name": "Priya",
+        "accent": "en-GB",
+        "gender": "female"
+      }
+    ],
+    "lines": [
+      {
+        "speaker": "A",
+        "text": "Hi both. Thanks for jumping on so quickly. I've got a bit of a problem with Thursday's team meeting."
+      },
+      {
+        "speaker": "B",
+        "text": "Oh no, what's up? I thought we'd already agreed on ten o'clock."
+      },
+      {
+        "speaker": "A",
+        "text": "We did, but the client from Leeds has just asked for a demo at that exact time. I can't really say no, they've been waiting for weeks."
+      },
+      {
+        "speaker": "C",
+        "text": "Well, could we move ours to the afternoon? I'm free after two, as long as I'm out by four. I have to pick up my daughter from school."
+      },
+      {
+        "speaker": "B",
+        "text": "Afternoon's tricky for me, to be honest. I'm working from home on Thursday, and my internet's being fixed between one and three."
+      },
+      {
+        "speaker": "A",
+        "text": "Okay. What about Friday morning, then? Nine thirty, maybe?"
+      },
+      {
+        "speaker": "B",
+        "text": "Friday works for me. I'd rather not start any earlier, though."
+      },
+      {
+        "speaker": "C",
+        "text": "Friday's fine, but I haven't finished the release report yet. If we meet on Friday, I'll send it to you both tomorrow evening."
+      },
+      {
+        "speaker": "A",
+        "text": "Perfect. Let's do Friday at nine thirty, then. I'll update the invitation as soon as we hang up."
+      },
+      {
+        "speaker": "B",
+        "text": "Great. And Emma, good luck with the demo. Let us know how it goes."
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": "i1",
+      "kind": "choice",
+      "prompt": "Why does Emma want to change the meeting?",
+      "promptFr": "",
+      "options": [
+        "She has to visit Leeds",
+        "A client wants a demo at the same time",
+        "She is ill on Thursday",
+        "The meeting room is not free"
+      ],
+      "answer": "A client wants a demo at the same time",
+      "accepted": [],
+      "explanationFr": "Emma dit que le client de Leeds a demandé une démonstration à l'heure exacte de la réunion.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i2",
+      "kind": "choice",
+      "prompt": "Why can't Priya stay in a Thursday afternoon meeting after four?",
+      "promptFr": "",
+      "options": [
+        "She finishes work at four",
+        "She is leaving for Leeds",
+        "She has to collect her daughter",
+        "She has a doctor's appointment"
+      ],
+      "answer": "She has to collect her daughter",
+      "accepted": [],
+      "explanationFr": "Priya dit « I have to pick up my daughter from school » : pick up signifie aller chercher.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i3",
+      "kind": "truefalse",
+      "prompt": "Jack can attend a meeting on Thursday between one and three.",
+      "promptFr": "",
+      "options": [
+        "true",
+        "false",
+        "not_given"
+      ],
+      "answer": "false",
+      "accepted": [],
+      "explanationFr": "Entre une heure et trois heures, son accès internet est en réparation, donc il n'est pas disponible.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i4",
+      "kind": "choice",
+      "prompt": "When do they finally decide to meet?",
+      "promptFr": "",
+      "options": [
+        "Friday at 9:30",
+        "Thursday at 10:00",
+        "Thursday at 2:00",
+        "Friday at 10:00"
+      ],
+      "answer": "Friday at 9:30",
+      "accepted": [],
+      "explanationFr": "Emma propose vendredi à neuf heures trente et tous acceptent.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i5",
+      "kind": "truefalse",
+      "prompt": "Priya has already finished the release report.",
+      "promptFr": "",
+      "options": [
+        "true",
+        "false",
+        "not_given"
+      ],
+      "answer": "false",
+      "accepted": [],
+      "explanationFr": "Elle dit « I haven't finished the release report yet » : present perfect avec yet, le rapport n'est pas terminé.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i6",
+      "kind": "choice",
+      "prompt": "What will Emma do when the call ends?",
+      "promptFr": "",
+      "options": [
+        "Book a meeting room",
+        "Send the release report",
+        "Update the meeting invitation",
+        "Call the client in Leeds"
+      ],
+      "answer": "Update the meeting invitation",
+      "accepted": [],
+      "explanationFr": "« As soon as we hang up » : après une conjonction de temps, on utilise le présent (hang up), pas le futur.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    }
+  ]
+}

@@ -1,0 +1,698 @@
+{
+ "id": "lesson-20261008-2d1c9b",
+ "kind": "lesson",
+ "createdAt": 1791480462632,
+ "day": "2026-10-08",
+ "model": "claude-sonnet-5-5",
+ "ms": 132919,
+ "cost": 0.2738,
+ "turns": 5,
+ "title": "Back on Planet Earth: eight months in space",
+ "summaryFr": "Quatre astronautes, dont la Française Sophie Adenot, reviennent de l'ISS après presque huit mois : un sujet pour réviser for/since/during, le present perfect et le son th.",
+ "level": "B1+",
+ "minutes": 20,
+ "rubric": "science",
+ "tone": "light",
+ "keywords": [
+  "astronauts",
+  "International Space Station",
+  "Sophie Adenot",
+  "splashdown",
+  "spacewalk"
+ ],
+ "plan": [
+  {
+   "step": "warmup",
+   "minutes": 2
+  },
+  {
+   "step": "reading",
+   "minutes": 4
+  },
+  {
+   "step": "listening",
+   "minutes": 4
+  },
+  {
+   "step": "vocabulary",
+   "minutes": 3
+  },
+  {
+   "step": "grammar",
+   "minutes": 2
+  },
+  {
+   "step": "writing",
+   "minutes": 3
+  },
+  {
+   "step": "speaking",
+   "minutes": 2
+  }
+ ],
+ "sources": [
+  {
+   "title": "French, US and Russian astronauts return to Earth after eight months in space",
+   "url": "https://www.france24.com/en/europe/20261008-french-us-and-russian-astronauts-return-to-earth-after-eight-months-in-space",
+   "outlet": "France 24 (AP)",
+   "published": "2026-10-08"
+  },
+  {
+   "title": "4 people on NASA's Crew-12 mission return to Earth after 8 months in space",
+   "url": "https://text.npr.org/nx-s1-5992845",
+   "outlet": "NPR",
+   "published": "2026-10-08"
+  }
+ ],
+ "facts": [
+  {
+   "fact": "Sophie Adenot (France, European Space Agency), Jessica Meir and Jack Hathaway (NASA) and Andrey Fedyaev (Roscosmos) returned from the International Space Station on Thursday 8 October 2026.",
+   "source": 0
+  },
+  {
+   "fact": "Their SpaceX capsule splashed down in the Pacific Ocean off the coast of Los Angeles.",
+   "source": 1
+  },
+  {
+   "fact": "The mission lasted almost eight months. The crew launched in February 2026 on a Falcon 9 from Cape Canaveral, Florida.",
+   "source": 1
+  },
+  {
+   "fact": "About 45 minutes before splashdown the capsule was travelling at roughly 17,500 mph; the heat shield faced temperatures of up to 3,500°F; four parachutes slowed it to about 16 mph.",
+   "source": 1
+  },
+  {
+   "fact": "Jessica Meir did four spacewalks, just over 27 hours in total. Sophie Adenot did three.",
+   "source": 1
+  },
+  {
+   "fact": "Adenot became the first French woman to walk in space.",
+   "source": 0
+  },
+  {
+   "fact": "The crew went up to replace a crew sent home early after NASA's Mike Fincke fell ill, described as NASA's first medical evacuation in 65 years of human spaceflight.",
+   "source": 0
+  },
+  {
+   "fact": "Their replacements arrived three weeks late because of capsule repairs.",
+   "source": 0
+  },
+  {
+   "fact": "The crew did dozens of experiments, including studies on stem cells, crystal growth and bone loss in microgravity.",
+   "source": 1
+  },
+  {
+   "fact": "Seven people (from the US, Russia and Canada) remain on the station.",
+   "source": 0
+  },
+  {
+   "fact": "Meir, after splashdown: 'We are so excited to be back on Planet Earth after an incredible mission on the International Space Station.'",
+   "source": 0
+  },
+  {
+   "fact": "Meir, before leaving: 'So looking forward to seeing nature again, feeling the breeze on my face, the wind rustling through the leaves.'",
+   "source": 1
+  },
+  {
+   "fact": "Meir said she would miss 'weightlessness and the wonderful views of Earth'.",
+   "source": 1
+  }
+ ],
+ "warmup": [
+  "Have you ever spent a long time away from home? How did you feel when you came back?",
+  "What would you miss most about Earth if you lived on a space station for eight months?"
+ ],
+ "reading": {
+  "headline": "Home at last: four astronauts end an eight-month mission",
+  "standfirst": "A SpaceX capsule has brought four astronauts, including France's Sophie Adenot, back from the International Space Station after almost eight months.",
+  "paragraphs": [
+   "On Thursday 8 October, a SpaceX capsule dropped into the Pacific Ocean, off the coast of Los Angeles. Inside were four astronauts who had lived on the International Space Station for almost eight months: Americans Jessica Meir and Jack Hathaway, Russian Andrey Fedyaev and Sophie Adenot from France.",
+   "The last part of the journey was fast and tough. About 45 minutes before landing, the capsule was moving at roughly 17,500 mph, and its heat shield had to withstand temperatures of up to 3,500°F. Four parachutes then slowed it down to about 16 mph. After splashdown, Meir said the crew was \"so excited to be back on Planet Earth after an incredible mission\", according to AP.",
+   "This crew had an unusual story. They flew up in February to replace colleagues who were sent home early when NASA's Mike Fincke fell ill. AP described that as NASA's first medical evacuation in 65 years of human spaceflight. Later, the astronauts who were supposed to replace them arrived three weeks late because of repairs to their capsule, so the mission lasted longer than planned.",
+   "Life on board was busy. The crew carried out dozens of experiments, including studies on stem cells, crystal growth and bone loss. Meir completed four spacewalks, just over 27 hours outside the station in total. Adenot did three, and she became the first French woman to walk in space.",
+   "Before leaving, Meir said she was looking forward to \"feeling the breeze on my face\". She also said she would miss weightlessness and the wonderful views of Earth. Seven people from the US, Russia and Canada are still living on the station."
+  ],
+  "credit": "Written for learners from reports by France 24 (AP) and NPR, 8 October 2026",
+  "glossary": [
+   {
+    "term": "splashdown",
+    "pos": "noun",
+    "ipa": "ˈsplæʃdaʊn",
+    "meaningEn": "the moment a spacecraft lands in the sea",
+    "meaningFr": "amerrissage",
+    "example": "The splashdown was filmed by a helicopter."
+   },
+   {
+    "term": "heat shield",
+    "pos": "noun",
+    "ipa": "ˈhiːt ʃiːld",
+    "meaningEn": "a protective layer that stops a spacecraft burning up",
+    "meaningFr": "bouclier thermique",
+    "example": "The heat shield protects the capsule when it enters the atmosphere."
+   },
+   {
+    "term": "to withstand",
+    "pos": "verb",
+    "ipa": "wɪðˈstænd",
+    "meaningEn": "to survive something strong or difficult without being damaged",
+    "meaningFr": "résister à, supporter",
+    "example": "This old bridge can withstand very strong winds."
+   },
+   {
+    "term": "to slow down",
+    "pos": "phrasal verb",
+    "ipa": "sləʊ daʊn",
+    "meaningEn": "to become slower, or to make something slower",
+    "meaningFr": "ralentir",
+    "example": "Please slow down, the road is wet."
+   },
+   {
+    "term": "to replace",
+    "pos": "verb",
+    "ipa": "rɪˈpleɪs",
+    "meaningEn": "to take the place of someone or something",
+    "meaningFr": "remplacer",
+    "example": "We need to replace the old server this year."
+   },
+   {
+    "term": "to fall ill",
+    "pos": "collocation",
+    "ipa": "fɔːl ɪl",
+    "meaningEn": "to become sick",
+    "meaningFr": "tomber malade",
+    "example": "Half of the team fell ill just before the release."
+   },
+   {
+    "term": "a spacewalk",
+    "pos": "noun",
+    "ipa": "ˈspeɪswɔːk",
+    "meaningEn": "work done by an astronaut outside a spacecraft",
+    "meaningFr": "sortie dans l'espace",
+    "example": "The first spacewalk lasted six hours."
+   },
+   {
+    "term": "to carry out",
+    "pos": "phrasal verb",
+    "ipa": "ˈkæri aʊt",
+    "meaningEn": "to do and complete a task or study",
+    "meaningFr": "mener à bien, réaliser",
+    "example": "The team carried out a security test last week."
+   },
+   {
+    "term": "weightlessness",
+    "pos": "noun",
+    "ipa": "ˈweɪtləsnəs",
+    "meaningEn": "the feeling of having no weight, as in space",
+    "meaningFr": "apesanteur",
+    "example": "Weightlessness can make your bones weaker."
+   },
+   {
+    "term": "to look forward to",
+    "pos": "phrasal verb",
+    "ipa": "lʊk ˈfɔːwəd tuː",
+    "meaningEn": "to feel happy about something that will happen",
+    "meaningFr": "avoir hâte de",
+    "example": "I'm looking forward to visiting Edinburgh next month."
+   }
+  ]
+ },
+ "comprehension": [
+  {
+   "kind": "choice",
+   "skill": "gist",
+   "question": "What is the main idea of the text?",
+   "options": [
+    "NASA has cancelled its next mission.",
+    "A French astronaut has become the commander of the station.",
+    "Four astronauts have returned to Earth after almost eight months on the space station.",
+    "A new space station has been launched in the Pacific Ocean."
+   ],
+   "answer": "Four astronauts have returned to Earth after almost eight months on the space station.",
+   "explanationFr": "Le texte s'ouvre sur « a SpaceX capsule dropped into the Pacific Ocean » avec quatre astronautes revenus après « almost eight months »."
+  },
+  {
+   "kind": "choice",
+   "skill": "detail",
+   "question": "How was the capsule slowed down before splashdown?",
+   "options": [
+    "By four parachutes",
+    "By a helicopter",
+    "By the ocean waves",
+    "By two engines"
+   ],
+   "answer": "By four parachutes",
+   "explanationFr": "« Four parachutes then slowed it down to about 16 mph. »"
+  },
+  {
+   "kind": "true_false",
+   "skill": "detail",
+   "question": "Sophie Adenot did four spacewalks.",
+   "options": [
+    "True",
+    "False"
+   ],
+   "answer": "False",
+   "explanationFr": "Meir en a fait quatre ; « Adenot did three »."
+  },
+  {
+   "kind": "choice",
+   "skill": "inference",
+   "question": "Why did the mission last longer than planned?",
+   "options": [
+    "The experiments needed more time.",
+    "The weather in Los Angeles was bad.",
+    "The replacement crew arrived late because of capsule repairs.",
+    "The astronauts refused to leave."
+   ],
+   "answer": "The replacement crew arrived late because of capsule repairs.",
+   "explanationFr": "« The astronauts who were supposed to replace them arrived three weeks late because of repairs to their capsule, so the mission lasted longer than planned. »"
+  }
+ ],
+ "listening": {
+  "format": "dialogue",
+  "title": "Coffee break: who wants to live in space?",
+  "contextFr": "Deux collègues développeurs discutent à la pause café du retour des astronautes. Les personnages sont fictifs.",
+  "speakers": [
+   {
+    "id": "A",
+    "name": "Emma",
+    "role": "software developer in Manchester",
+    "accent": "en-GB",
+    "gender": "female"
+   },
+   {
+    "id": "B",
+    "name": "Jake",
+    "role": "colleague, developer in Chicago",
+    "accent": "en-US",
+    "gender": "male"
+   }
+  ],
+  "lines": [
+   {
+    "speaker": "A",
+    "text": "Did you see the news this morning? The astronauts have finally come back after almost eight months in space."
+   },
+   {
+    "speaker": "B",
+    "text": "Yeah, I watched the splashdown video at my desk. I mean, I can't imagine it. The capsule was going at about seventeen thousand miles an hour, and then four parachutes slowed it down."
+   },
+   {
+    "speaker": "A",
+    "text": "Right, and the heat shield has to withstand incredibly high temperatures. Honestly, I'd be terrified."
+   },
+   {
+    "speaker": "B",
+    "text": "Well, the best part is the story before that. They went up to replace another crew, because one astronaut fell ill and everyone had to come home early."
+   },
+   {
+    "speaker": "A",
+    "text": "Really? I didn't know that. So they stayed longer than planned?"
+   },
+   {
+    "speaker": "B",
+    "text": "Yes, because their replacements arrived three weeks late. Apparently, the astronaut Jessica Meir did four spacewalks during the mission."
+   },
+   {
+    "speaker": "A",
+    "text": "Four! Actually, I read that the French astronaut, Sophie Adenot, did three, and she was the first French woman to walk in space."
+   },
+   {
+    "speaker": "B",
+    "text": "That's amazing. Would you do it, though? Eight months without a proper shower or a pizza?"
+   },
+   {
+    "speaker": "A",
+    "text": "Hmm, I'm not sure. Weightlessness sounds fun for a week. But I'd really miss the rain, believe it or not. I'm British, after all."
+   },
+   {
+    "speaker": "B",
+    "text": "Ha, fair enough. Meir said she was looking forward to feeling the breeze on her face. Simple things, you know?"
+   },
+   {
+    "speaker": "A",
+    "text": "Exactly. After all those experiments, I think I'd just want a long walk and a cup of tea."
+   },
+   {
+    "speaker": "B",
+    "text": "And no meetings for a week!"
+   },
+   {
+    "speaker": "A",
+    "text": "Don't push it, Jake. We have a sprint review at three."
+   }
+  ],
+  "questions": [
+   {
+    "kind": "choice",
+    "skill": "gist",
+    "question": "What are Emma and Jake mainly talking about?",
+    "options": [
+     "A new video game about space",
+     "Their next holiday in Chicago",
+     "A problem with their work project",
+     "The return of the astronauts and what they would miss"
+    ],
+    "answer": "The return of the astronauts and what they would miss",
+    "explanationFr": "Ils commentent le retour des astronautes (« finally come back after almost eight months ») et ce qui leur manquerait."
+   },
+   {
+    "kind": "choice",
+    "skill": "detail",
+    "question": "Why did the astronauts stay longer than planned?",
+    "options": [
+     "They wanted to do more spacewalks.",
+     "Jake asked them to stay.",
+     "Their replacements arrived three weeks late.",
+     "The capsule had no parachutes."
+    ],
+    "answer": "Their replacements arrived three weeks late.",
+    "explanationFr": "Jake dit : « their replacements arrived three weeks late »."
+   },
+   {
+    "kind": "true_false",
+    "skill": "detail",
+    "question": "According to the conversation, Sophie Adenot did three spacewalks.",
+    "options": [
+     "True",
+     "False"
+    ],
+    "answer": "True",
+    "explanationFr": "Emma : « the French astronaut, Sophie Adenot, did three »."
+   },
+   {
+    "kind": "choice",
+    "skill": "inference",
+    "question": "What would Emma miss most in space?",
+    "options": [
+     "Her computer",
+     "Pizza only",
+     "Her family",
+     "The rain and a cup of tea"
+    ],
+    "answer": "The rain and a cup of tea",
+    "explanationFr": "Emma : « I'd really miss the rain » et « a long walk and a cup of tea » ; elle ajoute « I'm British »."
+   }
+  ]
+ },
+ "authenticAudio": {
+  "title": "",
+  "outlet": "",
+  "audioUrl": "",
+  "pageUrl": "",
+  "published": "",
+  "taskFr": "",
+  "questions": []
+ },
+ "vocabulary": [
+  {
+   "kind": "gap_fill",
+   "instructionFr": "Complétez avec le mot ou l'expression qui convient.",
+   "items": [
+    {
+     "prompt": "The capsule's ___ protects it from the heat when it re-enters the atmosphere.",
+     "options": [
+      "heat shield",
+      "splashdown",
+      "spacewalk"
+     ],
+     "answer": "heat shield",
+     "explanationFr": "Le « heat shield » est le bouclier thermique."
+    },
+    {
+     "prompt": "Two engineers ___ ill the day before the launch.",
+     "options": [
+      "fell",
+      "became up",
+      "got down"
+     ],
+     "answer": "fell",
+     "explanationFr": "« fall ill » (prétérit : fell ill) = tomber malade."
+    },
+    {
+     "prompt": "I'm really ___ forward to my trip to London.",
+     "options": [
+      "looking",
+      "waiting",
+      "hoping"
+     ],
+     "answer": "looking",
+     "explanationFr": "« look forward to » = avoir hâte de. Piège : on dit « to + -ing »."
+    },
+    {
+     "prompt": "Can you ___ down? I can't follow you when you speak so fast.",
+     "options": [
+      "slow",
+      "low",
+      "late"
+     ],
+     "answer": "slow",
+     "explanationFr": "« slow down » = ralentir, aussi pour la parole."
+    },
+    {
+     "prompt": "Astronauts feel ___ in orbit, so everything floats.",
+     "options": [
+      "weightlessness",
+      "splashdown",
+      "replacement"
+     ],
+     "answer": "weightlessness",
+     "explanationFr": "« weightlessness » = apesanteur ; la phrase demande ici un nom : « feel weightlessness » fonctionne comme dans le texte."
+    }
+   ]
+  },
+  {
+   "kind": "false_friends",
+   "instructionFr": "Choisissez la bonne traduction. Attention aux faux amis et aux calques.",
+   "items": [
+    {
+     "prompt": "« Nous avons réalisé une étude » : We ___ a study.",
+     "options": [
+      "carried out",
+      "realised",
+      "made out"
+     ],
+     "answer": "carried out",
+     "explanationFr": "« To realise » signifie « se rendre compte », pas « réaliser » une tâche."
+    },
+    {
+     "prompt": "« Actuellement, sept personnes sont sur la station » : ___, seven people are on the station.",
+     "options": [
+      "Currently",
+      "Actually",
+      "Eventually"
+     ],
+     "answer": "Currently",
+     "explanationFr": "« Actually » = en fait. « Actuellement » se traduit par « currently »."
+    },
+    {
+     "prompt": "« Ils vont remplacer l'équipage » : They will ___ the crew.",
+     "options": [
+      "replace",
+      "remplace",
+      "substitute to"
+     ],
+     "answer": "replace",
+     "explanationFr": "« Replace » prend un complément direct ; « remplace » n'existe pas en anglais."
+    },
+    {
+     "prompt": "« Le vaisseau résiste à la chaleur » : The ship ___ the heat.",
+     "options": [
+      "withstands",
+      "resists to",
+      "supports"
+     ],
+     "answer": "withstands",
+     "explanationFr": "« Resist to » est un calque ; « support » veut dire « soutenir ». On dit « withstand »."
+    },
+    {
+     "prompt": "« Il a quitté la station hier » : He ___ the station yesterday.",
+     "options": [
+      "left",
+      "has left",
+      "did left"
+     ],
+     "answer": "left",
+     "explanationFr": "Avec « yesterday », on utilise le prétérit : « left »."
+    }
+   ]
+  }
+ ],
+ "grammar": {
+  "point": "for, since, during + present perfect / past simple",
+  "explanationFr": "« For » + durée (for eight months), « since » + point de départ (since February) : ils s'emploient avec le present perfect quand la situation continue (« have lived … for eight months »). « During » + nom d'une période ou d'un événement (during the mission) répond à « quand ? » et non « combien de temps ? ». Si l'action est terminée et datée, on emploie le prétérit : « They launched in February ». Piège français : « depuis » se traduit par « for » ou « since » selon qu'on donne une durée ou une date, jamais par « from ».",
+  "examples": [
+   "The crew had lived on the station for almost eight months.",
+   "They flew up in February.",
+   "Meir completed four spacewalks during the mission."
+  ],
+  "items": [
+   {
+    "prompt": "The astronauts have been in space ___ February. [for / since / during]",
+    "answer": "since"
+   },
+   {
+    "prompt": "She has worked for the space agency ___ ten years. [for / since / during]",
+    "answer": "for"
+   },
+   {
+    "prompt": "Several experiments were done ___ the mission. [for / since / during]",
+    "answer": "during"
+   },
+   {
+    "prompt": "They (live) on the station for eight months. [present perfect, they are still there]",
+    "answer": "have lived"
+   },
+   {
+    "prompt": "They (land) in the Pacific yesterday. [past simple]",
+    "answer": "landed"
+   }
+  ]
+ },
+ "writing": {
+  "taskFr": "Un collègue britannique vous demande par message si vous aimeriez passer huit mois dans l'espace. Répondez-lui avec votre avis et deux raisons, en utilisant for, since ou during.",
+  "genre": "message",
+  "words": 80,
+  "language": [
+   "I'd love to… because",
+   "I wouldn't want to… since",
+   "Although it sounds exciting,",
+   "I would miss…",
+   "I've wanted to … since I was a child"
+  ],
+  "criteria": [
+   "Donner clairement son avis (oui/non) et le justifier",
+   "Utiliser au moins un for, since ou during correctement",
+   "Employer des connecteurs (because, although, but)",
+   "60 à 90 mots, ton amical"
+  ],
+  "modelAnswer": "Hi Tom! Honestly, I'm not sure I would go. Although the views of Earth must be amazing, I would miss simple things, like cooking dinner and walking in the rain. I've never lived away from home for more than a month, so eight months sounds too long for me! Also, I would be worried about the return, because the capsule travels very fast. During my holidays, I prefer a quiet beach! But I'd try one week, maybe. What about you?"
+ },
+ "speaking": {
+  "taskFr": "Parlez pendant 60 à 90 secondes : que feriez-vous en premier si vous reveniez sur Terre après huit mois dans l'espace, et pourquoi ?",
+  "prompts": [
+   "What would you do first when you got back?",
+   "What would you miss from the station?",
+   "Would you like to try a spacewalk? Why or why not?"
+  ],
+  "prepSeconds": 30,
+  "speakSeconds": 75,
+  "language": [
+   "The first thing I would do is…",
+   "I've been looking forward to…",
+   "For eight months, I would have…",
+   "What I'd miss most is…",
+   "On the one hand… on the other hand…"
+  ],
+  "pronunciation": [
+   {
+    "word": "weightlessness",
+    "ipa": "ˈweɪtləsnəs",
+    "tipFr": "Le « ei » est long ; accent sur la première syllabe ; finale « -nəs » faible."
+   },
+   {
+    "word": "withstand",
+    "ipa": "wɪðˈstænd",
+    "tipFr": "Le « th » est voisé : langue entre les dents, comme dans « this » ; accent sur « stand »."
+   },
+   {
+    "word": "month",
+    "ipa": "mʌnθ",
+    "tipFr": "Le « th » final est sourd : langue entre les dents, soufflez sans voix ; voyelle courte « ʌ »."
+   },
+   {
+    "word": "through",
+    "ipa": "θruː",
+    "tipFr": "Mettez la langue entre les dents pour « th », puis un « r » anglais, sans le rouler."
+   }
+  ],
+  "modelAnswer": "The first thing I would do is take a long, hot shower, because I'd have missed it for eight months. Then I would eat a big pizza with my family. I've always loved technology, so I would also miss the view of Earth from the window. On the other hand, I wouldn't want to do a spacewalk, because it seems very dangerous. But it must be an incredible experience, so I would try it once, with a very good team."
+ },
+ "cards": [
+  {
+   "kind": "word",
+   "front": "splashdown",
+   "back": "amerrissage",
+   "example": "The capsule's splashdown took place off the coast of Los Angeles."
+  },
+  {
+   "kind": "word",
+   "front": "a heat shield",
+   "back": "un bouclier thermique",
+   "example": "The heat shield protected the capsule from extreme temperatures."
+  },
+  {
+   "kind": "word",
+   "front": "to withstand",
+   "back": "résister à, supporter",
+   "example": "The capsule can withstand temperatures of thousands of degrees."
+  },
+  {
+   "kind": "collocation",
+   "front": "to fall ___ (tomber malade)",
+   "back": "to fall ill",
+   "example": "One of the astronauts fell ill and had to come home."
+  },
+  {
+   "kind": "collocation",
+   "front": "to ___ out a study (réaliser)",
+   "back": "to carry out a study",
+   "example": "The crew carried out dozens of experiments."
+  },
+  {
+   "kind": "phrase",
+   "front": "J'ai hâte de rentrer chez moi.",
+   "back": "I'm looking forward to going home.",
+   "example": "I'm looking forward to going home after this long trip."
+  },
+  {
+   "kind": "word",
+   "front": "weightlessness",
+   "back": "apesanteur",
+   "example": "Weightlessness changes how the human body works."
+  },
+  {
+   "kind": "false_friend",
+   "front": "Actuellement (= en ce moment)",
+   "back": "currently (pas « actually »)",
+   "example": "Currently, seven people live on the station."
+  },
+  {
+   "kind": "grammar",
+   "front": "They have lived there ___ February. / ___ eight months.",
+   "back": "since / for",
+   "example": "They have lived there since February, so for eight months."
+  },
+  {
+   "kind": "pronunciation",
+   "front": "month /mʌnθ/",
+   "back": "th sourd final, langue entre les dents",
+   "example": "The mission lasted almost eight months."
+  }
+ ],
+ "nextTopics": [
+  {
+   "title": "Is the Brexit damage really irrevocable?",
+   "pitchFr": "Le ministre français des Finances parle d'un impact « irrévocable » du Brexit : utile pour parler du Royaume-Uni et de l'économie.",
+   "rubric": "economy",
+   "tone": "balanced",
+   "query": "French finance minister Brexit irrevocable impact"
+  },
+  {
+   "title": "Martin Lewis wants your small ideas to improve the UK",
+   "pitchFr": "Un sujet léger sur la vie quotidienne britannique, idéal pour pratiquer l'opinion et les suggestions.",
+   "rubric": "uk",
+   "tone": "light",
+   "query": "Martin Lewis small ideas improve UK"
+  },
+  {
+   "title": "The French viral vegetarian wolf becomes a toy",
+   "pitchFr": "Un loup végétarien devenu viral en France et maintenant un jouet : sujet amusant sur la culture populaire.",
+   "rubric": "society",
+   "tone": "light",
+   "query": "French viral vegetarian wolf toy"
+  }
+ ],
+ "readingWords": 271,
+ "menuAt": 1791480287365
+}

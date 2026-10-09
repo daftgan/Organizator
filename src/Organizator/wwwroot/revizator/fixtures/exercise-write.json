@@ -1,0 +1,185 @@
+{
+  "id": "exercise-20261008-b27d05",
+  "kind": "exercise",
+  "createdAt": 1791453600000,
+  "day": "2026-10-08",
+  "model": "claude-sonnet-5-5",
+  "ms": 45120,
+  "cost": 0.029,
+  "turns": 1,
+  "skill": "write",
+  "type": "write.translate",
+  "title": "Traps at work",
+  "level": "B1",
+  "minutes": 10,
+  "instructionsFr": "Traduisez chaque phrase en anglais. Chacune cache un piège classique pour un francophone : le temps du verbe, un faux ami, un indénombrable… Pour finir, un court e-mail corrigé par Claude.",
+  "topic": "Anglais professionnel",
+  "passage": {
+    "title": "",
+    "paragraphs": [],
+    "glossary": []
+  },
+  "script": {
+    "title": "",
+    "contextFr": "",
+    "speakers": [],
+    "lines": []
+  },
+  "items": [
+    {
+      "id": "i1",
+      "kind": "translate",
+      "prompt": "",
+      "promptFr": "Je travaille ici depuis trois ans.",
+      "options": [],
+      "answer": "I’ve been working here for three years.",
+      "accepted": [
+        "I have been working here for three years.",
+        "I’ve worked here for three years.",
+        "I have worked here for three years."
+      ],
+      "explanationFr": "Action commencée dans le passé et qui dure encore : present perfect (simple ou continu) + « for » devant une durée. Jamais « I work here since… ».",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i2",
+      "kind": "translate",
+      "prompt": "",
+      "promptFr": "Actuellement, nous cherchons un développeur expérimenté.",
+      "options": [],
+      "answer": "We’re currently looking for an experienced developer.",
+      "accepted": [
+        "We are currently looking for an experienced developer.",
+        "At the moment, we’re looking for an experienced developer.",
+        "At the moment we are looking for an experienced developer.",
+        "We’re looking for an experienced developer at the moment."
+      ],
+      "explanationFr": "« Actuellement » = currently, at the moment. « Actually » veut dire « en fait » : faux ami classique.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i3",
+      "kind": "translate",
+      "prompt": "",
+      "promptFr": "Je vous enverrai le rapport quand je l’aurai terminé.",
+      "options": [],
+      "answer": "I’ll send you the report when I’ve finished it.",
+      "accepted": [
+        "I will send you the report when I have finished it.",
+        "I’ll send you the report when I finish it.",
+        "I will send you the report when I finish it.",
+        "I’ll send you the report once I’ve finished it."
+      ],
+      "explanationFr": "Après « when » à sens futur, l’anglais emploie le présent ou le present perfect, jamais « will ».",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i4",
+      "kind": "translate",
+      "prompt": "",
+      "promptFr": "Merci pour les informations, elles étaient très utiles.",
+      "options": [],
+      "answer": "Thanks for the information, it was very useful.",
+      "accepted": [
+        "Thank you for the information, it was very useful.",
+        "Thanks for the information, it was very helpful.",
+        "Thank you for the information, it was very helpful."
+      ],
+      "explanationFr": "« information » est indénombrable : pas de -s, et le verbe reste au singulier (« it was »).",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i5",
+      "kind": "transform",
+      "prompt": "I started using Python in 2019 and I still use it.",
+      "promptFr": "Réécrivez en une phrase, au present perfect, avec « since ».",
+      "options": [],
+      "answer": "I’ve used Python since 2019.",
+      "accepted": [
+        "I have used Python since 2019.",
+        "I’ve been using Python since 2019.",
+        "I have been using Python since 2019."
+      ],
+      "explanationFr": "« since » + point de départ, avec le present perfect pour une action qui continue aujourd’hui.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i6",
+      "kind": "error_spot",
+      "prompt": "She explained me the new deployment process.",
+      "promptFr": "",
+      "options": [],
+      "answer": "She explained the new deployment process to me.",
+      "accepted": [
+        "She explained to me the new deployment process."
+      ],
+      "explanationFr": "« explain » ne prend pas la personne en complément direct : explain something to someone.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i7",
+      "kind": "order",
+      "prompt": "",
+      "promptFr": "Demandez poliment de repousser la réunion à jeudi.",
+      "options": [
+        "the meeting",
+        "Could we",
+        "until",
+        "push back",
+        "Thursday?"
+      ],
+      "answer": "Could we push back the meeting until Thursday?",
+      "accepted": [],
+      "explanationFr": "Une demande polie commence par « Could we… ? » ; « push back » = repousser, suivi de « until » pour la nouvelle date.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i8",
+      "kind": "open_write",
+      "prompt": "",
+      "promptFr": "Un client attend une nouvelle fonctionnalité pour vendredi. Écrivez-lui un court e-mail (60 à 90 mots) : annoncez un retard d’une semaine, expliquez la cause simplement et proposez une démonstration.",
+      "options": [],
+      "answer": "",
+      "accepted": [],
+      "explanationFr": "",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [
+        "Retard annoncé clairement",
+        "Cause expliquée simplement",
+        "Proposition concrète (date, démo)",
+        "Ton professionnel et poli"
+      ],
+      "modelAnswer": "Dear Ms Hall,\n\nI’m afraid the new export feature won’t be ready by Friday as planned. During testing we found a problem with large files, and we’d rather fix it properly than deliver something unreliable. We now expect to deliver it next Friday.\n\nIn the meantime, would you like a short demo of the current version on Tuesday or Wednesday? It would be a good chance to get your feedback.\n\nApologies for the inconvenience.\n\nBest regards,\nTom"
+    }
+  ]
+}

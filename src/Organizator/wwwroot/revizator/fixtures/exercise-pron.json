@@ -1,0 +1,176 @@
+{
+  "id": "exercise-20261008-0b8f62",
+  "kind": "exercise",
+  "createdAt": 1791453600000,
+  "day": "2026-10-08",
+  "model": "claude-sonnet-5-5",
+  "ms": 31200,
+  "cost": 0.019,
+  "turns": 1,
+  "skill": "pron",
+  "type": "pron.minimal_pairs",
+  "title": "Ship or sheep?",
+  "level": "B1",
+  "minutes": 5,
+  "instructionsFr": "Écoutez la phrase et choisissez le mot entendu. Les voix changent d’un item à l’autre : c’est voulu, l’oreille apprend mieux avec des voix variées. Puis trouvez la syllabe accentuée, et dites les deux mots à voix haute.",
+  "topic": "Voyelles et accent de mot",
+  "passage": {
+    "title": "",
+    "paragraphs": [],
+    "glossary": []
+  },
+  "script": {
+    "title": "",
+    "contextFr": "",
+    "speakers": [],
+    "lines": []
+  },
+  "items": [
+    {
+      "id": "i1",
+      "kind": "minimal_pair",
+      "prompt": "",
+      "promptFr": "",
+      "options": [],
+      "answer": "sheep",
+      "accepted": [],
+      "explanationFr": "/iː/ (sheep) est long et tendu, lèvres étirées ; /ɪ/ (ship) est bref et plus ouvert.",
+      "audioText": "Now I say sheep again.",
+      "words": [
+        "ship",
+        "sheep"
+      ],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i2",
+      "kind": "minimal_pair",
+      "prompt": "",
+      "promptFr": "",
+      "options": [],
+      "answer": "live",
+      "accepted": [],
+      "explanationFr": "« live » /lɪv/ : voyelle brève. « leave » /liːv/ : voyelle longue.",
+      "audioText": "Now I say live again.",
+      "words": [
+        "live",
+        "leave"
+      ],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i3",
+      "kind": "minimal_pair",
+      "prompt": "",
+      "promptFr": "",
+      "options": [],
+      "answer": "hut",
+      "accepted": [],
+      "explanationFr": "/æ/ (hat) : bouche très ouverte, entre « a » et « è ». /ʌ/ (hut) : un « a » bref et central.",
+      "audioText": "Now I say hut again.",
+      "words": [
+        "hat",
+        "hut"
+      ],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i4",
+      "kind": "minimal_pair",
+      "prompt": "",
+      "promptFr": "",
+      "options": [],
+      "answer": "heat",
+      "accepted": [],
+      "explanationFr": "Le « h » anglais s’entend : un souffle léger avant la voyelle. Sans lui, « heat » devient « eat ».",
+      "audioText": "Now I say heat again.",
+      "words": [
+        "heat",
+        "eat"
+      ],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i5",
+      "kind": "stress",
+      "prompt": "development",
+      "promptFr": "",
+      "options": [
+        "de",
+        "vel",
+        "op",
+        "ment"
+      ],
+      "answer": "1",
+      "accepted": [],
+      "explanationFr": "deVELopment : l’accent tombe sur la deuxième syllabe, les autres voyelles se réduisent.",
+      "audioText": "development",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i6",
+      "kind": "stress",
+      "prompt": "technology",
+      "promptFr": "",
+      "options": [
+        "tech",
+        "nol",
+        "o",
+        "gy"
+      ],
+      "answer": "1",
+      "accepted": [],
+      "explanationFr": "techNOLogy : dans les mots en -ology, l’accent tombe juste avant « -ology ».",
+      "audioText": "technology",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i7",
+      "kind": "stress",
+      "prompt": "photograph",
+      "promptFr": "",
+      "options": [
+        "pho",
+        "to",
+        "graph"
+      ],
+      "answer": "0",
+      "accepted": [],
+      "explanationFr": "PHOtograph, mais phoTOgrapher et photoGRAPHic : l’accent se déplace avec le suffixe.",
+      "audioText": "photograph",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i8",
+      "kind": "read_aloud",
+      "prompt": "Now I say sheep again. Now I say ship again.",
+      "promptFr": "Dites les deux phrases : Whisper doit reconnaître le bon mot à chaque fois.",
+      "options": [],
+      "answer": "",
+      "accepted": [],
+      "explanationFr": "Allongez franchement le /iː/ de « sheep » et gardez le /ɪ/ de « ship » très bref.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    }
+  ]
+}
