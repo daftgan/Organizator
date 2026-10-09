@@ -48,6 +48,8 @@ public sealed class BridgeHost
     private readonly WindowsToasts _toasts;
     private readonly FindingChat _findings;
     private readonly WhisperTranscriber _whisper;
+    private readonly VoiceChat _voice;
+    private readonly SpeechVoice _speech;
     private readonly PerfMonitor? _perf;
 
     // Dossier actuellement servi sous https://report.organizator/ (voir ArtifactReader.Locate).
@@ -112,11 +114,29 @@ public sealed class BridgeHost
         // Dictee et transcription des enregistrements : telechargement du modele et calcul s'affichent au fil de l'eau.
         _whisper = new WhisperTranscriber(store.DataDir, log, HostVersion);
         _whisper.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("whisper", payload));
+        // Conversation vocale : les phrases de la reponse arrivent une a une, la page les dit aussitot.
+        _voice = new VoiceChat(launcher, log, store.DataDir);
+        _voice.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("voice", payload));
+        _speech = new SpeechVoice(log);
         _core.WebMessageReceived += OnWebMessageReceived;
     }
 
     /// <summary>Dossier des pieces jointes, servi a l'UI sous <see cref="TaskAttachments.Host"/>.</summary>
     public string AttachmentsRoot => _attachments.Root;
+
+    /// <summary>Fermeture de l'application : la conversation vocale et la synthese s'arretent (processus claude tue).</summary>
+    public void Shutdown()
+    {
+        try
+        {
+            _voice.Dispose();
+            _speech.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Arret de la conversation vocale incomplet : " + ex.Message);
+        }
+    }
 
     /// <summary>Envoie un evenement non sollicite : <c>{ event, payload }</c>.</summary>
     public void PostEvent(string name, JsonObject? payload = null)
@@ -294,6 +314,12 @@ public sealed class BridgeHost
         "whisperWarm" => WarmWhisper(payload),
         "transcribe" => await TranscribeAsync(payload).ConfigureAwait(true),
         "cancelTranscribe" => new JsonObject { ["cancelled"] = _whisper.Cancel(Str(payload, "job")) },
+        "voiceStart" => StartVoice(payload),
+        "voiceSay" => new JsonObject { ["turn"] = _voice.Say(Str(payload, "conversationId"), Str(payload, "text"), Str(payload, "heard")) },
+        "voiceInterrupt" => InterruptVoice(payload),
+        "voiceStop" => StopVoice(payload),
+        "voiceVoices" => await _speech.VoicesJsonAsync().ConfigureAwait(true),
+        "voiceSpeak" => await SpeakAsync(payload).ConfigureAwait(true),
         "log" => LogFromWeb(payload),
         "perf" => RecordPerf(payload),
         _ => throw new InvalidOperationException($"Type de message inconnu : {type}"),
@@ -1626,6 +1652,54 @@ public sealed class BridgeHost
 
     private static string QuoteProcessArgument(string value)
         => "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+
+    // ------------------------------------------------------------- conversation vocale
+
+    /// <summary>
+    /// Ouvre une conversation vocale (voir <see cref="VoiceChat"/>) : chaque champ absent prend la valeur
+    /// des reglages. Le processus claude demarre en arriere-plan ; les reponses arrivent par l'evenement <c>voice</c>.
+    /// </summary>
+    private JsonNode StartVoice(JsonObject payload)
+    {
+        var settings = _store.LoadSettings();
+        var options = new VoiceOptions(
+            Model: AgentProvider.RequireModel(Str(payload, "model") ?? settings.VoiceModel),
+            Effort: AgentProvider.RequireEffort(AgentProvider.Claude, Str(payload, "effort") ?? settings.VoiceEffort),
+            Persona: VoiceChat.SanitizePersona(Str(payload, "persona") ?? settings.VoicePersona),
+            Topic: VoiceChat.SanitizeTopic(Str(payload, "topic") ?? settings.VoiceTopic),
+            Instructions: Limit(Str(payload, "instructions") ?? settings.VoiceInstructions, 2000),
+            Web: payload["web"] is JsonValue web && web.TryGetValue<bool>(out var allowed) ? allowed : settings.VoiceWeb);
+        return new JsonObject { ["conversationId"] = _voice.Start(options) };
+    }
+
+    private JsonNode InterruptVoice(JsonObject payload)
+    {
+        _voice.Interrupt(Str(payload, "conversationId"), Str(payload, "heard"));
+        return new JsonObject();
+    }
+
+    private JsonNode StopVoice(JsonObject payload)
+    {
+        _voice.Stop(Str(payload, "conversationId"));
+        return new JsonObject();
+    }
+
+    /// <summary>Synthese d'une phrase en WAV, sur le fil STA de <see cref="SpeechVoice"/> : <c>{ audio, ms }</c>.</summary>
+    private async Task<JsonNode> SpeakAsync(JsonObject payload)
+    {
+        var rate = payload["rate"] is JsonValue value
+            ? value.TryGetValue<int>(out var whole) ? whole
+            : value.TryGetValue<double>(out var real) && double.IsFinite(real) ? (int)Math.Round(Math.Clamp(real, -10, 10))
+            : 0
+            : _store.LoadSettings().VoiceRate;
+        var voice = Str(payload, "voice");
+        if (string.IsNullOrWhiteSpace(voice))
+        {
+            voice = _store.LoadSettings().VoiceVoice;
+        }
+
+        return await _speech.SpeakJsonAsync(Str(payload, "text"), voice, Math.Clamp(rate, -10, 10)).ConfigureAwait(true);
+    }
 
     private JsonNode LogFromWeb(JsonObject payload)
     {

@@ -85,6 +85,36 @@ public sealed class AppSettings
     /// <summary>Langue parlee : fr, en, ou auto (devinee par Whisper).</summary>
     [JsonPropertyName("whisperLanguage")] public string WhisperLanguage { get; set; } = "fr";
 
+    /// <summary>Conversation vocale : modele Claude de l'interlocuteur (un modele rapide garde la conversation fluide).</summary>
+    [JsonPropertyName("voiceModel")] public string VoiceModel { get; set; } = "sonnet";
+
+    /// <summary>Conversation vocale : effort de Claude (vide = reglage propre de l'outil) ; bas pour repondre vite.</summary>
+    [JsonPropertyName("voiceEffort")] public string VoiceEffort { get; set; } = "low";
+
+    /// <summary>Conversation vocale : id de la voix de synthese (jeton SAPI) ; vide = premiere voix francaise trouvee.</summary>
+    [JsonPropertyName("voiceVoice")] public string VoiceVoice { get; set; } = "";
+
+    /// <summary>Conversation vocale : debit de la voix, de -10 a 10.</summary>
+    [JsonPropertyName("voiceRate")] public int VoiceRate { get; set; } = 1;
+
+    /// <summary>Conversation vocale : prenom de l'interlocuteur.</summary>
+    [JsonPropertyName("voicePersona")] public string VoicePersona { get; set; } = "Alma";
+
+    /// <summary>Conversation vocale : sujet (voir <see cref="VoiceChat.Topics"/>).</summary>
+    [JsonPropertyName("voiceTopic")] public string VoiceTopic { get; set; } = "libre";
+
+    /// <summary>Conversation vocale : consignes libres ajoutees au prompt systeme.</summary>
+    [JsonPropertyName("voiceInstructions")] public string VoiceInstructions { get; set; } = "";
+
+    /// <summary>Conversation vocale : l'interlocuteur peut chercher sur le web (WebSearch, WebFetch).</summary>
+    [JsonPropertyName("voiceWeb")] public bool VoiceWeb { get; set; } = true;
+
+    /// <summary>Conversation vocale : modele Whisper (base = le plus rapide).</summary>
+    [JsonPropertyName("voiceWhisperModel")] public string VoiceWhisperModel { get; set; } = "base";
+
+    /// <summary>Conversation vocale : sensibilite de la detection de parole, de 0 a 100.</summary>
+    [JsonPropertyName("voiceSensitivity")] public int VoiceSensitivity { get; set; } = 50;
+
     [JsonPropertyName("window")] public WindowPlacement? Window { get; set; }
 
     public AppSettings Clone() => new()
@@ -115,6 +145,16 @@ public sealed class AppSettings
         WhisperAuto = WhisperAuto,
         WhisperModel = WhisperModel,
         WhisperLanguage = WhisperLanguage,
+        VoiceModel = VoiceModel,
+        VoiceEffort = VoiceEffort,
+        VoiceVoice = VoiceVoice,
+        VoiceRate = VoiceRate,
+        VoicePersona = VoicePersona,
+        VoiceTopic = VoiceTopic,
+        VoiceInstructions = VoiceInstructions,
+        VoiceWeb = VoiceWeb,
+        VoiceWhisperModel = VoiceWhisperModel,
+        VoiceSensitivity = VoiceSensitivity,
         Window = Window is null
             ? null
             : new WindowPlacement
@@ -171,5 +211,28 @@ public sealed class AppSettings
 
         WhisperModel = WhisperTranscriber.SanitizeModel(WhisperModel);
         WhisperLanguage = WhisperTranscriber.SanitizeLanguage(WhisperLanguage);
+
+        VoiceModel = AgentProvider.SanitizeModel(VoiceModel);
+        VoiceEffort = AgentProvider.SanitizeEffort(AgentProvider.Claude, VoiceEffort);
+        VoiceVoice = (VoiceVoice ?? "").Trim();
+        if (VoiceVoice.Length > 300)
+        {
+            VoiceVoice = "";
+        }
+
+        VoiceRate = Math.Clamp(VoiceRate, -10, 10);
+        VoicePersona = VoiceChat.SanitizePersona(VoicePersona);
+        VoiceTopic = VoiceChat.SanitizeTopic(VoiceTopic);
+        VoiceInstructions = (VoiceInstructions ?? "").Trim();
+        if (VoiceInstructions.Length > 2000)
+        {
+            VoiceInstructions = VoiceInstructions[..2000];
+        }
+
+        // Modele inconnu : celui de la conversation (base), pas celui de la dictee.
+        VoiceWhisperModel = WhisperTranscriber.Models.Any(m => string.Equals(m.Id, VoiceWhisperModel?.Trim(), StringComparison.OrdinalIgnoreCase))
+            ? WhisperTranscriber.SanitizeModel(VoiceWhisperModel)
+            : "base";
+        VoiceSensitivity = Math.Clamp(VoiceSensitivity, 0, 100);
     }
 }
