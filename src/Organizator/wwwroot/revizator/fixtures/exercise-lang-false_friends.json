@@ -1,0 +1,179 @@
+{
+  "id": "exercise-20261008-71d4b8",
+  "kind": "exercise",
+  "createdAt": 1791453600000,
+  "day": "2026-10-08",
+  "model": "claude-sonnet-5-5",
+  "ms": 36540,
+  "cost": 0.022,
+  "turns": 1,
+  "skill": "lang",
+  "type": "lang.false_friends",
+  "title": "False friends at the office",
+  "level": "B1",
+  "minutes": 10,
+  "instructionsFr": "Des faux amis et des calques du français, en contexte professionnel. Répondez sans chercher : l’erreur fait partie de l’apprentissage, et chaque réponse ratée peut devenir une carte.",
+  "topic": "Faux amis",
+  "passage": {
+    "title": "",
+    "paragraphs": [],
+    "glossary": []
+  },
+  "script": {
+    "title": "",
+    "contextFr": "",
+    "speakers": [],
+    "lines": []
+  },
+  "items": [
+    {
+      "id": "i1",
+      "kind": "choice",
+      "prompt": "« En fait, je n’ai pas encore fini. » → ___, I haven’t finished yet.",
+      "promptFr": "",
+      "options": [
+        "Actually",
+        "Currently",
+        "Eventually",
+        "Actively"
+      ],
+      "answer": "Actually",
+      "accepted": [],
+      "explanationFr": "« actually » = en fait. « Actuellement » se dit « currently » ou « at the moment ».",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i2",
+      "kind": "choice",
+      "prompt": "« Nous pourrions éventuellement ajouter un cache. » → We could ___ add a cache.",
+      "promptFr": "",
+      "options": [
+        "possibly",
+        "eventually",
+        "finally",
+        "actually"
+      ],
+      "answer": "possibly",
+      "accepted": [],
+      "explanationFr": "« éventuellement » = possibly, if necessary. « eventually » veut dire « finalement, à la longue ».",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i3",
+      "kind": "choice",
+      "prompt": "« J’ai assisté à la réunion de 10 h. » → I ___ the 10 o’clock meeting.",
+      "promptFr": "",
+      "options": [
+        "attended",
+        "assisted",
+        "watched",
+        "helped"
+      ],
+      "answer": "attended",
+      "accepted": [],
+      "explanationFr": "« assister à » = attend. « assist » veut dire « aider ».",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i4",
+      "kind": "gap",
+      "prompt": "Can you send me the ___ of yesterday’s meeting?",
+      "promptFr": "le compte rendu",
+      "options": [],
+      "answer": "minutes",
+      "accepted": [
+        "notes",
+        "summary"
+      ],
+      "explanationFr": "Le compte rendu d’une réunion : « the minutes », toujours au pluriel. « report » désigne un rapport plus long.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i5",
+      "kind": "gap",
+      "prompt": "That’s a ___ decision: let’s keep the old version until the tests pass.",
+      "promptFr": "raisonnable, sensé",
+      "options": [],
+      "answer": "sensible",
+      "accepted": [
+        "reasonable",
+        "wise"
+      ],
+      "explanationFr": "« sensible » = raisonnable, sensé. Le « sensible » français se dit « sensitive ».",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i6",
+      "kind": "error_spot",
+      "prompt": "I’m agree with your proposal.",
+      "promptFr": "",
+      "options": [],
+      "answer": "I agree with your proposal.",
+      "accepted": [],
+      "explanationFr": "« agree » est un verbe : I agree, sans « am ».",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i7",
+      "kind": "error_spot",
+      "prompt": "Could you give me an information about the API limits?",
+      "promptFr": "",
+      "options": [],
+      "answer": "Could you give me some information about the API limits?",
+      "accepted": [
+        "Could you give me information about the API limits?",
+        "Could you give me a piece of information about the API limits?"
+      ],
+      "explanationFr": "« information » est indénombrable : some information, a piece of information — jamais « an information ».",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i8",
+      "kind": "transform",
+      "prompt": "I did a formation on Kubernetes last month.",
+      "promptFr": "Remplacez le mot calqué du français par le mot anglais juste.",
+      "options": [],
+      "answer": "I did a training course on Kubernetes last month.",
+      "accepted": [
+        "I did a course on Kubernetes last month.",
+        "I did some training on Kubernetes last month.",
+        "I took a course on Kubernetes last month.",
+        "I went on a training course on Kubernetes last month."
+      ],
+      "explanationFr": "« formation » se dit « training » (indénombrable) ou « a training course ». En anglais, « formation » désigne la formation d’un groupe ou d’une roche.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    }
+  ]
+}

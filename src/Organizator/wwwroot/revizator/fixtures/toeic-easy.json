@@ -1,0 +1,757 @@
+{
+  "id": "toeic-20261008-7b20d4",
+  "kind": "toeic",
+  "module": "easy",
+  "center": "B1",
+  "createdAt": 1791446400000,
+  "day": "2026-10-08",
+  "model": "claude-sonnet-5-5",
+  "ms": 101200,
+  "cost": 0.2,
+  "turns": 1,
+  "listening": [
+    {
+      "id": "s1",
+      "section": "L",
+      "part": 2,
+      "topic": "train times",
+      "intro": "",
+      "speakers": [
+        {
+          "id": "W1",
+          "role": "traveller",
+          "gender": "female",
+          "accent": "en-GB"
+        },
+        {
+          "id": "M1",
+          "role": "station agent",
+          "gender": "male",
+          "accent": "en-GB"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "W1",
+          "text": "When does the next train to Leeds leave?"
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q1",
+          "stem": "",
+          "options": [
+            "In about ten minutes.",
+            "Yes, I'll leave it here.",
+            "From platform four."
+          ],
+          "answer": 0,
+          "ability": "L_detail_short",
+          "cefr": "A2",
+          "features": [],
+          "evidence": "In about ten minutes.",
+          "explanationFr": "« When » appelle un moment : dans dix minutes. « From platform four » répond à « where », « I’ll leave it here » joue sur « leave »."
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "section": "L",
+      "part": 2,
+      "topic": "moving boxes",
+      "intro": "",
+      "speakers": [
+        {
+          "id": "M1",
+          "role": "colleague",
+          "gender": "male",
+          "accent": "en-US"
+        },
+        {
+          "id": "W1",
+          "role": "colleague",
+          "gender": "female",
+          "accent": "en-CA"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "M1",
+          "text": "Can you help me carry these boxes to the storeroom?"
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q2",
+          "stem": "",
+          "options": [
+            "They're in the box.",
+            "I carried it yesterday.",
+            "Sure, which ones go first?"
+          ],
+          "answer": 2,
+          "ability": "L_gist_short",
+          "cefr": "A2",
+          "features": [],
+          "evidence": "Sure, which ones go first?",
+          "explanationFr": "À une demande d’aide, on accepte ou on refuse : « Sure… » accepte. Les deux autres réponses reprennent des mots entendus (« box », « carry »)."
+        }
+      ]
+    },
+    {
+      "id": "s3",
+      "section": "L",
+      "part": 2,
+      "topic": "cafeteria",
+      "intro": "",
+      "speakers": [
+        {
+          "id": "W2",
+          "role": "new employee",
+          "gender": "female",
+          "accent": "en-AU"
+        },
+        {
+          "id": "M2",
+          "role": "colleague",
+          "gender": "male",
+          "accent": "en-US"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "W2",
+          "text": "Is the cafeteria open on Saturdays?"
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q3",
+          "stem": "",
+          "options": [
+            "I'd like a sandwich, please.",
+            "Only in the morning.",
+            "It's on the ground floor."
+          ],
+          "answer": 1,
+          "ability": "L_detail_short",
+          "cefr": "B1",
+          "features": [
+            "indirect_response"
+          ],
+          "evidence": "Only in the morning.",
+          "explanationFr": "Réponse sans « yes » : oui, mais seulement le matin. « On the ground floor » répond à « where », et la commande de sandwich est hors sujet."
+        }
+      ]
+    },
+    {
+      "id": "s4",
+      "section": "L",
+      "part": 3,
+      "topic": "store sale weekend",
+      "intro": "Questions 4-6 refer to the following conversation with three speakers.",
+      "speakers": [
+        {
+          "id": "W1",
+          "role": "store manager",
+          "gender": "female",
+          "accent": "en-US"
+        },
+        {
+          "id": "M1",
+          "role": "sales assistant",
+          "gender": "male",
+          "accent": "en-GB"
+        },
+        {
+          "id": "M2",
+          "role": "sales assistant",
+          "gender": "male",
+          "accent": "en-CA"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "W1",
+          "text": "Thanks for coming in early, both of you. We're expecting a lot of customers for the weekend sale."
+        },
+        {
+          "speaker": "M1",
+          "text": "No problem. Do you want me on the checkout again?"
+        },
+        {
+          "speaker": "W1",
+          "text": "Actually, Kevin, I'd like you to help customers in the electronics section. You know the products best."
+        },
+        {
+          "speaker": "M2",
+          "text": "Then I can take the checkout. I worked there all last month."
+        },
+        {
+          "speaker": "W1",
+          "text": "Perfect, Raj. And remember, the doors open at eight thirty today, half an hour earlier than usual."
+        },
+        {
+          "speaker": "M1",
+          "text": "Got it. I'll put the new price labels on the shelves before then."
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q4",
+          "stem": "What event are the speakers preparing for?",
+          "options": [
+            "An inventory check",
+            "A staff party",
+            "A product launch",
+            "A store sale"
+          ],
+          "answer": 3,
+          "ability": "L_gist_ext",
+          "cefr": "A2",
+          "features": [
+            "lexical_match"
+          ],
+          "evidence": "We're expecting a lot of customers for the weekend sale.",
+          "explanationFr": "La responsable parle de « the weekend sale » : les soldes du week-end."
+        },
+        {
+          "id": "q5",
+          "stem": "Where will Kevin work?",
+          "options": [
+            "In the electronics section",
+            "At the front door",
+            "In the stockroom",
+            "At the checkout"
+          ],
+          "answer": 0,
+          "ability": "L_detail_ext",
+          "cefr": "A2",
+          "features": [
+            "lexical_match"
+          ],
+          "evidence": "Kevin, I'd like you to help customers in the electronics section.",
+          "explanationFr": "Kevin propose la caisse, mais la responsable l’envoie au rayon électronique ; c’est Raj qui prend la caisse."
+        },
+        {
+          "id": "q6",
+          "stem": "What will happen at eight thirty?",
+          "options": [
+            "A delivery will arrive.",
+            "The prices will change.",
+            "The store will open.",
+            "A meeting will begin."
+          ],
+          "answer": 2,
+          "ability": "L_detail_ext",
+          "cefr": "B1",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "the doors open at eight thirty today",
+          "explanationFr": "« The doors open » = le magasin ouvre, une demi-heure plus tôt que d’habitude."
+        }
+      ]
+    },
+    {
+      "id": "s5",
+      "section": "L",
+      "part": 3,
+      "topic": "meeting room booking",
+      "intro": "Questions 7-9 refer to the following conversation and table.",
+      "speakers": [
+        {
+          "id": "M1",
+          "role": "project manager",
+          "gender": "male",
+          "accent": "en-US"
+        },
+        {
+          "id": "W1",
+          "role": "office assistant",
+          "gender": "female",
+          "accent": "en-GB"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "M1",
+          "text": "Hi Claire, I need a room for the budget meeting on Tuesday. There'll be ten of us."
+        },
+        {
+          "speaker": "W1",
+          "text": "Let me have a look. Do you need it in the morning or in the afternoon?"
+        },
+        {
+          "speaker": "M1",
+          "text": "The morning, if possible. The finance director has to leave at noon."
+        },
+        {
+          "speaker": "W1",
+          "text": "Then there's only one room that's big enough and free before lunch. I'll book it for you now."
+        },
+        {
+          "speaker": "M1",
+          "text": "Great. Could you also order coffee for ten people?"
+        },
+        {
+          "speaker": "W1",
+          "text": "Sure. I'll ask the cafeteria to bring it at nine."
+        }
+      ],
+      "documents": [],
+      "graphic": {
+        "kind": "schedule",
+        "title": "Meeting rooms: Tuesday",
+        "columns": [
+          "Room",
+          "Seats",
+          "Available"
+        ],
+        "rows": [
+          [
+            "Oak",
+            "6",
+            "9:00–11:00"
+          ],
+          [
+            "Maple",
+            "10",
+            "13:00–15:00"
+          ],
+          [
+            "Cedar",
+            "12",
+            "9:00–12:00"
+          ],
+          [
+            "Pine",
+            "20",
+            "14:00–17:00"
+          ]
+        ]
+      },
+      "questions": [
+        {
+          "id": "q7",
+          "stem": "What is the meeting about?",
+          "options": [
+            "A training course",
+            "A budget",
+            "A new client",
+            "A job interview"
+          ],
+          "answer": 1,
+          "ability": "L_gist_ext",
+          "cefr": "A2",
+          "features": [
+            "lexical_match"
+          ],
+          "evidence": "I need a room for the budget meeting",
+          "explanationFr": "Il s’agit de « the budget meeting »."
+        },
+        {
+          "id": "q8",
+          "stem": "Look at the graphic. Which room will the woman book?",
+          "options": [
+            "Maple",
+            "Oak",
+            "Pine",
+            "Cedar"
+          ],
+          "answer": 3,
+          "ability": "L_detail_ext",
+          "cefr": "B1",
+          "features": [
+            "graphic"
+          ],
+          "evidence": "There'll be ten of us … The morning, if possible.",
+          "explanationFr": "Dix personnes, le matin : Oak est trop petite, Maple et Pine ne sont libres que l’après-midi. Reste Cedar (12 places, 9 h-12 h)."
+        },
+        {
+          "id": "q9",
+          "stem": "What will the woman ask the cafeteria to do?",
+          "options": [
+            "Bring coffee",
+            "Open early",
+            "Prepare lunch",
+            "Clean the room"
+          ],
+          "answer": 0,
+          "ability": "L_detail_ext",
+          "cefr": "A2",
+          "features": [],
+          "evidence": "I'll ask the cafeteria to bring it at nine.",
+          "explanationFr": "« It » renvoie au café demandé par l’homme : la cafétéria l’apportera à neuf heures."
+        }
+      ]
+    },
+    {
+      "id": "s6",
+      "section": "L",
+      "part": 4,
+      "topic": "supermarket announcement",
+      "intro": "Questions 10-12 refer to the following announcement.",
+      "speakers": [
+        {
+          "id": "N",
+          "role": "store announcer",
+          "gender": "male",
+          "accent": "en-US"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "N",
+          "text": "Good afternoon, shoppers, and welcome to Greenfield Market. Today only, all fresh fruit and vegetables are twenty percent off. You'll find them at the front of the store, next to the flower stand. Our bakery has also just taken some fresh bread out of the oven. Please note that the store will close at six o'clock this evening, one hour earlier than usual, because of staff training. Thank you for shopping with us."
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q10",
+          "stem": "Where is the announcement being made?",
+          "options": [
+            "At a train station",
+            "In a supermarket",
+            "In a restaurant",
+            "At a bank"
+          ],
+          "answer": 1,
+          "ability": "L_gist_ext",
+          "cefr": "A2",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "Good afternoon, shoppers, and welcome to Greenfield Market.",
+          "explanationFr": "« Shoppers », fruits, légumes, boulangerie : c’est un supermarché."
+        },
+        {
+          "id": "q11",
+          "stem": "What is on sale today?",
+          "options": [
+            "Flowers",
+            "Cleaning products",
+            "Fruit and vegetables",
+            "Bread"
+          ],
+          "answer": 2,
+          "ability": "L_detail_ext",
+          "cefr": "A2",
+          "features": [],
+          "evidence": "all fresh fruit and vegetables are twenty percent off",
+          "explanationFr": "Les fruits et légumes sont à moins vingt pour cent. Les fleurs servent seulement de repère, le pain n’est pas en promotion."
+        },
+        {
+          "id": "q12",
+          "stem": "Why will the store close early?",
+          "options": [
+            "Because of repairs",
+            "Because of a delivery",
+            "Because of a public holiday",
+            "Because of staff training"
+          ],
+          "answer": 3,
+          "ability": "L_detail_ext",
+          "cefr": "B1",
+          "features": [],
+          "evidence": "one hour earlier than usual, because of staff training",
+          "explanationFr": "La fermeture anticipée est due à une formation du personnel."
+        }
+      ]
+    }
+  ],
+  "reading": [
+    {
+      "id": "s7",
+      "section": "R",
+      "part": 5,
+      "topic": "price list",
+      "intro": "",
+      "speakers": [],
+      "audio": [],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q13",
+          "stem": "Please send ------- the updated price list by Friday.",
+          "options": [
+            "I",
+            "me",
+            "my",
+            "mine"
+          ],
+          "answer": 1,
+          "ability": "R_grammar",
+          "cefr": "A2",
+          "features": [],
+          "evidence": "",
+          "explanationFr": "Après le verbe « send », pronom complément : me."
+        }
+      ]
+    },
+    {
+      "id": "s8",
+      "section": "R",
+      "part": 5,
+      "topic": "public holiday",
+      "intro": "",
+      "speakers": [],
+      "audio": [],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q14",
+          "stem": "The office will be closed on Monday ------- the public holiday.",
+          "options": [
+            "unless",
+            "although",
+            "so that",
+            "because of"
+          ],
+          "answer": 3,
+          "ability": "R_grammar",
+          "cefr": "A2",
+          "features": [],
+          "evidence": "",
+          "explanationFr": "Devant un nom (« the public holiday »), il faut une préposition : because of. Les trois autres introduisent une proposition."
+        }
+      ]
+    },
+    {
+      "id": "s9",
+      "section": "R",
+      "part": 5,
+      "topic": "new assistant",
+      "intro": "",
+      "speakers": [],
+      "audio": [],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q15",
+          "stem": "Our new assistant is very ------- and always answers e-mails within the hour.",
+          "options": [
+            "efficient",
+            "empty",
+            "expensive",
+            "eventual"
+          ],
+          "answer": 0,
+          "ability": "R_vocab",
+          "cefr": "B1",
+          "features": [],
+          "evidence": "",
+          "explanationFr": "Efficient = efficace. « Eventual » est un faux ami : il veut dire « final », pas « éventuel »."
+        }
+      ]
+    },
+    {
+      "id": "s10",
+      "section": "R",
+      "part": 7,
+      "topic": "car park closure",
+      "intro": "Questions 16-17 refer to the following notice.",
+      "speakers": [],
+      "audio": [],
+      "documents": [
+        {
+          "kind": "notice",
+          "title": "North car park closed",
+          "meta": [
+            "Westfield Business Park"
+          ],
+          "paragraphs": [
+            "The north car park will be closed from Monday 9 June to Wednesday 11 June while the surface is repaired.",
+            "During this time, staff may park in the south car park, behind Building C. A free shuttle bus will run between the south car park and the main entrance every fifteen minutes from 7:30 A.M. to 9:30 A.M.",
+            "Visitors should use the spaces in front of reception, which will remain open.",
+            "We apologise for any inconvenience."
+          ]
+        }
+      ],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q16",
+          "stem": "Why will the north car park be closed?",
+          "options": [
+            "For a company event",
+            "Because of bad weather",
+            "For repair work",
+            "Because of a delivery"
+          ],
+          "answer": 2,
+          "ability": "R_locate",
+          "cefr": "A2",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "while the surface is repaired",
+          "explanationFr": "« The surface is repaired » : des travaux de réparation."
+        },
+        {
+          "id": "q17",
+          "stem": "What is indicated about the shuttle bus?",
+          "options": [
+            "It costs a small fee.",
+            "It runs in the morning.",
+            "It stops at Building A.",
+            "It runs all day."
+          ],
+          "answer": 1,
+          "ability": "R_locate",
+          "cefr": "B1",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "from 7:30 A.M. to 9:30 A.M.",
+          "explanationFr": "La navette circule de 7 h 30 à 9 h 30 : le matin seulement. Elle est gratuite (« free »)."
+        }
+      ]
+    },
+    {
+      "id": "s11",
+      "section": "R",
+      "part": 7,
+      "topic": "venue booking",
+      "intro": "Questions 18-22 refer to the following e-mail and Web page.",
+      "speakers": [],
+      "audio": [],
+      "documents": [
+        {
+          "kind": "email",
+          "title": "Booking enquiry",
+          "meta": [
+            "From: Nadia Rahman <n.rahman@corvex.co.uk>",
+            "To: Events Team <events@cityhallvenues.com>",
+            "Date: 2 May",
+            "Subject: Booking enquiry"
+          ],
+          "paragraphs": [
+            "Hello,",
+            "I would like to book a room for a one-day workshop for my company on Thursday 22 May. We expect around 35 participants. We will need a projector, and we would like lunch to be served at 12:30.",
+            "Could you also tell me whether there is parking near the venue? Several participants will come by car.",
+            "Kind regards,",
+            "Nadia Rahman, Training Coordinator, Corvex Ltd"
+          ]
+        },
+        {
+          "kind": "webpage",
+          "title": "City Hall Venues: our rooms",
+          "meta": [
+            "www.cityhallvenues.com/rooms"
+          ],
+          "paragraphs": [
+            "The Garden Room: up to 20 guests, £350 per day.",
+            "The River Room: up to 40 guests, £520 per day, projector included.",
+            "The Grand Hall: from 60 to 120 guests, £1,200 per day, projector and sound system included.",
+            "All rooms come with free Wi-Fi. Lunch is available from £14 per person. A public car park is located 200 metres from the building (£8 per day)."
+          ]
+        }
+      ],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q18",
+          "stem": "Why did Ms. Rahman write the e-mail?",
+          "options": [
+            "To ask about renting a room",
+            "To complain about a service",
+            "To cancel a workshop",
+            "To invite a speaker"
+          ],
+          "answer": 0,
+          "ability": "R_locate",
+          "cefr": "A2",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "I would like to book a room for a one-day workshop",
+          "explanationFr": "Elle veut réserver une salle : « book a room » devient « renting a room »."
+        },
+        {
+          "id": "q19",
+          "stem": "How many people will probably attend the workshop?",
+          "options": [
+            "About 20",
+            "About 120",
+            "About 40",
+            "About 35"
+          ],
+          "answer": 3,
+          "ability": "R_locate",
+          "cefr": "A2",
+          "features": [
+            "lexical_match"
+          ],
+          "evidence": "We expect around 35 participants.",
+          "explanationFr": "« Around 35 participants » : environ 35. Les autres nombres sont les capacités des salles."
+        },
+        {
+          "id": "q20",
+          "stem": "What does Ms. Rahman ask about?",
+          "options": [
+            "Public transport",
+            "Hotel rooms",
+            "Parking",
+            "Wi-Fi access"
+          ],
+          "answer": 2,
+          "ability": "R_locate",
+          "cefr": "A2",
+          "features": [],
+          "evidence": "Could you also tell me whether there is parking near the venue?",
+          "explanationFr": "Elle demande s’il y a un parking près du lieu."
+        },
+        {
+          "id": "q21",
+          "stem": "Which room would best suit Ms. Rahman's needs?",
+          "options": [
+            "The River Room",
+            "Any of the three rooms",
+            "The Garden Room",
+            "The Grand Hall"
+          ],
+          "answer": 0,
+          "ability": "R_connect",
+          "cefr": "B1",
+          "features": [
+            "cross_text"
+          ],
+          "evidence": "around 35 participants … projector / up to 40 guests, projector included",
+          "explanationFr": "Il faut croiser les deux documents : 35 personnes et un projecteur. Garden Room est trop petite, Grand Hall commence à 60 personnes."
+        },
+        {
+          "id": "q22",
+          "stem": "What is suggested about the car park?",
+          "options": [
+            "It is free for participants.",
+            "It is closed on Thursdays.",
+            "It is inside the building.",
+            "It charges a daily fee."
+          ],
+          "answer": 3,
+          "ability": "R_infer",
+          "cefr": "B1",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "A public car park is located 200 metres from the building (£8 per day).",
+          "explanationFr": "Le parking coûte 8 £ par jour : il est payant, et il se trouve à 200 mètres du bâtiment."
+        }
+      ]
+    }
+  ]
+}

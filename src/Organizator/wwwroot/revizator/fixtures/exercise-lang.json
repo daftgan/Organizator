@@ -1,0 +1,214 @@
+{
+  "id": "exercise-20261008-c9d78c",
+  "kind": "exercise",
+  "createdAt": 1791480529964,
+  "day": "2026-10-08",
+  "model": "claude-sonnet-5-5",
+  "ms": 17607,
+  "cost": 0.057,
+  "turns": 2,
+  "skill": "lang",
+  "type": "lang.weak_points",
+  "title": "Time, Prepositions and False Friends",
+  "level": "B1+",
+  "minutes": 10,
+  "instructionsFr": "Cette série travaille vos trois points faibles : la durée avec le present perfect (for / since / ago), les prépositions calquées du français et les faux amis. Répondez à chaque item ; une seule réponse est correcte. Pour les trous, écrivez uniquement le mot ou le groupe manquant.",
+  "topic": "Durée, prépositions et faux amis au quotidien et au travail",
+  "passage": {
+    "title": "",
+    "paragraphs": [],
+    "glossary": []
+  },
+  "script": {
+    "title": "",
+    "contextFr": "",
+    "speakers": [],
+    "lines": []
+  },
+  "items": [
+    {
+      "id": "i1",
+      "kind": "gap",
+      "prompt": "I ___ in this team since March.",
+      "promptFr": "(travailler) – je travaille dans cette équipe depuis mars.",
+      "options": [],
+      "answer": "have worked",
+      "accepted": [
+        "'ve worked",
+        "have been working",
+        "'ve been working"
+      ],
+      "explanationFr": "En français on dit « je travaille depuis mars » ; en anglais, une durée qui continue jusqu'à maintenant demande le present perfect avec since.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i2",
+      "kind": "choice",
+      "prompt": "We moved to Lyon three years ___.",
+      "promptFr": "",
+      "options": [
+        "for",
+        "since",
+        "before",
+        "ago"
+      ],
+      "answer": "ago",
+      "accepted": [],
+      "explanationFr": "« Il y a trois ans » se dit three years ago, avec le prétérit. For indique une durée, since un point de départ.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i3",
+      "kind": "transform",
+      "prompt": "She started learning Spanish in 2022 and she still learns it.",
+      "promptFr": "Réécrivez avec for (nous sommes en 2026) : She has been learning Spanish ...",
+      "options": [],
+      "answer": "She has been learning Spanish for four years.",
+      "accepted": [
+        "She has learned Spanish for four years.",
+        "She's been learning Spanish for four years."
+      ],
+      "explanationFr": "For + durée (four years) avec le present perfect ; since serait suivi de la date de début.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i4",
+      "kind": "gap",
+      "prompt": "The server has been down ___ two hours.",
+      "promptFr": "",
+      "options": [],
+      "answer": "for",
+      "accepted": [],
+      "explanationFr": "Two hours est une durée, donc for. Since demande un moment précis, comme 9 a.m.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i5",
+      "kind": "choice",
+      "prompt": "Our train arrives ___ Manchester at 6 p.m.",
+      "promptFr": "",
+      "options": [
+        "at the",
+        "to",
+        "on",
+        "in"
+      ],
+      "answer": "in",
+      "accepted": [],
+      "explanationFr": "On dit « arriver à » en français, mais arrive in avec une ville (arrive at avec un lieu précis comme a station). Jamais arrive to.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i6",
+      "kind": "error_spot",
+      "prompt": "It depends of the budget we get next quarter.",
+      "promptFr": "",
+      "options": [],
+      "answer": "It depends on the budget we get next quarter.",
+      "accepted": [],
+      "explanationFr": "« Dépendre de » se traduit par depend on, pas of.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i7",
+      "kind": "choice",
+      "prompt": "I'm sorry, I didn't read your report. I was ___ busy last week.",
+      "promptFr": "",
+      "options": [
+        "actually",
+        "eventually",
+        "really",
+        "currently"
+      ],
+      "answer": "really",
+      "accepted": [],
+      "explanationFr": "Really signifie « vraiment ». Actually veut dire « en fait » et eventually « finalement », pas « actuellement ».",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i8",
+      "kind": "translate",
+      "prompt": "",
+      "promptFr": "Je cherche un livre à la bibliothèque depuis une heure.",
+      "options": [],
+      "answer": "I have been looking for a book at the library for an hour.",
+      "accepted": [
+        "I've been looking for a book in the library for an hour.",
+        "I've been looking for a book at the library for one hour.",
+        "I have been looking for a book in the library for an hour."
+      ],
+      "explanationFr": "Depuis une heure se traduit par for an hour avec le present perfect ; look for contient déjà « chercher ». Library est bien la bibliothèque (bookshop = librairie).",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i9",
+      "kind": "error_spot",
+      "prompt": "My manager gave me a good advice about the contract.",
+      "promptFr": "",
+      "options": [],
+      "answer": "My manager gave me good advice about the contract.",
+      "accepted": [
+        "My manager gave me some good advice about the contract.",
+        "My manager gave me a piece of good advice about the contract."
+      ],
+      "explanationFr": "Advice est indénombrable : pas de a ni de pluriel. En français « un conseil » est dénombrable, d'où le piège.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i10",
+      "kind": "choice",
+      "prompt": "Which sentence is correct?",
+      "promptFr": "",
+      "options": [
+        "I know him for ten years.",
+        "I know him since ten years.",
+        "I have known him for ten years.",
+        "I am knowing him for ten years."
+      ],
+      "answer": "I have known him for ten years.",
+      "accepted": [],
+      "explanationFr": "Know est un verbe d'état, donc pas de forme en -ing ; la durée jusqu'à maintenant demande le present perfect avec for.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    }
+  ]
+}

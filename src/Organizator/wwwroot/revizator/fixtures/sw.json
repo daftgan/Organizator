@@ -1,0 +1,204 @@
+{
+  "id": "sw-20261008-ca16f8",
+  "kind": "sw",
+  "createdAt": 1791480346489,
+  "day": "2026-10-08",
+  "model": "claude-sonnet-5-5",
+  "ms": 15271,
+  "cost": 0.0439,
+  "turns": 2,
+  "level": "B1+",
+  "speaking": [
+    {
+      "id": "s1",
+      "task": "read_aloud",
+      "promptFr": "Lisez ce texte à voix haute, clairement et naturellement : 45 secondes de préparation, puis 45 secondes de lecture.",
+      "prompt": "Read the text aloud.",
+      "text": "Welcome to Harbor Hotel, Mr. Collins. Thank you for choosing to stay with us this week. Your room is on the third floor, and breakfast, lunch, and dinner are served in the garden restaurant. Our receptionist, Emma, will gladly arrange a taxi, a city tour, or a theatre ticket for you. Would you like us to bring your luggage upstairs? Please remember that the swimming pool is closed on Thursday because of the annual cleaning. We hope you enjoy your wonderful visit.",
+      "questions": [],
+      "info": null,
+      "prepSeconds": 45,
+      "speakSeconds": [
+        45
+      ],
+      "scale": 3
+    },
+    {
+      "id": "s2",
+      "task": "describe",
+      "promptFr": "Imaginez la photo décrite ci-dessous et décrivez-la en anglais, avec le plus de détails possible : 45 secondes de préparation, 30 secondes de parole.",
+      "prompt": "Describe the picture in as much detail as you can.",
+      "text": "Cette photo a été prise dans un petit café de quartier, un matin ensoleillé. Au premier plan, une jeune femme aux cheveux longs est assise à une table en bois et tape sur son ordinateur portable ; une tasse de café et un croissant sont posés à côté d'elle. Derrière elle, un serveur en tablier apporte un plateau à un couple âgé qui sourit. Au fond, on voit un comptoir avec une machine à café, des étagères pleines de livres et, par la grande fenêtre, des gens qui marchent dans la rue.",
+      "questions": [],
+      "info": null,
+      "prepSeconds": 45,
+      "speakSeconds": [
+        30
+      ],
+      "scale": 3
+    },
+    {
+      "id": "s3",
+      "task": "respond",
+      "promptFr": "Répondez à trois questions sur un thème de la vie courante : 3 secondes de préparation après chaque question, 15 secondes pour les deux premières réponses, 30 secondes pour la troisième.",
+      "prompt": "Imagine that a British marketing firm is doing research in your area. You have agreed to participate in a telephone interview about how people travel to work or school.",
+      "text": "",
+      "questions": [
+        "How do you usually get to work or school?",
+        "How long does your trip take each day?",
+        "Some cities want to make public transport free for everyone. Do you think this is a good idea? Why or why not?"
+      ],
+      "info": null,
+      "prepSeconds": 3,
+      "speakSeconds": [
+        15,
+        15,
+        30
+      ],
+      "scale": 3
+    },
+    {
+      "id": "s4",
+      "task": "respond_info",
+      "promptFr": "Lisez le document (45 secondes), puis répondez aux trois questions de la personne qui appelle, à partir de ses informations : 3 secondes de préparation, puis 15, 15 et 30 secondes. La troisième question est jouée deux fois.",
+      "prompt": "Hi, this is Daniel Reyes from Brightway Solutions. I'm calling about the Customer Service Training Day next week. I lost the schedule, so I need some details, please.",
+      "text": "",
+      "questions": [
+        "What time does the training day start, and where do I go first?",
+        "I think the lunch break is at noon, and I believe Mr. Kim is giving the talk about e-mails. Is that right?",
+        "Could you tell me what the three morning sessions are, and who is giving each one?"
+      ],
+      "info": {
+        "title": "Customer Service Training Day – Friday, May 16 – Lakeview Conference Center",
+        "rows": [
+          [
+            "9:00 a.m.",
+            "Registration and coffee",
+            "Main lobby"
+          ],
+          [
+            "9:30 a.m.",
+            "Welcome speech",
+            "Ms. Patel, Director"
+          ],
+          [
+            "10:15 a.m.",
+            "Handling difficult customers",
+            "Mr. Evans, Room B"
+          ],
+          [
+            "11:30 a.m.",
+            "Writing clear e-mails",
+            "Ms. Lopez, Room A"
+          ],
+          [
+            "12:30 p.m.",
+            "Lunch break",
+            "Garden cafeteria"
+          ],
+          [
+            "1:30 p.m.",
+            "Using the new support software",
+            "Mr. Kim, Computer Lab"
+          ],
+          [
+            "3:00 p.m.",
+            "Group activity and final questions",
+            "Ms. Patel, Room B"
+          ]
+        ]
+      },
+      "prepSeconds": 45,
+      "speakSeconds": [
+        15,
+        15,
+        30
+      ],
+      "scale": 3
+    },
+    {
+      "id": "s5",
+      "task": "opinion",
+      "promptFr": "Donnez votre avis sur la question et justifiez-le par des raisons et des exemples : 45 secondes de préparation, 60 secondes de parole.",
+      "prompt": "Some people think it is better to work from home because it saves time and money. Others believe it is better to work in an office with colleagues. What is your opinion? Give reasons and examples.",
+      "text": "",
+      "questions": [],
+      "info": null,
+      "prepSeconds": 45,
+      "speakSeconds": [
+        60
+      ],
+      "scale": 5
+    }
+  ],
+  "writing": [
+    {
+      "id": "w1",
+      "task": "sentence",
+      "promptFr": "Écrivez une seule phrase en anglais qui décrit la situation et emploie les deux mots imposés, sous la forme et dans l'ordre de votre choix.",
+      "prompt": "Write ONE sentence based on the situation. Use the TWO words given.",
+      "words": [
+        "woman",
+        "while"
+      ],
+      "situation": "Une femme attend sur le quai d'une gare et regarde son téléphone pendant que le train arrive.",
+      "email": null,
+      "minutes": 2,
+      "scale": 3
+    },
+    {
+      "id": "w2",
+      "task": "sentence",
+      "promptFr": "Écrivez une seule phrase en anglais qui décrit la situation et emploie les deux mots imposés, sous la forme et dans l'ordre de votre choix.",
+      "prompt": "Write ONE sentence based on the situation. Use the TWO words given.",
+      "words": [
+        "because",
+        "closed"
+      ],
+      "situation": "Des clients se tiennent devant un restaurant dont la porte est fermée. Une pancarte explique la raison.",
+      "email": null,
+      "minutes": 2,
+      "scale": 3
+    },
+    {
+      "id": "w3",
+      "task": "sentence",
+      "promptFr": "Écrivez une seule phrase en anglais qui décrit la situation et emploie les deux mots imposés, sous la forme et dans l'ordre de votre choix.",
+      "prompt": "Write ONE sentence based on the situation. Use the TWO words given.",
+      "words": [
+        "before",
+        "chart"
+      ],
+      "situation": "Dans un bureau, un employé montre un graphique à ses collègues avant la réunion.",
+      "email": null,
+      "minutes": 2,
+      "scale": 3
+    },
+    {
+      "id": "w4",
+      "task": "email",
+      "promptFr": "Répondez à l'e-mail comme si vous étiez le client qui a commandé les chaises. Dans votre e-mail, donnez DEUX informations et formulez UNE demande. Vous avez 10 minutes.",
+      "prompt": "Respond to the e-mail as if you are the customer who ordered the chairs. In your e-mail, give TWO pieces of information and make ONE request.",
+      "words": [],
+      "situation": "",
+      "email": {
+        "from": "Karen Miller, Office Manager, Northfield Supplies",
+        "subject": "Problem with your recent order",
+        "body": "Dear Customer,\n\nThank you for your order of twenty office chairs, which we received on Monday. Unfortunately, our warehouse has informed us that four of the chairs are out of stock, and the delivery will be delayed. We apologize for the inconvenience. We can send the remaining sixteen chairs tomorrow, or we can wait and deliver everything together next week. Please let us know which option you prefer and when someone will be available to receive the delivery.\n\nBest regards,\nKaren Miller"
+      },
+      "minutes": 10,
+      "scale": 4
+    },
+    {
+      "id": "w5",
+      "task": "essay",
+      "promptFr": "Rédigez un essai argumenté d'au moins 300 mots en réponse à la question : donnez votre position et justifiez-la par des raisons et des exemples. Vous avez 30 minutes.",
+      "prompt": "Do you agree or disagree with the following statement? Students learn more effectively when they use technology, such as tablets and the Internet, in the classroom. Use specific reasons and examples to support your answer.",
+      "words": [],
+      "situation": "",
+      "email": null,
+      "minutes": 30,
+      "scale": 5
+    }
+  ]
+}

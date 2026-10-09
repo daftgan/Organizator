@@ -7,9 +7,11 @@ namespace Organizator.Services;
 
 /// <summary>
 /// Fichier touche par une session. <paramref name="Agent"/> : nom du sous-agent qui l'a ecrit,
-/// vide quand c'est la session elle-meme.
+/// vide quand c'est la session elle-meme. <paramref name="Cited"/> : instant (ms) ou l'agent
+/// principal l'a nomme pour la derniere fois dans une reponse finale — la ou il dit « rapport ecrit
+/// dans … » —, 0 s'il ne l'a jamais cite : c'est ce qui distingue le livrable des brouillons.
 /// </summary>
-public sealed record AgentArtifact(string Path, string Action, string Tool, string Agent);
+public sealed record AgentArtifact(string Path, string Action, string Tool, string Agent, long Cited = 0);
 
 /// <summary>
 /// Extrait les fichiers produits par les sessions Claude et Copilot, de trois sources :
@@ -25,9 +27,23 @@ public sealed record AgentArtifact(string Path, string Action, string Tool, stri
 /// d'eviter de presenter chaque chemin simplement cite dans une reponse comme un fichier produit.
 /// Les evenements sont appliques dans l'ordre de leur horodatage, toutes sources confondues : le
 /// dernier a toucher un fichier dit son action et son auteur.
+/// <para>
+/// Le meme passage releve deux choses de plus, sans relire les fichiers : les noms de fichiers que
+/// l'agent principal cite dans ses reponses finales (<see cref="AgentArtifact.Cited"/>), et la
+/// consommation de la session (<see cref="SessionUsage"/>) — les jetons de chaque appel du modele,
+/// sous-agents compris, ou le bilan que Copilot ecrit en fin de session.
+/// </para>
 /// </summary>
 public sealed class AgentArtifacts
 {
+    // Un nom de fichier « livrable » dans le texte d'une reponse ; seul le dernier segment compte.
+    private static readonly Regex CitedName = new(
+        @"[^\s`'""()\[\]<>|*,;:!?]+\.(?:md|markdown|txt|rst|adoc|asciidoc|org|log|pdf|csv|tsv|xlsx|xls|docx|doc|pptx|ppt|odt|ods|odp|rtf|html|htm|png|jpg|jpeg|gif|webp)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    // Change quand la forme de la reponse change : les empreintes que l'UI detient ne valent plus,
+    // elle recoit donc la liste a jour (ici : Cited et la consommation) sans attendre une ecriture.
+    private const string StampVersion = "v2|";
     private static readonly HashSet<string> PathProperties = new(StringComparer.OrdinalIgnoreCase)
     {
         "file_path",
@@ -78,23 +94,48 @@ public sealed class AgentArtifacts
     {
         public string Stamp = "";
         public IReadOnlyList<AgentArtifact> Artifacts = Array.Empty<AgentArtifact>();
+        public SessionUsage Usage = SessionUsage.Empty;
         public readonly Dictionary<string, FileState> Files = new(StringComparer.OrdinalIgnoreCase);
     }
+
+    /// <summary>Jetons d'un appel du modele (Claude Code ecrit une ligne par bloc, chacune avec l'usage du message).</summary>
+    private sealed record Call(string Model, long Input, long CacheWrite5m, long CacheWrite1h, long CacheRead, long Output, long WebSearches, bool Fast);
 
     private sealed class FileState
     {
         public readonly JsonlTail Tail = new();
         public readonly List<(long Ts, AgentArtifact Artifact)> Touches = new();
+
+        /// <summary>Noms (dernier segment, sans casse) cites dans une reponse finale, et l'instant de la derniere citation.</summary>
+        public readonly Dictionary<string, long> Cited = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Claude : un appel par identifiant de message.</summary>
+        public readonly Dictionary<string, Call> Calls = new(StringComparer.Ordinal);
+
+        /// <summary>Copilot : dernier bilan de fin de session (cumule sur les reprises) et requetes premium.</summary>
+        public long CopilotInput, CopilotOutput, CopilotCacheRead, CopilotCacheWrite;
+        public double CopilotPremium;
+        public readonly Dictionary<string, long> CopilotModels = new(StringComparer.OrdinalIgnoreCase);
+
+        public void Reset()
+        {
+            Touches.Clear();
+            Cited.Clear();
+            Calls.Clear();
+            CopilotInput = CopilotOutput = CopilotCacheRead = CopilotCacheWrite = 0;
+            CopilotPremium = 0;
+            CopilotModels.Clear();
+        }
     }
 
     public IReadOnlyList<AgentArtifact> Get(string provider, string sessionId, string cwd)
         => GetWithStamp(provider, sessionId, cwd).Artifacts;
 
     /// <summary>
-    /// Fichiers touches par la session, avec l'empreinte des transcripts qui les donnent : l'UI la
-    /// renvoie, et tant qu'elle n'a pas change la liste ne repart pas (voir <c>getSessions</c>).
+    /// Fichiers touches par la session et sa consommation, avec l'empreinte des transcripts qui les
+    /// donnent : l'UI la renvoie, et tant qu'elle n'a pas change rien ne repart (voir <c>getSessions</c>).
     /// </summary>
-    public (string Stamp, IReadOnlyList<AgentArtifact> Artifacts) GetWithStamp(string provider, string sessionId, string cwd)
+    public (string Stamp, IReadOnlyList<AgentArtifact> Artifacts, SessionUsage Usage) GetWithStamp(string provider, string sessionId, string cwd)
     {
         provider = AgentProvider.Normalize(provider);
         var copilot = provider == AgentProvider.Copilot;
@@ -119,13 +160,14 @@ public sealed class AgentArtifacts
         {
             if (state.Stamp == stamp)
             {
-                return (stamp, state.Artifacts);
+                return (stamp, state.Artifacts, state.Usage);
             }
 
             if (stamp.Length == 0)
             {
                 state.Files.Clear();
                 state.Artifacts = Array.Empty<AgentArtifact>();
+                state.Usage = SessionUsage.Empty;
             }
             else
             {
@@ -133,7 +175,7 @@ public sealed class AgentArtifacts
             }
 
             state.Stamp = stamp;
-            return (stamp, state.Artifacts);
+            return (stamp, state.Artifacts, state.Usage);
         }
     }
 
@@ -144,7 +186,13 @@ public sealed class AgentArtifacts
     private static string Stamp(string source, string? subagents)
     {
         var main = TranscriptAccumulator.FileStamp(source);
-        if (main.Length == 0 || subagents is null)
+        if (main.Length == 0)
+        {
+            return main;
+        }
+
+        main = StampVersion + main;
+        if (subagents is null)
         {
             return main;
         }
@@ -210,11 +258,74 @@ public sealed class AgentArtifacts
             byPath[touch.Artifact.Path] = touch.Artifact;
         }
 
+        // Seules comptent les reponses de l'agent principal : celles d'un sous-agent lui sont adressees.
+        var cited = files[0].Cited;
+        state.Usage = Total(files);
+
         // Les fichiers du dossier de travail (chemins relatifs) avant ceux d'ailleurs.
         return byPath.Values
+            .Select(artifact => cited.TryGetValue(LastSegment(artifact.Path), out var at) ? artifact with { Cited = at } : artifact)
             .OrderBy(artifact => System.IO.Path.IsPathRooted(artifact.Path) ? 1 : 0)
             .ThenBy(artifact => artifact.Path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private static string LastSegment(string path)
+    {
+        var cut = path.LastIndexOfAny(new[] { '/', '\\' });
+        return cut < 0 ? path : path[(cut + 1)..];
+    }
+
+    /// <summary>Consommation de la session : appels de tous les transcripts, ou bilan Copilot.</summary>
+    private static SessionUsage Total(List<FileState> files)
+    {
+        long input = 0, output = 0, cacheRead = 0, cacheWrite = 0, unpriced = 0;
+        double cost = 0, premium = 0;
+        var models = new Dictionary<string, (long Tokens, double Cost)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in files)
+        {
+            foreach (var call in file.Calls.Values)
+            {
+                var tokens = call.Input + call.CacheWrite5m + call.CacheWrite1h + call.CacheRead + call.Output;
+                input += call.Input;
+                output += call.Output;
+                cacheRead += call.CacheRead;
+                cacheWrite += call.CacheWrite5m + call.CacheWrite1h;
+                var dollars = ModelPricing.Cost(call.Model, call.Input, call.CacheWrite5m, call.CacheWrite1h, call.CacheRead, call.Output, call.WebSearches, call.Fast);
+                if (dollars is null)
+                {
+                    unpriced += tokens;
+                }
+                else
+                {
+                    cost += dollars.Value;
+                }
+
+                models.TryGetValue(call.Model, out var sum);
+                models[call.Model] = (sum.Tokens + tokens, sum.Cost + (dollars ?? 0));
+            }
+
+            input += file.CopilotInput;
+            output += file.CopilotOutput;
+            cacheRead += file.CopilotCacheRead;
+            cacheWrite += file.CopilotCacheWrite;
+            premium = Math.Max(premium, file.CopilotPremium);
+            foreach (var (model, tokens) in file.CopilotModels)
+            {
+                models.TryGetValue(model, out var sum);
+                models[model] = (sum.Tokens + tokens, sum.Cost);
+            }
+        }
+
+        if (input + output + cacheRead + cacheWrite == 0 && premium <= 0)
+        {
+            return SessionUsage.Empty;
+        }
+
+        return new SessionUsage(input, output, cacheRead, cacheWrite, cost, unpriced, premium,
+            models.OrderByDescending(m => m.Value.Tokens)
+                .Select(m => new ModelUsage(m.Key, m.Value.Tokens, m.Value.Cost))
+                .ToArray());
     }
 
     /// <summary>Lit ce qu'un transcript a gagne depuis le passage precedent ; un fichier reecrit est relu du debut.</summary>
@@ -226,10 +337,10 @@ public sealed class AgentArtifacts
             state.Files[path] = file;
         }
 
-        var collector = new Collector(cwd, agent, file.Touches);
+        var collector = new Collector(cwd, agent, file);
         try
         {
-            file.Tail.Read(path, file.Touches.Clear, line =>
+            file.Tail.Read(path, file.Reset, line =>
             {
                 try
                 {
@@ -262,8 +373,30 @@ public sealed class AgentArtifacts
         }
 
         collector.Ts = Timestamp(root);
+        var type = GetString(root, "type");
 
         if (root.TryGetProperty("message", out var message)
+            && message.ValueKind == JsonValueKind.Object
+            && type == "assistant")
+        {
+            ReadClaudeCall(message, collector);
+            if (collector.Agent.Length == 0
+                && !(root.TryGetProperty("isSidechain", out var side) && side.ValueKind == JsonValueKind.True)
+                && GetString(message, "stop_reason") is "end_turn" or "stop_sequence" or "max_tokens"
+                && message.TryGetProperty("content", out var said)
+                && said.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var block in said.EnumerateArray())
+                {
+                    if (block.ValueKind == JsonValueKind.Object && GetString(block, "type") == "text")
+                    {
+                        collector.Cite(GetString(block, "text"));
+                    }
+                }
+            }
+        }
+
+        if (root.TryGetProperty("message", out message)
             && message.ValueKind == JsonValueKind.Object
             && message.TryGetProperty("content", out var content)
             && content.ValueKind == JsonValueKind.Array)
@@ -289,6 +422,26 @@ public sealed class AgentArtifacts
             return;
         }
 
+        switch (type)
+        {
+            case "session.shutdown":
+                ReadCopilotSummary(data, collector.File);
+                break;
+            case "session.usage_checkpoint":
+                collector.File.CopilotPremium = Math.Max(collector.File.CopilotPremium, Number(data, "totalPremiumRequests"));
+                break;
+            case "assistant.message":
+                // Reponse finale de l'agent principal : du texte, et plus aucun outil demande.
+                if (collector.Agent.Length == 0
+                    && !root.TryGetProperty("agentId", out _)
+                    && !(data.TryGetProperty("toolRequests", out var asked) && asked.ValueKind == JsonValueKind.Array && asked.GetArrayLength() > 0))
+                {
+                    collector.Cite(GetString(data, "content"));
+                }
+
+                break;
+        }
+
         if (data.TryGetProperty("toolRequests", out var requests) && requests.ValueKind == JsonValueKind.Array)
         {
             foreach (var request in requests.EnumerateArray())
@@ -308,6 +461,94 @@ public sealed class AgentArtifacts
             ReadToolPayload(data, toolName!, collector);
         }
     }
+
+    /// <summary>
+    /// Jetons d'un appel du modele. Claude Code ecrit une ligne par bloc de contenu (reflexion,
+    /// texte, outil), chacune avec l'usage du message entier : l'identifiant du message dedoublonne.
+    /// Les messages d'erreur synthetiques (<c>&lt;synthetic&gt;</c>) n'ont rien coute.
+    /// </summary>
+    private static void ReadClaudeCall(JsonElement message, Collector collector)
+    {
+        if (!message.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        var id = GetString(message, "id");
+        var model = GetString(message, "model") ?? "";
+        if (string.IsNullOrEmpty(id) || model.StartsWith("<", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        long write5m = 0, write1h = 0;
+        if (usage.TryGetProperty("cache_creation", out var creation) && creation.ValueKind == JsonValueKind.Object)
+        {
+            write5m = (long)Number(creation, "ephemeral_5m_input_tokens");
+            write1h = (long)Number(creation, "ephemeral_1h_input_tokens");
+        }
+        else
+        {
+            write5m = (long)Number(usage, "cache_creation_input_tokens");
+        }
+
+        long searches = 0;
+        if (usage.TryGetProperty("server_tool_use", out var server) && server.ValueKind == JsonValueKind.Object)
+        {
+            searches = (long)Number(server, "web_search_requests");
+        }
+
+        collector.File.Calls[id!] = new Call(
+            model,
+            (long)Number(usage, "input_tokens"),
+            write5m,
+            write1h,
+            (long)Number(usage, "cache_read_input_tokens"),
+            (long)Number(usage, "output_tokens"),
+            searches,
+            string.Equals(GetString(usage, "speed"), "fast", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Bilan que Copilot ecrit a la fermeture d'une session (cumule sur ses reprises) : jetons par
+    /// categorie, requetes premium, et jetons par modele. Le dernier l'emporte.
+    /// </summary>
+    private static void ReadCopilotSummary(JsonElement data, FileState file)
+    {
+        file.CopilotPremium = Math.Max(file.CopilotPremium, Number(data, "totalPremiumRequests"));
+        if (data.TryGetProperty("tokenDetails", out var details) && details.ValueKind == JsonValueKind.Object)
+        {
+            file.CopilotInput = TokenCount(details, "input");
+            file.CopilotOutput = TokenCount(details, "output");
+            file.CopilotCacheRead = TokenCount(details, "cache_read");
+            file.CopilotCacheWrite = TokenCount(details, "cache_write");
+        }
+
+        if (data.TryGetProperty("modelMetrics", out var metrics) && metrics.ValueKind == JsonValueKind.Object)
+        {
+            file.CopilotModels.Clear();
+            foreach (var model in metrics.EnumerateObject())
+            {
+                if (model.Value.ValueKind == JsonValueKind.Object
+                    && model.Value.TryGetProperty("tokenDetails", out var own)
+                    && own.ValueKind == JsonValueKind.Object)
+                {
+                    file.CopilotModels[model.Name] = TokenCount(own, "input") + TokenCount(own, "output")
+                        + TokenCount(own, "cache_read") + TokenCount(own, "cache_write");
+                }
+            }
+        }
+    }
+
+    private static long TokenCount(JsonElement details, string key)
+        => details.TryGetProperty(key, out var entry) && entry.ValueKind == JsonValueKind.Object
+            ? (long)Number(entry, "tokenCount")
+            : 0;
+
+    private static double Number(JsonElement element, string property)
+        => element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number)
+            ? number
+            : 0;
 
     private static long Timestamp(JsonElement root)
     {
@@ -595,18 +836,41 @@ public sealed class AgentArtifacts
     {
         private readonly List<(long Ts, AgentArtifact Artifact)> _touches;
 
-        public Collector(string cwd, string agent, List<(long Ts, AgentArtifact Artifact)> touches)
+        public Collector(string cwd, string agent, FileState file)
         {
             Cwd = cwd;
             Agent = agent;
-            _touches = touches;
+            File = file;
+            _touches = file.Touches;
         }
 
         public string Cwd { get; }
 
         public string Agent { get; }
 
+        public FileState File { get; }
+
         public long Ts { get; set; }
+
+        /// <summary>Retient les noms de fichiers qu'une reponse finale cite (dernier segment de chaque chemin).</summary>
+        public void Cite(string? text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return;
+            }
+
+            // 0 voudrait dire « jamais cite » : une entree sans horodatage compte pour 1.
+            var now = Math.Max(Ts, 1);
+            foreach (Match match in CitedName.Matches(text))
+            {
+                var name = LastSegment(match.Value);
+                if (name.Length > 0 && (!File.Cited.TryGetValue(name, out var at) || at < now))
+                {
+                    File.Cited[name] = now;
+                }
+            }
+        }
 
         /// <summary>Retient un fichier ; <paramref name="baseDir"/> resout un chemin relatif (le dossier courant apres un <c>cd</c>).</summary>
         public void Add(string rawPath, string baseDir, string action, string tool)

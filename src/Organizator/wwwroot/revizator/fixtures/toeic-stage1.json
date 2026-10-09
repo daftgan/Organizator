@@ -1,0 +1,722 @@
+{
+  "id": "toeic-20261008-9c9a76",
+  "kind": "toeic",
+  "createdAt": 1791480459362,
+  "day": "2026-10-08",
+  "model": "claude-sonnet-5-5",
+  "ms": 128143,
+  "cost": 0.2656,
+  "turns": 3,
+  "module": "stage1",
+  "center": "B1",
+  "listening": [
+    {
+      "id": "s1",
+      "section": "L",
+      "part": 2,
+      "topic": "Office equipment",
+      "intro": "",
+      "speakers": [
+        {
+          "id": "W1",
+          "role": "employee",
+          "gender": "female",
+          "accent": "en-US"
+        },
+        {
+          "id": "M1",
+          "role": "colleague",
+          "gender": "male",
+          "accent": "en-GB"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "W1",
+          "text": "Where can I find the new printer?"
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q1",
+          "stem": "",
+          "options": [
+            "Yes, it prints very fast.",
+            "It's in the copy room.",
+            "Around ten o'clock."
+          ],
+          "answer": 1,
+          "ability": "L_detail_short",
+          "cefr": "A2",
+          "features": [
+            "lexical_match"
+          ],
+          "evidence": "It's in the copy room.",
+          "explanationFr": "La question porte sur le lieu (where) et seule la première réponse indique un endroit. « Yes » ne répond pas à where, et « ten o'clock » répondrait à when."
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "section": "L",
+      "part": 2,
+      "topic": "Training",
+      "intro": "",
+      "speakers": [
+        {
+          "id": "M2",
+          "role": "employee",
+          "gender": "male",
+          "accent": "en-AU"
+        },
+        {
+          "id": "W2",
+          "role": "coordinator",
+          "gender": "female",
+          "accent": "en-CA"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "M2",
+          "text": "When does the training session start?"
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q2",
+          "stem": "",
+          "options": [
+            "At nine thirty tomorrow.",
+            "She is a good trainer.",
+            "In the meeting room."
+          ],
+          "answer": 0,
+          "ability": "L_detail_short",
+          "cefr": "A2",
+          "features": [
+            "lexical_match"
+          ],
+          "evidence": "At nine thirty tomorrow.",
+          "explanationFr": "When appelle une heure : « At nine thirty tomorrow ». « In the meeting room » répond à where, et la troisième option reprend l'idée de training sans répondre."
+        }
+      ]
+    },
+    {
+      "id": "s3",
+      "section": "L",
+      "part": 2,
+      "topic": "Sales report",
+      "intro": "",
+      "speakers": [
+        {
+          "id": "W1",
+          "role": "manager",
+          "gender": "female",
+          "accent": "en-GB"
+        },
+        {
+          "id": "M1",
+          "role": "employee",
+          "gender": "male",
+          "accent": "en-US"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "W1",
+          "text": "Could you send me the sales report today?"
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q3",
+          "stem": "",
+          "options": [
+            "Sales were higher in March.",
+            "No, the store is closed today.",
+            "I sent it to you this morning."
+          ],
+          "answer": 2,
+          "ability": "L_detail_short",
+          "cefr": "B1",
+          "features": [
+            "indirect_response"
+          ],
+          "evidence": "I sent it to you this morning.",
+          "explanationFr": "La réponse indirecte indique que le rapport a déjà été envoyé, ce qui répond à la demande. Les autres options reprennent « sales » ou « today » sans répondre."
+        }
+      ]
+    },
+    {
+      "id": "s4",
+      "section": "L",
+      "part": 2,
+      "topic": "Delivery delay",
+      "intro": "",
+      "speakers": [
+        {
+          "id": "M1",
+          "role": "manager",
+          "gender": "male",
+          "accent": "en-US"
+        },
+        {
+          "id": "W2",
+          "role": "logistics clerk",
+          "gender": "female",
+          "accent": "en-AU"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "M1",
+          "text": "Why was the delivery delayed?"
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q4",
+          "stem": "",
+          "options": [
+            "Next to the loading dock.",
+            "The truck broke down on the highway.",
+            "Yes, it was delivered on Monday."
+          ],
+          "answer": 1,
+          "ability": "L_detail_short",
+          "cefr": "B1",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "The truck broke down on the highway.",
+          "explanationFr": "Why demande une cause : la panne du camion explique le retard. « Next to the loading dock » répond à where, et « Yes » ne convient pas à une question en why."
+        }
+      ]
+    },
+    {
+      "id": "s5",
+      "section": "L",
+      "part": 2,
+      "topic": "Conference",
+      "intro": "",
+      "speakers": [
+        {
+          "id": "M2",
+          "role": "colleague",
+          "gender": "male",
+          "accent": "en-GB"
+        },
+        {
+          "id": "W2",
+          "role": "colleague",
+          "gender": "female",
+          "accent": "en-CA"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "M2",
+          "text": "Aren't you supposed to be at the conference today?"
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q5",
+          "stem": "",
+          "options": [
+            "My flight was canceled last night.",
+            "Yes, the conference room is upstairs.",
+            "It's supposed to rain tomorrow."
+          ],
+          "answer": 0,
+          "ability": "L_detail_short",
+          "cefr": "B2",
+          "features": [
+            "indirect_response",
+            "lexical_match"
+          ],
+          "evidence": "My flight was canceled last night.",
+          "explanationFr": "La réponse explique indirectement pourquoi la personne n'y est pas. Les autres options reprennent « conference » et « supposed » sans lien avec la question."
+        }
+      ]
+    },
+    {
+      "id": "s6",
+      "section": "L",
+      "part": 3,
+      "topic": "Planning a client lunch",
+      "intro": "Questions 6-8 refer to the following conversation.",
+      "speakers": [
+        {
+          "id": "M1",
+          "role": "colleague",
+          "gender": "male",
+          "accent": "en-US"
+        },
+        {
+          "id": "W1",
+          "role": "colleague",
+          "gender": "female",
+          "accent": "en-GB"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "M1",
+          "text": "Hi Clara, did you book the restaurant for Thursday's client lunch?"
+        },
+        {
+          "speaker": "W1",
+          "text": "I called this morning, but they're full at noon. They have a table at one fifteen, though."
+        },
+        {
+          "speaker": "M1",
+          "text": "The clients' train arrives at twelve forty, so one fifteen should work."
+        },
+        {
+          "speaker": "W1",
+          "text": "That's what I thought. The only problem is that the restaurant is far from our office, so they'll need a taxi."
+        },
+        {
+          "speaker": "M1",
+          "text": "No problem. I'll arrange one at the station. Could you send the menu to Mr. Ortiz? He has a nut allergy."
+        },
+        {
+          "speaker": "W1",
+          "text": "Of course. I'll email it as soon as we finish talking."
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q6",
+          "stem": "What are the speakers mainly discussing?",
+          "options": [
+            "A delayed train",
+            "A taxi company",
+            "A new restaurant menu",
+            "Plans for a lunch with clients"
+          ],
+          "answer": 3,
+          "ability": "L_gist_ext",
+          "cefr": "A2",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "Hi Clara, did you book the restaurant for Thursday's client lunch?",
+          "explanationFr": "Toute la conversation porte sur la réservation d'un déjeuner pour des clients. Le train, le taxi et le menu ne sont que des détails."
+        },
+        {
+          "id": "q7",
+          "stem": "What is the problem with the noon reservation?",
+          "options": [
+            "The restaurant has no tables then.",
+            "The restaurant is closed on Thursday.",
+            "The clients arrive too early.",
+            "The price is too high."
+          ],
+          "answer": 0,
+          "ability": "L_detail_ext",
+          "cefr": "B1",
+          "features": [
+            "paraphrase",
+            "info_in_middle"
+          ],
+          "evidence": "I called this morning, but they're full at noon.",
+          "explanationFr": "« Full at noon » signifie qu'il n'y a plus de table à midi. Les clients arrivent à douze heures quarante, pas trop tôt."
+        },
+        {
+          "id": "q8",
+          "stem": "What will the woman do next?",
+          "options": [
+            "Change the lunch date",
+            "Call a taxi company",
+            "Email a menu to a guest",
+            "Meet the clients at the station"
+          ],
+          "answer": 2,
+          "ability": "L_detail_ext",
+          "cefr": "B1",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "Of course. I'll email it as soon as we finish talking.",
+          "explanationFr": "La femme enverra le menu à M. Ortiz par e-mail. Le taxi sera organisé par l'homme, pas par elle."
+        }
+      ]
+    },
+    {
+      "id": "s7",
+      "section": "L",
+      "part": 4,
+      "topic": "Rescheduling a dental appointment",
+      "intro": "Questions 9-11 refer to the following telephone message.",
+      "speakers": [
+        {
+          "id": "W2",
+          "role": "clinic receptionist",
+          "gender": "female",
+          "accent": "en-AU"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "W2",
+          "text": "Hello, this is Dana from Brightside Dental Clinic, calling for Mr. Peterson. I'm calling about your appointment on Tuesday the fourteenth at ten in the morning. Unfortunately, Dr. Hall has to attend a medical conference that day, so we need to move your visit. We have openings on Wednesday at two o'clock or on Friday at nine thirty. Please call us back at five five five, zero one four two before Monday to choose a new time. If we don't hear from you, we'll keep your name on our waiting list. Also, please bring your insurance card to the next visit, because we have updated our system and need to scan it again. Thank you, and have a good day."
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q9",
+          "stem": "Why is the speaker calling?",
+          "options": [
+            "To confirm a payment",
+            "To reschedule an appointment",
+            "To announce a new doctor",
+            "To cancel a conference"
+          ],
+          "answer": 1,
+          "ability": "L_gist_ext",
+          "cefr": "B1",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "We need to move your visit.",
+          "explanationFr": "« Move your visit » équivaut à reprogrammer le rendez-vous. Le congrès est la raison du changement, pas ce qui est annulé."
+        },
+        {
+          "id": "q10",
+          "stem": "Why does the appointment need to change?",
+          "options": [
+            "The clinic is moving to a new building.",
+            "The patient asked for a later time.",
+            "The doctor will be at another event.",
+            "The system is not working."
+          ],
+          "answer": 2,
+          "ability": "L_detail_ext",
+          "cefr": "B1",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "Dr. Hall has to attend a medical conference that day.",
+          "explanationFr": "Le médecin doit assister à un congrès ce jour-là. Le système mis à jour concerne seulement la carte d'assurance."
+        },
+        {
+          "id": "q11",
+          "stem": "What does the speaker ask Mr. Peterson to do before Monday?",
+          "options": [
+            "Join the waiting list",
+            "Bring an insurance card",
+            "Attend a medical conference",
+            "Contact the clinic to choose a new time"
+          ],
+          "answer": 3,
+          "ability": "L_detail_ext",
+          "cefr": "B2",
+          "features": [
+            "info_in_middle",
+            "paraphrase"
+          ],
+          "evidence": "Please call us back at five five five, zero one four two before Monday to choose a new time.",
+          "explanationFr": "Il doit rappeler avant lundi pour choisir un nouveau créneau. La carte d'assurance est à apporter à la prochaine visite, et la liste d'attente est automatique s'il ne rappelle pas."
+        }
+      ]
+    }
+  ],
+  "reading": [
+    {
+      "id": "s8",
+      "section": "R",
+      "part": 5,
+      "topic": "Grammar: present simple",
+      "intro": "",
+      "speakers": [],
+      "audio": [],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q12",
+          "stem": "Ms. Lee ------- the weekly sales report to the whole team every Monday morning before ten.",
+          "options": [
+            "sending",
+            "sends",
+            "send",
+            "sent"
+          ],
+          "answer": 1,
+          "ability": "R_grammar",
+          "cefr": "A2",
+          "features": [
+            "lexical_match"
+          ],
+          "evidence": "Ms. Lee sends the weekly sales report to the whole team every Monday morning before ten.",
+          "explanationFr": "Habitude (every Monday) et sujet à la 3e personne du singulier : « sends ». « Sent » indique un fait passé."
+        }
+      ]
+    },
+    {
+      "id": "s9",
+      "section": "R",
+      "part": 5,
+      "topic": "Prepositions of time",
+      "intro": "",
+      "speakers": [],
+      "audio": [],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q13",
+          "stem": "Please submit your expense forms ------- the end of the month to receive your refund on time.",
+          "options": [
+            "by",
+            "until",
+            "during",
+            "since"
+          ],
+          "answer": 0,
+          "ability": "R_grammar",
+          "cefr": "B1",
+          "features": [
+            "lexical_match"
+          ],
+          "evidence": "Please submit your expense forms by the end of the month.",
+          "explanationFr": "« By » exprime une date limite. « Until » indique une durée continue, « during » une période et « since » un point de départ passé."
+        }
+      ]
+    },
+    {
+      "id": "s10",
+      "section": "R",
+      "part": 5,
+      "topic": "Connectors",
+      "intro": "",
+      "speakers": [],
+      "audio": [],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q14",
+          "stem": "The refund will be issued ------- the item is returned in its original packaging within thirty days.",
+          "options": [
+            "even though",
+            "as well as",
+            "in case of",
+            "provided that"
+          ],
+          "answer": 3,
+          "ability": "R_grammar",
+          "cefr": "B2",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "The refund will be issued provided that the item is returned in its original packaging.",
+          "explanationFr": "« Provided that » introduit une condition suivie d'une proposition. « In case of » exige un nom et « even though » exprime une concession."
+        }
+      ]
+    },
+    {
+      "id": "s11",
+      "section": "R",
+      "part": 6,
+      "topic": "Office move notice",
+      "intro": "Questions 15-18 refer to the following e-mail.",
+      "speakers": [],
+      "audio": [],
+      "documents": [
+        {
+          "kind": "email",
+          "title": "Office move",
+          "meta": [
+            "From: Karen Wu, Facilities",
+            "To: All staff",
+            "Subject: Our move to Harbor Street"
+          ],
+          "paragraphs": [
+            "Dear colleagues, As you know, our team [1] to the new building on Harbor Street next month. The move will take place over the weekend, so everyone can start work as usual on Monday.",
+            "Please pack your personal items in the boxes provided by Friday afternoon. [2], leave all computers and company files where they are, because the movers will handle them.",
+            "Parking is limited at the new site. [3] Details about the shuttle schedule will be sent on Wednesday.",
+            "If you have any [4] about the move, please contact Ms. Novak in Human Resources. She will be happy to help."
+          ]
+        }
+      ],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q15",
+          "stem": "",
+          "options": [
+            "moved",
+            "will move",
+            "was moving",
+            "has moved"
+          ],
+          "answer": 1,
+          "ability": "R_grammar",
+          "cefr": "A2",
+          "features": [
+            "lexical_match"
+          ],
+          "evidence": "our team will move to the new building on Harbor Street next month",
+          "explanationFr": "« Next month » demande un futur : « will move ». Les autres formes sont au passé ou au présent perfect."
+        },
+        {
+          "id": "q16",
+          "stem": "",
+          "options": [
+            "However",
+            "For instance",
+            "Therefore",
+            "Likewise"
+          ],
+          "answer": 0,
+          "ability": "R_connect",
+          "cefr": "B1",
+          "features": [
+            "negation"
+          ],
+          "evidence": "However, leave all computers and company files where they are",
+          "explanationFr": "On passe de ce qu'il faut emballer à ce qu'il ne faut pas emballer : contraste, donc « However ». « Therefore » ajouterait une conséquence."
+        },
+        {
+          "id": "q17",
+          "stem": "",
+          "options": [
+            "Some employees have worked here for over ten years.",
+            "Please return your old access cards to the security office last week.",
+            "For this reason, we encourage you to use public transport or the free shuttle bus.",
+            "The new building has a large cafeteria on the ground floor."
+          ],
+          "answer": 2,
+          "ability": "R_connect",
+          "cefr": "B2",
+          "features": [
+            "inference"
+          ],
+          "evidence": "Parking is limited at the new site. ... Details about the shuttle schedule will be sent on Wednesday.",
+          "explanationFr": "Le manque de places justifie l'encouragement à prendre la navette, qui est mentionnée ensuite. La cafétéria et l'ancienneté n'ont aucun lien avec le parking."
+        },
+        {
+          "id": "q18",
+          "stem": "",
+          "options": [
+            "questioned",
+            "questionable",
+            "questions",
+            "questioning"
+          ],
+          "answer": 2,
+          "ability": "R_vocab",
+          "cefr": "B1",
+          "features": [
+            "lexical_match"
+          ],
+          "evidence": "If you have any questions about the move, please contact Ms. Novak",
+          "explanationFr": "Après « any », on attend un nom pluriel : « questions ». Les autres formes sont un verbe ou des adjectifs."
+        }
+      ]
+    },
+    {
+      "id": "s12",
+      "section": "R",
+      "part": 7,
+      "topic": "Finding a projector",
+      "intro": "Questions 19-21 refer to the following text-message chain.",
+      "speakers": [],
+      "audio": [],
+      "documents": [
+        {
+          "kind": "chat",
+          "title": "Team chat",
+          "meta": [
+            "Group: Training Team"
+          ],
+          "paragraphs": [
+            "Tom Reyes (9:05 A.M.): Priya, are you still using the projector in Room B today? I need it for the staff training at two thirty.",
+            "Priya Shah (9:08 A.M.): Yes, but my presentation ends at two o'clock. It should be free by then, unless the client has a lot of questions.",
+            "Tom Reyes (9:10 A.M.): That's cutting it close. I need time to set up my laptop and test the sound.",
+            "Lena Ford (9:14 A.M.): There's a spare projector in the storage room on the second floor. I can't get the key today, though. Security has it.",
+            "Tom Reyes (9:16 A.M.): I'll go and ask them. Thanks, Lena. Do you know if it comes with a cable?",
+            "Lena Ford (9:18 A.M.): Yes, the cable is in the same box. I checked last week.",
+            "Priya Shah (9:20 A.M.): Good. I'll leave mine in Room B anyway, in case you want it."
+          ]
+        }
+      ],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q19",
+          "stem": "Why does Tom Reyes write to Priya?",
+          "options": [
+            "To ask her to move to another room",
+            "To invite her to a training session",
+            "To report a broken laptop",
+            "To find out if he can use a projector"
+          ],
+          "answer": 3,
+          "ability": "R_locate",
+          "cefr": "B1",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "Priya, are you still using the projector in Room B today? I need it for the staff training at two thirty.",
+          "explanationFr": "Tom demande si le projecteur sera libre pour sa formation. Il n'invite pas Priya et ne parle pas d'ordinateur cassé."
+        },
+        {
+          "id": "q20",
+          "stem": "At 9:10 A.M., what does Tom Reyes mean when he writes, \"That's cutting it close\"?",
+          "options": [
+            "He may not have enough time to prepare.",
+            "He is worried about the cost.",
+            "He wants Priya to shorten her presentation.",
+            "He thinks the room is too small."
+          ],
+          "answer": 0,
+          "ability": "R_infer",
+          "cefr": "B1",
+          "features": [
+            "inference"
+          ],
+          "evidence": "That's cutting it close. I need time to set up my laptop and test the sound.",
+          "explanationFr": "« Cutting it close » signifie « c'est juste » ; la phrase suivante explique qu'il lui faut du temps pour s'installer. Il ne demande pas explicitement à Priya de raccourcir."
+        },
+        {
+          "id": "q21",
+          "stem": "What will Tom most likely do next?",
+          "options": [
+            "Test the sound in Room B",
+            "Visit the security office",
+            "Move the printers",
+            "Cancel the training"
+          ],
+          "answer": 1,
+          "ability": "R_infer",
+          "cefr": "B2",
+          "features": [
+            "inference",
+            "cross_text"
+          ],
+          "evidence": "I can't get the key today, though. Security has it. / I'll go and ask them.",
+          "explanationFr": "Lena dit que la sécurité a la clé et Tom répond qu'il ira les voir. Les imprimantes ont été déplacées la semaine dernière, sans lien avec Tom."
+        }
+      ]
+    }
+  ]
+}

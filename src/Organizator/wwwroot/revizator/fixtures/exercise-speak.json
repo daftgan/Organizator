@@ -1,0 +1,109 @@
+{
+  "id": "exercise-20261008-e5a930",
+  "kind": "exercise",
+  "createdAt": 1791453600000,
+  "day": "2026-10-08",
+  "model": "claude-sonnet-5-5",
+  "ms": 39880,
+  "cost": 0.024,
+  "turns": 1,
+  "skill": "speak",
+  "type": "speak.shadowing",
+  "title": "Sounding natural in meetings",
+  "level": "B1",
+  "minutes": 10,
+  "instructionsFr": "Écoutez chaque phrase, puis répétez-la juste après la voix en imitant le rythme et la mélodie. Whisper compare ce qu’il entend au texte : un mot non reconnu est à retravailler. Pour finir, une minute de parole libre.",
+  "topic": "Réunions et points d’équipe",
+  "passage": {
+    "title": "",
+    "paragraphs": [],
+    "glossary": []
+  },
+  "script": {
+    "title": "",
+    "contextFr": "",
+    "speakers": [],
+    "lines": []
+  },
+  "items": [
+    {
+      "id": "i1",
+      "kind": "shadow",
+      "prompt": "",
+      "promptFr": "Je reviens vers vous dès que possible.",
+      "options": [],
+      "answer": "",
+      "accepted": [],
+      "explanationFr": "« I’ll » se réduit et « as soon as » se lie en un seul bloc : /əˈsuːnəz/.",
+      "audioText": "I’ll get back to you as soon as I can.",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i2",
+      "kind": "shadow",
+      "prompt": "",
+      "promptFr": "Nous aurions dû le tester avant la mise en production.",
+      "options": [],
+      "answer": "",
+      "accepted": [],
+      "explanationFr": "« should have » se prononce /ˈʃʊdəv/ : le « have » devient un simple /əv/.",
+      "audioText": "We should have tested it before the release.",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i3",
+      "kind": "shadow",
+      "prompt": "",
+      "promptFr": "Pourriez-vous m’expliquer le nouveau processus étape par étape ?",
+      "options": [],
+      "answer": "",
+      "accepted": [],
+      "explanationFr": "« walk me through » = m’expliquer pas à pas. L’accent de phrase tombe sur « walk » et « process ».",
+      "audioText": "Could you walk me through the new process?",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i4",
+      "kind": "read_aloud",
+      "prompt": "Our team moved to a new deployment pipeline last month. At first, it was a bit slower, but now we can release a small update in about ten minutes. The best part is that we can roll back a change almost instantly if something goes wrong.",
+      "promptFr": "Lisez le paragraphe à voix haute, à un rythme naturel.",
+      "options": [],
+      "answer": "",
+      "accepted": [],
+      "explanationFr": "Attention aux terminaisons -ed (« moved » : /muːvd/, une seule syllabe) et à l’accent de « deployment » (deˈPLOYment).",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i5",
+      "kind": "open_speak",
+      "prompt": "",
+      "promptFr": "Expliquez en une minute à un collègue anglophone ce que vous avez fait hier au travail, et ce qui vous a posé problème.",
+      "options": [],
+      "answer": "",
+      "accepted": [],
+      "explanationFr": "",
+      "audioText": "",
+      "words": [],
+      "seconds": 60,
+      "criteria": [
+        "Prétérit pour les actions d’hier",
+        "Un problème expliqué clairement",
+        "Connecteurs : first, then, but, so"
+      ],
+      "modelAnswer": "Yesterday I spent most of the morning on a bug in our login page. First, I tried to reproduce it on my machine, but it only happened in production. Then I checked the logs and found that a cookie was too large. So I made it smaller, tested it with a colleague, and deployed the fix in the afternoon."
+    }
+  ]
+}

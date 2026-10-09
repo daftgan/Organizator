@@ -186,6 +186,18 @@ public partial class MainWindow : Window
                 _bridge.AttachmentsRoot,
                 CoreWebView2HostResourceAccessKind.Allow);
 
+            // Revizator : documents generes et enregistrements de l'apprenant (learning\), lus par la page.
+            core.SetVirtualHostNameToFolderMapping(
+                LearningStore.Host,
+                _bridge.LearningRoot,
+                CoreWebView2HostResourceAccessKind.Allow);
+
+            // Phrases synthetisees (Revizator) : la page les lit par <audio>, fetch ou decodeAudioData.
+            core.SetVirtualHostNameToFolderMapping(
+                TextToSpeech.Host,
+                _bridge.TtsCacheRoot,
+                CoreWebView2HostResourceAccessKind.Allow);
+
             _claudeWatcher = new SessionsWatcher(_sessions.ProjectsRoot, "*.jsonl", "Claude Code", Dispatcher, _log);
             _claudeWatcher.Changed += (_, _) => _bridge?.PostEvent("sessionsChanged");
 

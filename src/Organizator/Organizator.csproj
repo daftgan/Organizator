@@ -42,6 +42,14 @@
     <!-- Decodage des enregistrements (mp3, m4a, wav, wma, ogg...) par Media Foundation, reechantillonnage a 16 kHz. -->
     <PackageReference Include="NAudio.Core" Version="2.2.1" />
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+    <!-- Synthese vocale anglaise (Revizator : cours, ecoutes, tuteur) : sherpa-onnx + Kokoro, en local, sur le CPU.
+         Seul le sherpa-onnx.dll manage (50 Ko) entre dans l'exe. Le paquet runtime win-x64 y mettrait 21 Mo de DLL
+         natives (IncludeNativeLibrariesForSelfExtract) : ses actifs sont exclus, et TextToSpeech telecharge le
+         .nupkg (8 Mo) depuis nuget.org pour en extraire les deux DLL, comme il telecharge le modele.
+         ExcludeAssets="native" sur le paquet principal s'applique aux paquets runtime qu'il tire (android, linux,
+         osx, win-arm64, win-x86) : sans lui, chaque build copiait 230 Mo de natives inutiles sous bin\...\runtimes\. -->
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.8" ExcludeAssets="native" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="1.13.8" ExcludeAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

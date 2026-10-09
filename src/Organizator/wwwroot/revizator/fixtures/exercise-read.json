@@ -1,0 +1,227 @@
+{
+  "id": "exercise-20261008-4f1a2c",
+  "kind": "exercise",
+  "createdAt": 1791453600000,
+  "day": "2026-10-08",
+  "model": "claude-sonnet-5-5",
+  "ms": 48210,
+  "cost": 0.031,
+  "turns": 1,
+  "skill": "read",
+  "type": "read.article",
+  "title": "No-meeting Wednesdays",
+  "level": "B1+",
+  "minutes": 10,
+  "instructionsFr": "Lisez l’article — survolez les mots soulignés pour leur sens en français —, puis répondez aux questions. Elles suivent l’ordre du texte.",
+  "topic": "Travail et productivité",
+  "passage": {
+    "title": "Why some tech companies are banning meetings on Wednesdays",
+    "paragraphs": [
+      "When Clara Moreau joined a software company in Lyon last year, her calendar filled up fast. “Some weeks I had twenty-two meetings,” she says. “I was writing code in the evenings, because there was no time left during the day.” Her story is far from unusual: many office workers say that a large part of their week goes on meetings, and that at least half of them are a waste of time.",
+      "A growing number of companies are trying a simple fix: one day a week with no meetings at all. On these “focus days”, usually Wednesdays, staff are encouraged to switch off notifications and work on tasks that need long periods of concentration. Managers who still need an answer can send a message, but they shouldn’t expect a reply within the hour.",
+      "The first results look promising. At Clara’s company, which introduced the rule in March, developers say they finish more work and feel less stressed. “It’s the only day I can really get into a problem,” says Clara. Her manager admits that the change was harder for him: “I used to solve things by calling a quick meeting. Now I have to write things down clearly, which takes more effort at first.”",
+      "Not everyone is convinced. Critics point out that a meeting-free day can simply push meetings onto the other four days, making them even busier. Others worry that new employees, who learn a lot by listening to their colleagues, may feel isolated. For now, most companies are treating the idea as an experiment. Clara’s team will review it at the end of the year — in a meeting, of course."
+    ],
+    "glossary": [
+      {
+        "term": "fix",
+        "meaningFr": "solution (rapide)",
+        "meaningEn": "a solution to a problem",
+        "example": "There’s no quick fix for this bug."
+      },
+      {
+        "term": "switch off",
+        "meaningFr": "désactiver, éteindre",
+        "meaningEn": "to stop something working with a switch or a setting",
+        "example": "Please switch off your camera if your connection is slow."
+      },
+      {
+        "term": "promising",
+        "meaningFr": "prometteur",
+        "meaningEn": "showing signs of future success",
+        "example": "The first tests of the new cache are promising."
+      },
+      {
+        "term": "get into",
+        "meaningFr": "se plonger dans",
+        "meaningEn": "to become deeply involved in something",
+        "example": "It takes me twenty minutes to really get into a task."
+      },
+      {
+        "term": "admit",
+        "meaningFr": "reconnaître, avouer",
+        "meaningEn": "to agree, often unwillingly, that something is true",
+        "example": "He admits that the deadline was unrealistic."
+      },
+      {
+        "term": "point out",
+        "meaningFr": "faire remarquer, souligner",
+        "meaningEn": "to tell someone a fact they may not have noticed",
+        "example": "She pointed out a mistake in the release notes."
+      },
+      {
+        "term": "isolated",
+        "meaningFr": "isolé",
+        "meaningEn": "alone, without much contact with other people",
+        "example": "Remote workers can feel isolated without regular calls."
+      }
+    ]
+  },
+  "script": {
+    "title": "",
+    "contextFr": "",
+    "speakers": [],
+    "lines": []
+  },
+  "items": [
+    {
+      "id": "i1",
+      "kind": "choice",
+      "prompt": "What is the article mainly about?",
+      "promptFr": "",
+      "options": [
+        "A company that has stopped all its meetings",
+        "Companies that keep one day a week free of meetings",
+        "A survey about developers’ working hours",
+        "Why managers prefer written messages"
+      ],
+      "answer": "Companies that keep one day a week free of meetings",
+      "accepted": [],
+      "explanationFr": "L’article présente les « focus days » : un jour par semaine sans réunion. Les autres propositions sont des détails ou des déformations du texte.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i2",
+      "kind": "choice",
+      "prompt": "Why did Clara write code in the evenings?",
+      "promptFr": "",
+      "options": [
+        "She preferred working at night",
+        "Her meetings left no time during the day",
+        "Her manager asked her to",
+        "She worked in a different time zone"
+      ],
+      "answer": "Her meetings left no time during the day",
+      "accepted": [],
+      "explanationFr": "« I was writing code in the evenings, because there was no time left during the day » : la cause, c’est le trop-plein de réunions.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i3",
+      "kind": "truefalse",
+      "prompt": "On focus days, managers are not allowed to contact their staff.",
+      "promptFr": "",
+      "options": [
+        "true",
+        "false",
+        "not_given"
+      ],
+      "answer": "false",
+      "accepted": [],
+      "explanationFr": "Faux : ils peuvent envoyer un message (« can send a message »), mais sans attendre de réponse dans l’heure.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i4",
+      "kind": "truefalse",
+      "prompt": "Clara’s manager found the change easy at first.",
+      "promptFr": "",
+      "options": [
+        "true",
+        "false",
+        "not_given"
+      ],
+      "answer": "false",
+      "accepted": [],
+      "explanationFr": "Faux : « the change was harder for him » — il doit désormais tout écrire clairement, ce qui demande plus d’effort au début.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i5",
+      "kind": "truefalse",
+      "prompt": "Clara’s company plans to introduce focus days in all its offices abroad.",
+      "promptFr": "",
+      "options": [
+        "true",
+        "false",
+        "not_given"
+      ],
+      "answer": "not_given",
+      "accepted": [],
+      "explanationFr": "Non dit : l’article parle d’un bilan en fin d’année, jamais d’autres bureaux.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i6",
+      "kind": "choice",
+      "prompt": "What does the last sentence suggest?",
+      "promptFr": "",
+      "options": [
+        "The team will probably cancel the experiment",
+        "There is some irony: they need a meeting to judge a no-meeting rule",
+        "Meetings will be banned completely next year",
+        "Clara will be in charge of the review"
+      ],
+      "answer": "There is some irony: they need a meeting to judge a no-meeting rule",
+      "accepted": [],
+      "explanationFr": "« in a meeting, of course » est ironique : il faudra une réunion pour juger la règle anti-réunions.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i7",
+      "kind": "gap",
+      "prompt": "A meeting-free day can simply ___ meetings onto the other four days.",
+      "promptFr": "repousser, déplacer",
+      "options": [],
+      "answer": "push",
+      "accepted": [
+        "move"
+      ],
+      "explanationFr": "« push something onto » = reporter, déplacer quelque chose sur (d’autres jours).",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    },
+    {
+      "id": "i8",
+      "kind": "gap",
+      "prompt": "“It’s the only day I can really ___ ___ a problem,” says Clara.",
+      "promptFr": "me plonger dans",
+      "options": [],
+      "answer": "get | into",
+      "accepted": [],
+      "explanationFr": "« get into something » = s’y plonger, s’y mettre vraiment.",
+      "audioText": "",
+      "words": [],
+      "seconds": 0,
+      "criteria": [],
+      "modelAnswer": ""
+    }
+  ]
+}

@@ -1,0 +1,787 @@
+{
+  "id": "toeic-20261008-726d95",
+  "kind": "toeic",
+  "createdAt": 1791480793914,
+  "day": "2026-10-08",
+  "model": "claude-sonnet-5-5",
+  "ms": 100340,
+  "cost": 0.179,
+  "turns": 2,
+  "module": "hard",
+  "center": "B1",
+  "listening": [
+    {
+      "id": "s1",
+      "section": "L",
+      "part": 2,
+      "topic": "safety inspection deadline",
+      "intro": "",
+      "speakers": [
+        {
+          "id": "M1",
+          "role": "employee",
+          "gender": "male",
+          "accent": "en-US"
+        },
+        {
+          "id": "W1",
+          "role": "colleague",
+          "gender": "female",
+          "accent": "en-GB"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "M1",
+          "text": "When does the safety inspection report need to be submitted?"
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q1",
+          "stem": "",
+          "options": [
+            "In the east warehouse, I think.",
+            "Ms. Okafor is still checking the schedule.",
+            "The inspection took about two hours."
+          ],
+          "answer": 1,
+          "ability": "L_detail_short",
+          "cefr": "B2",
+          "features": [
+            "indirect_response",
+            "lexical_match"
+          ],
+          "evidence": "Ms. Okafor is still checking the schedule.",
+          "explanationFr": "La question porte sur le moment (when) ; la réponse indirecte indique que la date n'est pas encore connue. « In the east warehouse » répond à where, et « two hours » parle de la durée, pas de l'échéance."
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "section": "L",
+      "part": 2,
+      "topic": "slow laptop",
+      "intro": "",
+      "speakers": [
+        {
+          "id": "W2",
+          "role": "employee",
+          "gender": "female",
+          "accent": "en-AU"
+        },
+        {
+          "id": "M2",
+          "role": "IT technician",
+          "gender": "male",
+          "accent": "en-CA"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "W2",
+          "text": "I think the new software update has slowed down my laptop."
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q2",
+          "stem": "",
+          "options": [
+            "Have you tried restarting it yet?",
+            "The laptop bag is in my locker.",
+            "Yes, the update is on Thursday."
+          ],
+          "answer": 0,
+          "ability": "L_gist_short",
+          "cefr": "B2",
+          "features": [
+            "indirect_response"
+          ],
+          "evidence": "Have you tried restarting it yet?",
+          "explanationFr": "Le technicien réagit au problème en proposant une solution. Les autres réponses reprennent « update » et « laptop » sans répondre à l'affirmation."
+        }
+      ]
+    },
+    {
+      "id": "s3",
+      "section": "L",
+      "part": 2,
+      "topic": "restaurant seating",
+      "intro": "",
+      "speakers": [
+        {
+          "id": "M1",
+          "role": "waiter",
+          "gender": "male",
+          "accent": "en-GB"
+        },
+        {
+          "id": "W1",
+          "role": "customer",
+          "gender": "female",
+          "accent": "en-US"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "M1",
+          "text": "Would you rather sit by the window or near the entrance?"
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q3",
+          "stem": "",
+          "options": [
+            "I'll open the window for you.",
+            "Yes, we have a reservation.",
+            "Either is fine with me."
+          ],
+          "answer": 2,
+          "ability": "L_gist_short",
+          "cefr": "B2",
+          "features": [
+            "indirect_response"
+          ],
+          "evidence": "Either is fine with me.",
+          "explanationFr": "La question propose un choix ; « Either is fine » signifie que les deux conviennent. « Yes » ne convient pas à une question « or », et « open the window » reprend un mot sans répondre."
+        }
+      ]
+    },
+    {
+      "id": "s4",
+      "section": "L",
+      "part": 3,
+      "topic": "delayed tile shipment",
+      "intro": "Questions 4-6 refer to the following conversation with three speakers.",
+      "speakers": [
+        {
+          "id": "W1",
+          "role": "project manager",
+          "gender": "female",
+          "accent": "en-US"
+        },
+        {
+          "id": "M1",
+          "role": "site coordinator",
+          "gender": "male",
+          "accent": "en-GB"
+        },
+        {
+          "id": "W2",
+          "role": "purchasing officer",
+          "gender": "female",
+          "accent": "en-AU"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "W1",
+          "text": "Thanks for joining me, both of you. The tile shipment for the Harbor Street hotel is stuck at the port, and customs says it could take five more days."
+        },
+        {
+          "speaker": "M1",
+          "text": "That's a problem. The installers start on Monday, and the client wants the lobby finished before the conference."
+        },
+        {
+          "speaker": "W2",
+          "text": "We could ask the supplier in Dunmore for a partial order. They stock a similar tile, although it costs a little more."
+        },
+        {
+          "speaker": "M1",
+          "text": "How much more are we talking about?"
+        },
+        {
+          "speaker": "W2",
+          "text": "Roughly eight percent. But I'd rather pay that than lose the installers' booking fee."
+        },
+        {
+          "speaker": "W1",
+          "text": "Fair enough. Let's see if the client will accept a slightly different shade. Could you send them photos of the samples this afternoon?"
+        },
+        {
+          "speaker": "M1",
+          "text": "Sure. I'll email them before three and call to follow up."
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q4",
+          "stem": "What problem are the speakers discussing?",
+          "options": [
+            "A shipment has been held up.",
+            "An installer has cancelled.",
+            "A supplier has raised its prices.",
+            "A client has changed an order."
+          ],
+          "answer": 0,
+          "ability": "L_gist_ext",
+          "cefr": "B2",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "The tile shipment for the Harbor Street hotel is stuck at the port, and customs says it could take five more days.",
+          "explanationFr": "« Stuck at the port » est paraphrasé par « held up ». Le prix plus élevé du second fournisseur n'est qu'une solution envisagée, pas le problème."
+        },
+        {
+          "id": "q5",
+          "stem": "Why does the purchasing officer prefer the Dunmore supplier?",
+          "options": [
+            "To finish before the conference",
+            "To get a lower price",
+            "To keep the first supplier satisfied",
+            "To avoid losing a booking fee"
+          ],
+          "answer": 3,
+          "ability": "L_detail_ext",
+          "cefr": "B2",
+          "features": [
+            "info_in_middle",
+            "paraphrase"
+          ],
+          "evidence": "I'd rather pay that than lose the installers' booking fee.",
+          "explanationFr": "Elle accepte de payer environ huit pour cent de plus pour ne pas perdre les frais de réservation des installateurs. Le prix n'est pas plus bas, il est plus élevé."
+        },
+        {
+          "id": "q6",
+          "stem": "What will the man do this afternoon?",
+          "options": [
+            "Order tiles from Dunmore",
+            "Send photos of the alternatives to the client",
+            "Reschedule the installers",
+            "Contact the customs office"
+          ],
+          "answer": 1,
+          "ability": "L_detail_ext",
+          "cefr": "B2",
+          "features": [
+            "paraphrase",
+            "negation"
+          ],
+          "evidence": "Could you send them photos of the samples this afternoon? Sure. I'll email them before three and call to follow up.",
+          "explanationFr": "Il accepte d'envoyer par e-mail les photos des échantillons au client. La commande à Dunmore n'est pas encore décidée : il faut d'abord l'accord du client."
+        }
+      ]
+    },
+    {
+      "id": "s5",
+      "section": "L",
+      "part": 3,
+      "topic": "choosing a courier service",
+      "intro": "Questions 7-9 refer to the following conversation and price list.",
+      "speakers": [
+        {
+          "id": "M1",
+          "role": "product engineer",
+          "gender": "male",
+          "accent": "en-CA"
+        },
+        {
+          "id": "W1",
+          "role": "operations assistant",
+          "gender": "female",
+          "accent": "en-US"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "M1",
+          "text": "The client in Lisbon needs the prototype by Thursday morning. It's Monday afternoon, so we have to choose a courier now."
+        },
+        {
+          "speaker": "W1",
+          "text": "Check the price list. Our budget for this shipment is fifty dollars at most, and the courier only collects until five today."
+        },
+        {
+          "speaker": "M1",
+          "text": "So the fastest option is out, I guess. Does the fee include insurance?"
+        },
+        {
+          "speaker": "W1",
+          "text": "No, finance arranges that separately, so don't worry about it."
+        },
+        {
+          "speaker": "M1",
+          "text": "Then we want the cheapest service that still gets there by Thursday."
+        },
+        {
+          "speaker": "W1",
+          "text": "Agreed. Could you finish the customs form while I print the label?"
+        },
+        {
+          "speaker": "M1",
+          "text": "Of course. I'll have it done in ten minutes."
+        }
+      ],
+      "documents": [],
+      "graphic": {
+        "kind": "price_list",
+        "title": "Parcel Services to Lisbon (collection Monday)",
+        "columns": [
+          "Service",
+          "Delivery time",
+          "Price"
+        ],
+        "rows": [
+          [
+            "Express Plus",
+            "Next business day",
+            "$85"
+          ],
+          [
+            "Standard Air",
+            "Three business days",
+            "$48"
+          ],
+          [
+            "Economy Road",
+            "Six business days",
+            "$22"
+          ],
+          [
+            "Freight Saver",
+            "Ten business days",
+            "$14"
+          ]
+        ]
+      },
+      "questions": [
+        {
+          "id": "q7",
+          "stem": "What are the speakers mainly discussing?",
+          "options": [
+            "How to reduce insurance costs",
+            "Where to hold a client meeting",
+            "How to ship a prototype",
+            "When to print a label"
+          ],
+          "answer": 2,
+          "ability": "L_gist_ext",
+          "cefr": "B1",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "The client in Lisbon needs the prototype by Thursday morning. It's Monday afternoon, so we have to choose a courier now.",
+          "explanationFr": "Ils doivent choisir un transporteur pour envoyer un prototype. L'assurance et l'étiquette ne sont que des détails secondaires."
+        },
+        {
+          "id": "q8",
+          "stem": "Look at the graphic. Which service will the speakers most likely choose?",
+          "options": [
+            "Economy Road",
+            "Freight Saver",
+            "Standard Air",
+            "Express Plus"
+          ],
+          "answer": 2,
+          "ability": "L_detail_ext",
+          "cefr": "B2",
+          "features": [
+            "graphic",
+            "inference"
+          ],
+          "evidence": "Then we want the cheapest service that still gets there by Thursday.",
+          "explanationFr": "Envoyé lundi, seul Express Plus (hors budget) ou Standard Air (trois jours ouvrés) arrive jeudi ; Standard Air est le moins cher des deux. Economy Road arriverait trop tard."
+        },
+        {
+          "id": "q9",
+          "stem": "What will the man do next?",
+          "options": [
+            "Print the shipping label",
+            "Call the client in Lisbon",
+            "Contact the finance department",
+            "Complete a customs form"
+          ],
+          "answer": 3,
+          "ability": "L_detail_ext",
+          "cefr": "B1",
+          "features": [
+            "lexical_match"
+          ],
+          "evidence": "Could you finish the customs form while I print the label? Of course.",
+          "explanationFr": "L'homme accepte de remplir le formulaire de douane. C'est la femme qui imprime l'étiquette."
+        }
+      ]
+    },
+    {
+      "id": "s6",
+      "section": "L",
+      "part": 4,
+      "topic": "new scanning procedure on a production line",
+      "intro": "Questions 10-12 refer to the following meeting excerpt.",
+      "speakers": [
+        {
+          "id": "M2",
+          "role": "production supervisor",
+          "gender": "male",
+          "accent": "en-AU"
+        }
+      ],
+      "audio": [
+        {
+          "speaker": "M2",
+          "text": "Good morning, everyone. Before we start the shift, a quick note about the new labeling machine on line three. Starting tomorrow, every box of bottled sauce must be scanned twice: once after filling, and again before it goes on the pallet. I know that sounds like extra work. But last month, two pallets were returned because of wrong expiry dates, and each return cost us several thousand dollars. Maya from quality control will be at line three all day tomorrow to help with the scanners. If a scan fails, don't try to fix the machine yourself. Put the box aside and tell her. I realize the training session was short, so please find me after the meeting if anything is unclear."
+        }
+      ],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q10",
+          "stem": "What is the speaker mainly announcing?",
+          "options": [
+            "A change in the way boxes are checked",
+            "The purchase of a new filling machine",
+            "The results of a quality inspection",
+            "A schedule for overtime shifts"
+          ],
+          "answer": 0,
+          "ability": "L_gist_ext",
+          "cefr": "B2",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "Starting tomorrow, every box of bottled sauce must be scanned twice.",
+          "explanationFr": "Il présente une nouvelle procédure de double scan des cartons. La machine d'étiquetage existe déjà ; il ne s'agit pas d'un achat."
+        },
+        {
+          "id": "q11",
+          "stem": "Why does the speaker say, “I know that sounds like extra work”?",
+          "options": [
+            "To ask for volunteers to work longer",
+            "To admit that employees may be unhappy about the change",
+            "To apologize for a machine breakdown",
+            "To suggest that the training was unnecessary"
+          ],
+          "answer": 1,
+          "ability": "L_pragmatic",
+          "cefr": "B2",
+          "features": [
+            "inference",
+            "paraphrase"
+          ],
+          "evidence": "I know that sounds like extra work. But last month, two pallets were returned because of wrong expiry dates.",
+          "explanationFr": "Le superviseur reconnaît la contrainte supplémentaire avant de justifier la mesure par le coût des retours. Il ne parle ni de panne ni d'heures supplémentaires."
+        },
+        {
+          "id": "q12",
+          "stem": "What should employees do if a scan fails?",
+          "options": [
+            "Set the box aside and inform a colleague",
+            "Send the box to the next line",
+            "Repair the scanner themselves",
+            "Wait for the end of the shift"
+          ],
+          "answer": 0,
+          "ability": "L_detail_ext",
+          "cefr": "B2",
+          "features": [
+            "negation",
+            "paraphrase"
+          ],
+          "evidence": "If a scan fails, don't try to fix the machine yourself. Put the box aside and tell her.",
+          "explanationFr": "Il faut mettre le carton de côté et prévenir Maya, du contrôle qualité. Réparer soi-même est explicitement déconseillé."
+        }
+      ]
+    }
+  ],
+  "reading": [
+    {
+      "id": "s7",
+      "section": "R",
+      "part": 5,
+      "topic": "connector",
+      "intro": "",
+      "speakers": [],
+      "audio": [],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q13",
+          "stem": "The board approved the revised budget ------- several members still had concerns about the rising cost of materials.",
+          "options": [
+            "because",
+            "unless",
+            "despite",
+            "although"
+          ],
+          "answer": 3,
+          "ability": "R_grammar",
+          "cefr": "B2",
+          "features": [
+            "lexical_match"
+          ],
+          "evidence": "The board approved the revised budget although several members still had concerns.",
+          "explanationFr": "« Although » introduit une proposition concessive avec sujet et verbe. « Despite » exigerait un nom ou un gérondif, et « because » ou « unless » ne donnent pas le bon sens."
+        }
+      ]
+    },
+    {
+      "id": "s8",
+      "section": "R",
+      "part": 5,
+      "topic": "verb form",
+      "intro": "",
+      "speakers": [],
+      "audio": [],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q14",
+          "stem": "Applicants are required to submit a portfolio that ------- their experience in project management and team leadership.",
+          "options": [
+            "demonstrate",
+            "demonstrates",
+            "demonstration",
+            "demonstrating"
+          ],
+          "answer": 1,
+          "ability": "R_grammar",
+          "cefr": "B2",
+          "features": [],
+          "evidence": "a portfolio that demonstrates their experience",
+          "explanationFr": "« That » a pour antécédent « a portfolio », singulier : il faut un verbe conjugué à la troisième personne du singulier."
+        }
+      ]
+    },
+    {
+      "id": "s9",
+      "section": "R",
+      "part": 5,
+      "topic": "vocabulary",
+      "intro": "",
+      "speakers": [],
+      "audio": [],
+      "documents": [],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q15",
+          "stem": "Mr. Alvarez was asked to ------- the findings of the customer survey in a brief report for the executive team.",
+          "options": [
+            "consume",
+            "assume",
+            "summarize",
+            "resume"
+          ],
+          "answer": 2,
+          "ability": "R_vocab",
+          "cefr": "B2",
+          "features": [
+            "lexical_match"
+          ],
+          "evidence": "asked to summarize the findings of the customer survey in a brief report",
+          "explanationFr": "Résumer les résultats dans un rapport bref est le seul sens logique. Les autres verbes ressemblent à « summarize » mais ne conviennent pas."
+        }
+      ]
+    },
+    {
+      "id": "s10",
+      "section": "R",
+      "part": 7,
+      "topic": "swimming pool schedule change",
+      "intro": "Questions 16-17 refer to the following notice.",
+      "speakers": [],
+      "audio": [],
+      "documents": [
+        {
+          "kind": "notice",
+          "title": "Changes to Lap Swimming Hours at Brookfield Aquatic Centre",
+          "meta": [],
+          "paragraphs": [
+            "Beginning Monday, November 3, the Brookfield Aquatic Centre will adjust its lap swimming hours to accommodate the growing number of members who swim before work. Morning sessions will now start at 5:30 A.M. instead of 6:30 A.M. In exchange, the evening session, previously open until 9:00 P.M., will close at 8:00 P.M. on weekdays.",
+            "Members holding a Flex Pass will not be affected, as these passes allow entry at any time the facility is open to the public. Those with an Evening Pass may exchange it for a Morning Pass at the front desk free of charge until November 30. After that date, a ten-dollar processing fee will apply.",
+            "The pool will remain closed on Sundays for maintenance. We apologize for any inconvenience and thank you for your understanding."
+          ]
+        }
+      ],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q16",
+          "stem": "What is indicated about members with an Evening Pass?",
+          "options": [
+            "They will be able to swim later on weekdays.",
+            "They must pay a fee as soon as the new hours begin.",
+            "They are no longer allowed to use the pool.",
+            "They can change passes without paying for a limited time."
+          ],
+          "answer": 3,
+          "ability": "R_locate",
+          "cefr": "B2",
+          "features": [
+            "paraphrase",
+            "info_in_middle"
+          ],
+          "evidence": "Those with an Evening Pass may exchange it for a Morning Pass at the front desk free of charge until November 30.",
+          "explanationFr": "L'échange est gratuit jusqu'au 30 novembre, puis 10 dollars de frais s'appliquent. Le soir, la fermeture est avancée, pas reculée."
+        },
+        {
+          "id": "q17",
+          "stem": "What can be inferred about Flex Pass holders?",
+          "options": [
+            "They may use only the morning sessions.",
+            "They will pay a ten-dollar fee.",
+            "They will not have to exchange their passes.",
+            "They can swim on Sundays."
+          ],
+          "answer": 2,
+          "ability": "R_infer",
+          "cefr": "B2",
+          "features": [
+            "inference",
+            "negation"
+          ],
+          "evidence": "Members holding a Flex Pass will not be affected, as these passes allow entry at any time the facility is open to the public.",
+          "explanationFr": "Leur pass reste valable à toute heure d'ouverture, donc aucun échange n'est nécessaire. La piscine est fermée le dimanche, et les 10 dollars ne concernent que les anciens Evening Pass après la date limite."
+        }
+      ]
+    },
+    {
+      "id": "s11",
+      "section": "R",
+      "part": 7,
+      "topic": "apartment rental inquiry",
+      "intro": "Questions 18-22 refer to the following Web page and e-mail.",
+      "speakers": [],
+      "audio": [],
+      "documents": [
+        {
+          "kind": "webpage",
+          "title": "Linden Court Apartments – Available Units",
+          "meta": [],
+          "paragraphs": [
+            "Linden Court offers modern living five minutes from the Central Station tram stop. All apartments include a dishwasher, high-speed internet, and access to the rooftop garden.",
+            "Studio (Unit 2B): 38 square meters, $950 per month, available October 15. One-Bedroom (Unit 4D): 52 square meters, $1,250 per month, available November 1. Two-Bedroom (Unit 6A): 74 square meters, $1,680 per month, available immediately.",
+            "Leases run for twelve months. A refundable deposit equal to one month's rent is required at signing. Pets are welcome in one-bedroom and larger units only, with a monthly pet fee of $30. Parking spaces in the underground garage can be rented for $90 a month and are limited.",
+            "Tours are available Tuesday through Saturday. To book a visit, please contact the leasing office."
+          ]
+        },
+        {
+          "kind": "email",
+          "title": "Apartment inquiry",
+          "meta": [
+            "From: Priya Nair",
+            "To: Leasing Office, Linden Court",
+            "Date: October 8",
+            "Subject: Apartment inquiry"
+          ],
+          "paragraphs": [
+            "Dear Mr. Castillo,",
+            "I am relocating for a new job and would like to rent a home near Central Station. I will be moving with my cat, so I need a place that accepts pets. I would like to move in no later than November 5, because my job starts on November 10.",
+            "My budget is $1,300 per month for rent alone, and I would also like a parking space if one is available. I am free to visit on Saturday, October 24, but I cannot come on weekdays. Could you tell me whether I could view an apartment that day? Also, are utilities included in the rent?",
+            "Thank you,",
+            "Priya Nair"
+          ]
+        }
+      ],
+      "graphic": null,
+      "questions": [
+        {
+          "id": "q18",
+          "stem": "Why did Ms. Nair write the email?",
+          "options": [
+            "To ask about renting an apartment",
+            "To complain about a parking fee",
+            "To cancel a scheduled tour",
+            "To request a lease extension"
+          ],
+          "answer": 0,
+          "ability": "R_locate",
+          "cefr": "B1",
+          "features": [
+            "paraphrase"
+          ],
+          "evidence": "I am relocating for a new job and would like to rent a home near Central Station.",
+          "explanationFr": "Elle se renseigne pour louer un logement. Elle ne mentionne ni annulation ni prolongation de bail."
+        },
+        {
+          "id": "q19",
+          "stem": "Which unit best suits Ms. Nair's needs?",
+          "options": [
+            "Unit 2B",
+            "Unit 4D",
+            "None of the units",
+            "Unit 6A"
+          ],
+          "answer": 1,
+          "ability": "R_connect",
+          "cefr": "B2",
+          "features": [
+            "cross_text",
+            "inference"
+          ],
+          "evidence": "Pets are welcome in one-bedroom and larger units only; One-Bedroom (Unit 4D): 52 square meters, $1,250 per month, available November 1.",
+          "explanationFr": "Elle a un chat (exclut le studio 2B) et un budget de 1 300 dollars (exclut 6A à 1 680). Le 4D est disponible le 1er novembre, avant sa date limite du 5."
+        },
+        {
+          "id": "q20",
+          "stem": "How much would Ms. Nair pay each month if she gets everything she asks for?",
+          "options": [
+            "$1,280",
+            "$1,370",
+            "$1,340",
+            "$1,710"
+          ],
+          "answer": 1,
+          "ability": "R_connect",
+          "cefr": "B2",
+          "features": [
+            "cross_text",
+            "inference"
+          ],
+          "evidence": "$1,250 per month; monthly pet fee of $30; parking spaces ... can be rented for $90 a month.",
+          "explanationFr": "1 250 + 30 (animal) + 90 (parking) = 1 370 dollars. Les autres montants oublient un des frais ou prennent le mauvais appartement."
+        },
+        {
+          "id": "q21",
+          "stem": "The word “limited” in paragraph 3 of the webpage is closest in meaning to",
+          "options": [
+            "temporary",
+            "extremely expensive",
+            "carefully measured",
+            "restricted in number"
+          ],
+          "answer": 3,
+          "ability": "R_vocab",
+          "cefr": "B2",
+          "features": [
+            "rare_vocabulary"
+          ],
+          "evidence": "Parking spaces in the underground garage can be rented for $90 a month and are limited.",
+          "explanationFr": "Pour des places de parking, « limited » signifie qu'il y en a peu. Il ne s'agit ni de leur prix ni d'une durée."
+        },
+        {
+          "id": "q22",
+          "stem": "What information requested by Ms. Nair is NOT provided on the webpage?",
+          "options": [
+            "Whether tours are offered on Saturdays",
+            "Whether pets are accepted",
+            "Whether utilities are included in the rent",
+            "Whether a parking space can be rented"
+          ],
+          "answer": 2,
+          "ability": "R_connect",
+          "cefr": "B2",
+          "features": [
+            "cross_text",
+            "negation"
+          ],
+          "evidence": "Also, are utilities included in the rent?",
+          "explanationFr": "La page parle des animaux, des visites du mardi au samedi et du parking, mais pas des charges comprises dans le loyer."
+        }
+      ]
+    }
+  ]
+}
