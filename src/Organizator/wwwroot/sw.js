@@ -4,7 +4,7 @@
    une nouvelle version du serveur change l'adresse, donc installe un nouveau service worker, dont le
    cache porte la version ; l'ancien cache est supprimé à l'activation.
    Ne met en cache que l'enveloppe de la page (HTML, CSS, JS, polices, icônes) pour un démarrage
-   rapide. Jamais les données : /api, /learn, /tts, /t/, /pair passent toujours au réseau, sans copie.
+   rapide. Jamais les données : /api, /learn, /tts, /t/, /login, /logout passent toujours au réseau, sans copie.
    - page (navigation) et revizator-server.js : réseau d'abord (le cookie décide de la page servie),
      copie de secours hors ligne ;
    - autres fichiers : copie d'abord, relue en arrière-plan (une modification sans changement de
@@ -28,8 +28,8 @@ var SHELL = [
   'fonts/caprasimo-400-latin.woff2', 'manifest.webmanifest', 'icons/icon-192.png'
 ];
 
-/* Chemins jamais mis en cache (données, médias, appairage). */
-var PRIVATE = /^\/(api|learn|tts|t|pair)(\/|$)/;
+/* Chemins jamais mis en cache (données, médias, connexion). */
+var PRIVATE = /^\/(api|learn|tts|t|login|logout)(\/|$)/;
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) {
@@ -56,8 +56,8 @@ self.addEventListener('fetch', function (e) {
   if (url.pathname === '/sw.js' || url.pathname.indexOf('/revizator/fixtures/') === 0) return;
 
   if (req.mode === 'navigate' || url.pathname === '/revizator-server.js') {
-    /* La page : celle du serveur (appairé ou non), la copie seulement hors ligne. Seule la page
-       appairée (200) est gardée ; elle l'est sous index.html, quelle que soit l'adresse demandée. */
+    /* La page : celle du serveur (connecté ou non), la copie seulement hors ligne. Seule la page
+       d'une session ouverte (200) est gardée ; elle l'est sous index.html, quelle que soit l'adresse demandée. */
     var key = req.mode === 'navigate' ? 'index.html' : 'revizator-server.js';
     e.respondWith(fetch(req).then(function (r) {
       if (r.ok && !r.redirected) {

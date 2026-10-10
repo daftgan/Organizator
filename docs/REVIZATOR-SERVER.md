@@ -11,9 +11,9 @@ une décision change.
 ## 1. Vue d'ensemble
 
 ```
-Téléphone (PWA)  ─┐   cookie rz_token
+Téléphone (PWA)  ─┐   identifiant + mot de passe → cookie de session rz_token
                   ├─ https://revizator.daft-lab.fr ─→ Nginx Proxy Manager ─→ conteneur revizator-server :8080
-PC : Organizator ─┘   jeton dans l'URL (WebSocket ?token=, médias /t/<jeton>/...)
+PC : Organizator ─┘   identifiant + mot de passe → jeton de session dans l'URL (WebSocket ?token=, médias /t/<jeton>/...)
    onglet Révizator → serveur (si configuré)          revizator-server (.NET 8, Linux, ASP.NET Core)
    tout le reste → hôte WPF local                       ├─ services Révizator partagés avec l'hôte WPF
                                                         ├─ claude -p (Claude Code, abonnement, CLAUDE_CODE_OAUTH_TOKEN)
@@ -61,7 +61,7 @@ Une seule source de vérité : le dossier de données du serveur. Le PC et le t�
     l'image.
   - le `.csproj` copie aussi `src/Organizator/wwwroot` tel quel sous `wwwroot/` dans la sortie et la
     publication ; les `.so` de Whisper.net vont sous `runtimes/linux-x64/`, ceux de sherpa-onnx sous
-    `sherpa/linux-x64/` ; QRCoder dessine le QR code d'appairage. Version du serveur : `<Version>` du
+    `sherpa/linux-x64/` (aucune autre dépendance). Version du serveur : `<Version>` du
     `.csproj` (1.0.0), rendue par `/api/health` et reprise par `revizator-server.js`.
 
 ## 3. Serveur HTTP
@@ -72,8 +72,8 @@ Configuration par variables d'environnement :
 |---|---|---|
 | `REVIZATOR_DATA` | `/data` | dossier de données (même disposition que `%LOCALAPPDATA%\Organizator\` pour Révizator) |
 | `REVIZATOR_PORT` | `8080` | port HTTP (TLS assuré par le reverse proxy) |
-| `REVIZATOR_PUBLIC_URL` | `http://localhost:8080` | adresse publique, pour les liens d'appairage |
-| `REVIZATOR_ALLOWED_ORIGINS` | `https://app.organizator` | origines autorisées en CORS (la page d'Organizator dans WebView2) |
+| `REVIZATOR_PUBLIC_URL` | `http://localhost:8080` | adresse publique : origine reconnue comme « ce serveur » (formulaires de connexion, WebSocket), adresse de `/login` affichée par `user set` |
+| `REVIZATOR_ALLOWED_ORIGINS` | `https://app.organizator` | origines autorisées en CORS et pour `/api/login` (la page d'Organizator dans WebView2) |
 | `REVIZATOR_TRUSTED_PROXIES` | `private` | adresses ou réseaux (`192.168.1.11`, `172.16.0.0/12`, séparés par des virgules ; `private` = réseaux privés et locaux, `none` = aucun) dont `X-Forwarded-For` et `X-Forwarded-Proto` font foi ; une valeur illisible empêche le démarrage |
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | jeton de `claude setup-token`, lu par Claude Code |
 | `REVIZATOR_CLAUDE` | `claude` (dans le `PATH`) | chemin de l'exécutable Claude Code |
@@ -84,8 +84,13 @@ Routes :
 | Route | Auth | Rôle |
 |---|---|---|
 | `GET /api/health` | non | `{ ok, version }` |
-| `GET /pair?token=…` | jeton | pose le cookie `rz_token` (HttpOnly, Secure si HTTPS, SameSite=Lax, 400 jours) et redirige vers `/` |
-| `GET /` , `/index.html` | cookie | `wwwroot/index.html` avec deux injections (ci-dessous) ; sans cookie valide : petite page « appareil non appairé » (401, ou 429 au-delà de la limite d'essais) |
+| `GET /login` | non | formulaire de connexion (identifiant, mot de passe), **sans script** ; liens vers le manifeste et les icônes (la page s'installe depuis là) ; message selon `?e=` (`bad`, `blocked`, `locked`, `origin`, `out`) ; avec un cookie valide : 302 vers `/` ; sans aucun compte : rappel de `revizator-server user set` |
+| `POST /login` | identifiant + mot de passe | formulaire (`login`, `password`, 4 Ko au plus) : session ouverte, cookie `rz_token` (HttpOnly, SameSite=Lax, Secure derrière HTTPS, 400 jours) et 302 vers `/` ; échec : 302 vers `/login?e=bad`, `blocked` (adresse), `locked` (compte) ou `origin` (contrôle d'origine) |
+| `POST /logout` | cookie | ferme la session du cookie, retire le cookie, 302 vers `/login?e=out` ; origine refusée : 403 |
+| `POST /api/login` | identifiant + mot de passe | JSON `{ login, password, device? }` → `{ token, login, session }` (Organizator sur le PC, scripts) ; échec : 401 `{ error }`, ou 429 avec `Retry-After` (adresse ou compte bloqués) ; origine refusée : 403 |
+| `POST /api/logout` | `Authorization: Bearer <jeton>` | ferme cette session → `{ ok }` |
+| `GET /api/me` | cookie ou `Authorization: Bearer` | `{ login, version }` ; sinon 401 (ou 429) |
+| `GET /` , `/index.html` | cookie | `wwwroot/index.html` avec deux injections (ci-dessous) ; sans session valide : 302 vers `/login` (un cookie périmé est retiré au passage ; 429 au-delà de la limite d'essais) |
 | `GET /revizator-server.js` | non | généré : `window.REVIZATOR_SERVER = { mode: 'revizator', version, wsUrl: '/api/ws' }` |
 | `GET /<fichier de wwwroot>` | non | fichiers statiques de la page (aucune donnée personnelle) |
 | `GET /api/ws` | cookie ou `?token=` | WebSocket du pont (§ 4) |
@@ -99,16 +104,24 @@ Routes :
   <link rel="apple-touch-icon" href="icons/icon-192.png"><link rel="icon" type="image/png"
   href="icons/icon-192.png"><link rel="stylesheet" href="mobile.css">`. L'hôte WPF, lui, sert
   `index.html` tel quel.
-- Autres réponses : seules `GET` et `HEAD` sont servies (sinon 405, sauf le WebSocket et le `OPTIONS` du
-  CORS, qui rend 204) ; tout autre chemin sous `/api/` ou `/pair/` rend 404.
+- Autres réponses : seules `GET` et `HEAD` sont servies (sinon 405), sauf les quatre `POST` de connexion
+  ci-dessus, le WebSocket et le `OPTIONS` du CORS, qui rend 204 ; tout autre chemin sous `/api/` ou
+  `/login/` rend 404.
 - Les fichiers de `wwwroot` sont ceux de `src/Organizator/wwwroot` (copiés dans la sortie du build du
   serveur, ou embarqués), jamais modifiés à l'exécution.
 - Statique : aucun chemin ne sort de son dossier racine (`..`, chemins absolus, liens symboliques,
   segments vides ou cachés — commençant par un point —, `\ : %` et caractères de contrôle refusés) ; `Cache-Control: no-cache` sur `index.html`, `revizator-server.js` et `sw.js`.
-- CORS : seulement pour `REVIZATOR_ALLOWED_ORIGINS`, sur `/learn`, `/tts`, `/t/…` et `/api/health`.
+- CORS : seulement pour `REVIZATOR_ALLOWED_ORIGINS`, sur `/learn`, `/tts`, `/t/…`, `/api/health` et
+  `/api/login`, `/api/logout`, `/api/me` (pour ces trois-là, `OPTIONS` annonce `GET, POST` et les en-têtes
+  `Content-Type, Authorization`).
+- Contrôle d'origine de la connexion : les formulaires (`POST /login`, `POST /logout`) n'acceptent que ce
+  serveur (`REVIZATOR_PUBLIC_URL`, ou schéma et `Host` de la requête) ou l'absence d'`Origin` ; l'API
+  (`/api/login`, `/api/logout`) accepte aussi une origine de `REVIZATOR_ALLOWED_ORIGINS`.
 - En-têtes de sécurité : sur toute réponse `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`
-  (une page ou un média sous `/t/<jeton>/` ne transmet jamais son adresse) et `X-Frame-Options: DENY` ; sur
-  la page (et la page « non appairé ») un CSP : `default-src 'self'; script-src 'self' blob:` (aucun script
+  (une page ou un média sous `/t/<jeton>/` ne transmet jamais son adresse) et `X-Frame-Options: DENY`, sauf
+  sur `/` et `/login`, qui n'ont aucun secret dans leur adresse : `Referrer-Policy: same-origin` (avec
+  `no-referrer`, Chrome envoie `Origin: null` pour les formulaires POST, que le contrôle d'origine
+  refuserait) ; sur la page et sur `/login` un CSP : `default-src 'self'; script-src 'self' blob:` (aucun script
   en ligne ni gestionnaire `on…=` : un texte généré ou un flux RSS injecté ne s'exécute pas ; `blob:` pour
   le module audio de la détection de voix), `style-src 'self' 'unsafe-inline'`, `img-src 'self' data:
   blob:`, `media-src 'self' data: blob: https:` (podcasts lus directement), `connect-src 'self'
@@ -117,26 +130,48 @@ Routes :
   `manifest-src 'self'` et `form-action 'self'`. La page ne doit donc jamais dépendre d'un script en ligne. Fichiers de
   `/learn`, `/tts`, `/t/…` : `Cache-Control: private, no-cache` et `Content-Security-Policy: default-src
   'none'; sandbox`. NPM ne doit pas mettre en cache (« Cache Assets » : non) : son cache ignore
-  `Cache-Control` et resservirait ces fichiers sans jeton.
-- Jetons : `tokens.json` dans le dossier de données, chaque jeton = 32 octets aléatoires en base64url,
-  stocké **haché** (SHA-256) avec un nom d'appareil et sa date de création ; comparaison à temps
-  constant ; 10 échecs par minute et par IP au plus (au-delà : 429 ; une adresse IPv6 compte pour son
-  /64). En-tête `X-Forwarded-For` pris en compte (le serveur est derrière NPM) : sa **dernière** entrée
-  (celle qu'ajoute NPM), et seulement quand la connexion vient d'une adresse de
-  `REVIZATOR_TRUSTED_PROXIES` ; de même `X-Forwarded-Proto` (cookie `Secure`, contrôle d'origine du
-  WebSocket). Au-delà de la limite, même un bon jeton reçoit 429 jusqu'à la fin de la minute. La table
-  des échecs est nettoyée au plus toutes les 10 s et vidée au-delà de 20 000 adresses (pas de croissance
-  sans fin, pas de parcours complet à chaque échec). Les jetons refusés ne sont jamais journalisés (le
-  chemin `/t/<jeton>/…` est écrit `/t/…/…`). Les jetons passent dans des adresses (`/pair?token=`,
-  `?token=` du WebSocket du PC, `/t/<jeton>/`) : le journal d'accès de NPM les contient (limite assumée,
-  documentée dans `deploy/README.md`). `tokens.json` est relu dès qu'il change : `token new` et
-  `token revoke` valent aussitôt pour le serveur qui tourne. `token new` sur un nom existant remplace
-  son jeton.
+  `Cache-Control` et resservirait ces fichiers sans session.
+- Comptes : `users.json` dans le dossier de données (mode 0600), `{ users: [{ login, hash, created,
+  changed }] }`. Identifiant normalisé en minuscules : 1 à 40 caractères, lettres, chiffres, `.`, `_`,
+  `-`. Mot de passe de 10 à 200 caractères, haché par PBKDF2-SHA256 (600 000 itérations, sel de 16
+  octets, `pbkdf2-sha256$<itérations>$<sel>$<empreinte>`), comparé à temps constant ; un identifiant
+  inconnu est vérifié au même coût (contre un hachage factice : la réponse ne dit pas si le compte
+  existe) ; deux vérifications PBKDF2 en parallèle au plus. Pas d'inscription ni de « mot de passe
+  oublié » : les comptes se gèrent en ligne de commande. Fichier illisible : aucun compte n'est reconnu.
+- Sessions : chaque connexion réussie ouvre une session dans `tokens.json` (mode 0600) : un jeton de
+  32 octets aléatoires en base64url, rendu une fois (cookie `rz_token` pour un navigateur, réponse de
+  `/api/login` pour Organizator) et stocké **haché** (SHA-256), comparé à temps constant ; avec son
+  compte, sa date et un nom « compte · appareil · date #xxxx » (appareil : déduit du `User-Agent`,
+  « iPhone Safari », « Android Chrome »…, ou le `device` de `/api/login`, « Organizator (PC) »). 50
+  sessions par compte au plus : au-delà, les plus anciennes sont fermées. Changer le mot de passe ou
+  supprimer le compte ferme toutes ses sessions.
+- Anti-essais : 10 échecs par minute et par IP au plus (au-delà : 429, ou `/login?e=blocked` ; une
+  adresse IPv6 compte pour son /64) — échecs de connexion comme jetons de session faux. En-tête
+  `X-Forwarded-For` pris en compte (le serveur est derrière NPM) : sa **dernière** entrée (celle
+  qu'ajoute NPM), et seulement quand la connexion vient d'une adresse de `REVIZATOR_TRUSTED_PROXIES` ;
+  de même `X-Forwarded-Proto` (cookie `Secure`, contrôle d'origine). Au-delà de la limite, même un bon
+  jeton ou un bon mot de passe est refusé jusqu'à la fin de la minute. La table des échecs est nettoyée
+  au plus toutes les 10 s et vidée au-delà de 20 000 adresses. En plus, **verrou par compte** : après 5
+  échecs de suite sur un identifiant, il est bloqué 1 minute, puis 2, 4… jusqu'à 15 minutes à chaque
+  nouvel échec ; une connexion réussie remet le compteur à zéro (un attaquant qui change d'adresse ne
+  devine pas plus vite). Chaque échec de connexion attend 400 ms avant de répondre.
+- Journal : `Connexion : <compte> (<appareil>, <IP>)`, `Connexion refusee (<IP>, identifiant de N
+  caracteres)` (ni l'identifiant ni le mot de passe), `Deconnexion (<IP>)`. Les jetons refusés ne sont
+  jamais journalisés (le chemin `/t/<jeton>/…` est écrit `/t/…/…`). Le mot de passe ne passe jamais
+  dans une adresse ; le jeton de session d'Organizator, si (`?token=` du WebSocket, `/t/<jeton>/`) : le
+  journal d'accès de NPM le contient (limite assumée, documentée dans `deploy/README.md`).
+  `users.json` et `tokens.json` sont relus dès qu'ils changent : la ligne de commande vaut aussitôt pour
+  le serveur qui tourne.
 - Ligne de commande (même exécutable) :
-  - `revizator-server token new <appareil>` : crée un jeton, affiche le lien d'appairage
-    `${REVIZATOR_PUBLIC_URL}/pair?token=…`, son QR code en caractères dans le terminal, et le jeton seul
-    (pour Organizator sur le PC) ;
-  - `revizator-server token list` / `token revoke <appareil>` ;
+  - `revizator-server user set <identifiant>` : crée le compte, ou change son mot de passe ; le mot de
+    passe est demandé deux fois, sans écho (`docker exec -it`) ; `--password-stdin` (ou une entrée
+    redirigée) le lit sur une ligne de l'entrée standard. Un changement ferme toutes les sessions du
+    compte, WebSocket ouverts compris ;
+  - `revizator-server user list` : comptes, dates, nombre de sessions ;
+  - `revizator-server user remove <identifiant>` : supprime le compte et ferme ses sessions ;
+  - `revizator-server session list` : sessions ouvertes (nom et date) ;
+  - `revizator-server session revoke <nom ou début du nom>` : ferme une session (le début doit n'en
+    désigner qu'une) ; `session revoke --all` : toutes ;
   - `revizator-server import <dossier>` : importe `learning.json` et `learning/` depuis une copie du
     dossier `%LOCALAPPDATA%\Organizator\` du PC (sauvegarde de l'existant avant d'écraser : l'ancien
     `learning.json` et `learning/` sont déplacés sous `import-backup-<date>/` ; à lancer serveur arrêté,
@@ -194,10 +229,12 @@ Précisions de la mise en œuvre :
   `REVIZATOR_PUBLIC_URL`, ou au schéma (`https` si la requête l'est, directement ou par `X-Forwarded-Proto`
   d'un proxy de confiance) et à l'en-tête `Host` de la requête (`X-Forwarded-Host` n'est pas lu) — ou une
   origine de `REVIZATOR_ALLOWED_ORIGINS`, sinon 403 ; avec `?token=`, l'origine est libre ;
-- le jeton d'une connexion est revérifié à chaque message et à chaque ping : un jeton révoqué (ou
-  remplacé par `token new`) ferme aussi les connexions déjà ouvertes (code 1008, au plus 20 s) ;
+- la session d'une connexion est revérifiée à chaque message et à chaque ping : une session fermée
+  (`session revoke`, déconnexion, mot de passe changé, compte supprimé) ferme aussi les connexions déjà
+  ouvertes (code 1008, au plus 20 s) ;
 - `log` : niveau réduit à 12 lettres, message coupé à 4 000 caractères (pas de fausse ligne de journal) ;
-  `saveSettings` ne garde jamais `revizatorServerUrl` ni `revizatorServerToken` (réglages du PC) ;
+  `saveSettings` ne garde jamais `revizatorServerUrl`, `revizatorServerToken` ni `revizatorServerLogin`
+  (réglages du PC) ;
 - un message au-delà de 32 Mo ferme la connexion (code 1009) ; les messages binaires sont ignorés ;
 - à l'arrêt du serveur (`docker stop`, SIGTERM), les WebSocket sont fermés tout de suite (code 1001) : sans
   cela Kestrel les garderait jusqu'à 30 s et les pages se croiraient encore connectées ;
@@ -213,8 +250,14 @@ Trois cas, décidés au chargement :
 1. **WebView2** (`window.chrome.webview`) — inchangé, sauf le routage distant (cas 3).
 2. **Servie par le serveur** (`window.REVIZATOR_SERVER`) — tous les `bridge.call` passent par le
    WebSocket `REVIZATOR_SERVER.wsUrl` (même origine, le cookie authentifie). Le shim n'est pas utilisé.
-3. **Organizator avec un serveur Révizator configuré** — réglages `revizatorServerUrl` et
-   `revizatorServerToken` (dans `settings.json` du PC, champs ajoutés à `AppSettings.cs`). Les types de
+   À chaque coupure de la liaison, la page demande `GET /api/me` : un 401 (session fermée : déconnexion
+   ailleurs, mot de passe changé, `session revoke`) la renvoie à `/login` au lieu de réessayer sans fin.
+   Réglages › Révizator montre la carte **Compte** (identifiant lu par `/api/me`, « Se déconnecter » =
+   formulaire `POST /logout`).
+3. **Organizator avec un serveur Révizator configuré** — réglages `revizatorServerUrl`,
+   `revizatorServerToken` (le jeton de **session** rendu par `POST /api/login`) et `revizatorServerLogin`
+   (l'identifiant, pour l'affichage), dans `settings.json` du PC (`AppSettings.cs`) ; le mot de passe n'y
+   est jamais écrit. Les types de
    la liste du § 4 (sauf `getState`, `saveSettings`, `notify`, `log`, `perf`, qui restent locaux)
    partent par `wss://<serveur>/api/ws?token=<jeton>` ; les événements `learn`, `tts`, `asr`, `voice`,
    `whisper`, `learnChanged` du serveur sont émis dans la page ; ceux de l'hôte local pour ces mêmes
@@ -229,13 +272,23 @@ Trois cas, décidés au chargement :
    `whisperWarm`) ; les événements `whisper` de ces travaux (même `job`) et de ces téléchargements (même
    `model`, sans `job`) passent. Le texte des tâches ne quitte donc jamais le PC.
    Les réglages ne sont connus qu'après `getState` : `app.js` appelle
-   `bridge.configureRemote({ url, token })` juste après, avant le démarrage des pages, et Révizator le
-   rappelle quand le réglage change (Réglages › Révizator › Serveur Révizator : adresse, jeton masqué,
-   « Tester la connexion » = `bridge.testRemote` : `GET /api/health` puis ouverture du WebSocket avec le
-   jeton → `online` / `unreachable` / `refused`, ou `invalid` pour une adresse illisible, affichés
-   « Connecté » (avec la version du serveur), « Injoignable », « Jeton refusé » ; et « Enregistrer »).
-   « Jeton refusé » veut dire : `/api/health` répond mais le WebSocket refuse ; un proxy qui bloquerait les
-   WebSocket donnerait le même message, ou « Injoignable » s'il ne répond pas en 8 s. `configureRemote` émet
+   `bridge.configureRemote({ url, token })` juste après (seulement si un jeton est enregistré), avant le
+   démarrage des pages, et Révizator le rappelle quand le réglage change. Réglages › Révizator › Serveur
+   Révizator :
+   - sans session : **Adresse**, **Identifiant**, **Mot de passe**, « Se connecter » =
+     `bridge.loginRemote({ url, login, password })` (`POST /api/login`, appareil « Organizator (PC) ») ;
+     réussite : le jeton et l'identifiant vont dans les réglages, le mot de passe est effacé du
+     formulaire, `configureRemote` branche le serveur ; échec : « Refusé » avec le message du serveur
+     (mauvais mot de passe, trop d'essais), « Injoignable », ou « À compléter » (adresse illisible,
+     champ vide) ;
+   - connecté : le serveur et le compte (« connecté en tant que … »), « Tester la connexion » =
+     `bridge.testRemote` (`GET /api/health` puis ouverture du WebSocket avec le jeton → `online` /
+     `unreachable` / `refused`, affichés « Connecté » avec la version du serveur, « Injoignable »,
+     « Refusé »), et « Se déconnecter » = `bridge.logoutRemote` (`POST /api/logout`, jamais en échec),
+     jeton vidé, `configureRemote({ url: '' })` : Révizator revient aux données du PC.
+   « Refusé » au test veut dire : `/api/health` répond mais le WebSocket refuse la session (fermée sur le
+   serveur : se déconnecter puis se reconnecter) ; un proxy qui bloquerait les WebSocket donnerait le même
+   message, ou « Injoignable » s'il ne répond pas en 8 s. `configureRemote` émet
    `remoteChanging` (avant la bascule : une sauvegarde en attente part encore à l'ancien destinataire)
    puis `remoteChanged` ; Révizator relit alors tout chez le nouveau. Le réglage n'est montré que dans
    WebView2 (dans le shim, seulement avec `window.__shimRemote = true`, pour les essais).
@@ -288,7 +341,7 @@ l'onglet Révizator puis l'onglet Dictée (sans « Transcrire les enregistrement
 - PWA : `wwwroot/manifest.webmanifest` (nom « Révizator », `display: standalone`, `start_url: "/"`),
   `wwwroot/icons/icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, et `wwwroot/sw.js` (service
   worker à la racine : met en cache l'enveloppe de la page — HTML, CSS, JS, polices, icônes — pour un
-  démarrage rapide ; **jamais** `/api`, `/learn`, `/tts`, `/t/`, `/pair`). Enregistré par `app.js` en
+  démarrage rapide ; **jamais** `/api`, `/learn`, `/tts`, `/t/`). Enregistré par `app.js` en
   mode serveur seulement (`bridge.mode === 'server'`, contexte sécurisé), sous l'adresse
   `sw.js?v=<REVIZATOR_SERVER.version>` : une nouvelle version du serveur installe un nouveau service
   worker, dont le cache (`revizator-shell-<version>`) remplace l'ancien. Page et `revizator-server.js` :
@@ -338,8 +391,9 @@ l'écriture reste inconditionnelle, comme avant.
   `/opt/revizator/data:/data`, variables du § 3 depuis un `.env`.
 - `deploy/README.md` (français) : LXC Proxmox dédié (Debian 13, 4 cœurs, 6 Go, 30 Go, imbrication
   activée, IP fixe), Docker, stack Komodo, hôte proxy NPM `revizator.daft-lab.fr` (WebSocket activé,
-  Let's Encrypt, « Block Common Exploits »), `claude setup-token`, import des données du PC, appairage
-  du téléphone (QR) et du PC (Réglages › Révizator › Serveur), mise à jour, sauvegarde du volume.
+  Let's Encrypt, « Block Common Exploits »), `claude setup-token`, import des données du PC, création
+  du compte (`user set`), connexion du téléphone et du PC (Réglages › Révizator › Serveur), mise à jour,
+  sauvegarde du volume.
 - `deploy/FINALISER.md` : la liste de contrôle que suivra Claude Code installé sur le serveur pour
   terminer l'installation et vérifier chaque point (ce qui n'a pas pu être testé dans le cloud :
   construction de l'image Docker, Claude Code réel, modèles de voix réels, téléphone réel).
@@ -354,7 +408,7 @@ l'écriture reste inconditionnelle, comme avant.
     dans l'image (argument de construction `CLAUDE_CODE_VERSION`, alimenté dans le compose par
     `REVIZATOR_CLAUDE_VERSION` — pas `CLAUDE_CODE_VERSION`, qu'un shell de Claude Code pose déjà) ;
   - `/usr/local/bin/revizator-server` (script : `exec dotnet /app/revizator-server.dll "$@"`) pour
-    `docker exec revizator revizator-server token new …` ; `ASPNETCORE_HTTP_PORTS` vidé (le port vient de
+    `docker exec -it revizator revizator-server user set <identifiant>`, `session list`… ; `ASPNETCORE_HTTP_PORTS` vidé (le port vient de
     `REVIZATOR_PORT`) ;
   - compose : `pull_policy: build` (image locale `revizator-server:local`, jamais tirée d'un registre :
     Deploy dans Komodo reconstruit), `init: true` (tini récolte les processus de `claude`), port
@@ -371,16 +425,18 @@ Construit et vérifié dans le cloud (Linux, sans réseau vers les sites des mod
 
 - builds : `Revizator.Server`, et l'hôte WPF par `dotnet build src/Organizator/Organizator.csproj -c
   Release -p:EnableWindowsTargeting=true`, sans erreur ni avertissement ;
-- `node tools/revizator-server-smoke.mjs <url> <jeton>` : santé, CORS, refus sans jeton, appairage et
-  cookie, page et injections, `learnLoad` / `learnSave` / `learnChanged` entre deux connexions, types
+- `REVIZATOR_PASSWORD=… node tools/revizator-server-smoke.mjs <url> <identifiant>` (sans la variable, le
+  mot de passe est lu sur l'entrée standard, jamais sur la ligne de commande) : santé, CORS, refus sans
+  session, connexion (formulaire → cookie, API → jeton), mauvais mot de passe refusé, page et injections, `learnLoad` / `learnSave` / `learnChanged` entre deux connexions, types
   refusés, `learnGenerate` (avec un faux `claude` qui imite la sortie stream-json), `/learn` par cookie
-  et par `/t/<jeton>/`, traversées de chemin ;
+  et par `/t/<jeton>/`, traversées de chemin ; il ouvre deux sessions et les ferme à la fin ;
 - parcours complet dans Chromium (Playwright) contre le vrai serveur : un « téléphone » 390×844 et un
-  « PC » 1400×900 appairés, premier lancement, série d'exercices, cartes révisées des deux côtés,
+  « PC » 1400×900 connectés, premier lancement, série d'exercices, cartes révisées des deux côtés,
   fusion d'écritures concurrentes, relecture différée, service worker, serveur coupé puis relancé ;
   cas 3 (Organizator réglé sur le serveur) par le shim avec `window.__shimRemote` ;
-- image Docker construite et lancée (`healthy`, UID 1654, script de fumée dans le conteneur, `token new`
-  par `docker exec`, import), avec un faux `claude` ;
+- image Docker construite et lancée (`healthy`, UID 1654, script de fumée dans le conteneur, gestion
+  des appareils par `docker exec`, import), avec un faux `claude` (étape d'avant les comptes : à refaire
+  avec `user set` et la connexion, voir `deploy/FINALISER.md`) ;
 - revue de sécurité adverse (authentification, traversées, WebSocket, révocation, limiteur, en-têtes) :
   défauts trouvés corrigés et inscrits aux § 3 et 4.
 
@@ -391,12 +447,17 @@ liste de contrôle de `deploy/FINALISER.md` reprend ces points sur le serveur.
 
 Points connus :
 
-- **iPhone** : l'application ajoutée à l'écran d'accueil peut ne pas retrouver le cookie posé dans
-  Safari, et la page « appareil non appairé » n'a pas de champ pour coller un jeton ; à vérifier sur le
-  téléphone (signalé dans `deploy/README.md` et `deploy/FINALISER.md`).
-- **Jetons dans les adresses** (§ 3) : présents dans le journal d'accès de NPM ; les éviter demanderait de
-  passer le jeton par `Sec-WebSocket-Protocol` dans `bridge.js`.
+- **À vérifier sur un vrai téléphone** : la connexion depuis l'application installée (iPhone : elle ne
+  partage pas toujours les cookies de Safari, mais la page `/login` y fonctionne : on s'y connecte une
+  fois), que la session y survit à la fermeture de l'application, et le retour à `/login` quand la
+  session est fermée ailleurs (`deploy/FINALISER.md`, étape 9).
+- **Connexion par compte** (remplace l'ancien jeton par appareil) : vérifiée par l'essai de fumée ;
+  pas encore par NPM réel, ni avec Organizator réel sous WebView2 (`/api/login` en CORS depuis
+  `https://app.organizator`).
+- **Jetons de session dans les adresses** (§ 3, Organizator sur le PC seulement : `?token=` du
+  WebSocket, `/t/<jeton>/`) : présents dans le journal d'accès de NPM ; les éviter demanderait de passer
+  le jeton par `Sec-WebSocket-Protocol` dans `bridge.js`. Le mot de passe, lui, n'y passe jamais.
 - **`WebFetch`** (cours, conversation vocale) peut être poussé par un flux RSS vers le réseau local :
   isoler le réseau du conteneur est recommandé.
-- Un appareil appairé n'a pas de limite de connexions ni de file d'envoi (32 Mo par message) : acceptable
-  tant que seuls les appareils de l'utilisateur sont appairés.
+- Une session ouverte n'a pas de limite de connexions ni de file d'envoi (32 Mo par message) :
+  acceptable tant que seuls les comptes de l'utilisateur existent.

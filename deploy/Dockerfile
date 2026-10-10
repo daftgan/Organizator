@@ -36,7 +36,7 @@ RUN apt-get update \
 
 # Utilisateur non root : « app » (UID 1654), fourni par l'image .NET. /data lui appartient (le dossier
 # monte depuis l'hote doit en faire autant : chown 1654:1654). La commande revizator-server lance la meme
-# DLL que le conteneur (docker exec revizator revizator-server token new …).
+# DLL que le conteneur (docker exec -it revizator revizator-server user set <identifiant>, session list…).
 RUN mkdir -p /data /home/app \
     && chown "$APP_UID:$APP_UID" /data /home/app \
     && printf '#!/bin/sh\nexec dotnet /app/revizator-server.dll "$@"\n' > /usr/local/bin/revizator-server \

@@ -23,13 +23,13 @@ vérification est bonne ; sinon diagnostique, corrige, et dis-le à l'utilisateu
   `/opt/revizator/src`, données dans `/opt/revizator/data` (propriétaire UID/GID 1654), stack Komodo
   `revizator`, hôte NPM `revizator.daft-lab.fr` → `192.168.1.30:8080`.
 - Ce qui **a été vérifié dans le cloud** (sans accès à claude.ai, Hugging Face, ni aux flux RSS) :
-  - `dotnet publish` du serveur, démarrage, `/api/health`, essai de fumée complet (57 contrôles) ;
+  - `dotnet publish` du serveur, démarrage, `/api/health`, essai de fumée complet (51 contrôles depuis la connexion par compte) ;
   - l'image construite depuis une **copie** de `deploy/Dockerfile` où seuls deux points changeaient :
     le certificat du proxy du cloud, et un **faux** `claude` à la place de l'installeur. Avec cette
     image :
     - `docker compose up` (pull ignoré, construction, état `healthy`) ;
-    - essai de fumée dans le conteneur (57/57, génération avec le faux `claude`) ;
-    - jetons par `docker exec`, import par `docker compose run` ;
+    - essai de fumée dans le conteneur (génération avec le faux `claude`) ;
+    - comptes et sessions par `docker exec`, import par `docker compose run` ;
     - en-têtes de NPM simulés : cookie `secure`, WebSocket 101 pour la bonne origine, 403 sinon ;
     - page sur un écran de téléphone dans Chromium : mode serveur, en ligne, aucune erreur ;
     - chargement des bibliothèques natives dans l'image, sans réseau : sherpa-onnx 1.13.8, Whisper
@@ -41,18 +41,24 @@ vérification est bonne ; sinon diagnostique, corrige, et dis-le à l'utilisateu
   3. le téléchargement et l'usage des **modèles** : voix Kokoro, Parakeet, Whisper (Hugging Face) ;
   4. les flux RSS du menu des cours ;
   5. NPM réel (WebSocket, certificat) ;
-  6. un **vrai téléphone** : appairage par QR, installation, micro, tuteur à voix haute ;
+  6. un **vrai téléphone** : connexion par identifiant et mot de passe, installation (et connexion
+     dans l'application installée sur iPhone), micro, tuteur à voix haute ;
   7. Organizator sur le PC branché au serveur ;
   8. la détection de langue de Whisper sous Linux (elle demande un modèle).
 
 ## Règles
 
-- **Ne jamais exposer le serveur sans jeton.** Ne modifie pas l'authentification. Ne crée pas d'hôte
+- **Ne jamais exposer le serveur sans authentification.** Ne modifie pas l'authentification. Ne crée pas d'hôte
   NPM vers autre chose que le port 8080 du conteneur. N'ouvre aucun port sur la box.
 - **Sauvegarde avant tout import** ou toute manipulation de `/opt/revizator/data` (étape 7).
-- Les secrets (`CLAUDE_CODE_OAUTH_TOKEN`, jetons d'appareils, jeton GitHub) ne vont **jamais** dans git
+- Les secrets (`CLAUDE_CODE_OAUTH_TOKEN`, jetons de session, jeton GitHub) ne vont **jamais** dans git
   ni dans un fichier versionné. `deploy/.env` est ignoré par git ; vérifie-le avec
   `git check-ignore deploy/.env`. N'affiche pas le jeton Claude en entier dans tes réponses.
+- **Le mot de passe du compte Révizator ne passe jamais par toi.** C'est l'utilisateur qui crée son
+  compte, dans **son** terminal (`docker exec -it revizator revizator-server user set <identifiant>`,
+  saisie masquée). Ne lui demande pas son mot de passe, ne le tape pas, ne l'écris dans aucun fichier
+  (ni `.env`, ni script, ni historique du shell), ne le passe pas en argument. Pour l'essai de fumée,
+  c'est lui qui lance la commande et tape le mot de passe quand elle le demande.
 - Ton propre environnement peut contenir `CLAUDE_CODE_OAUTH_TOKEN` ou d'autres variables `CLAUDE_*` :
   `docker compose` prend les variables du shell **avant** celles de `.env`. Avant chaque
   `docker compose`, vérifie `env | grep -E '^(CLAUDE_CODE_OAUTH_TOKEN|REVIZATOR_|TZ)='`. Si l'une d'elles
@@ -145,7 +151,9 @@ cd /opt/revizator/src/deploy && docker compose up -d
 sleep 20; docker ps --filter name=revizator --format '{{.Status}}'      # Up … (healthy)
 curl -s http://127.0.0.1:8080/api/health                                # {"ok":true,"version":"1.0.0"}
 docker logs revizator 2>&1 | tail -5                                    # « claude detecte : /home/app/.local/bin/claude », « Claude Code present »
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/         # 401 (appareil non appairé)
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:8080/   # 302 …/login (pas de session)
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/login    # 200 (page de connexion)
+docker logs revizator 2>&1 | grep "Aucun compte"                        # normal tant que le compte n'est pas créé
 ls -la /opt/revizator/data                                              # fichiers à 1654
 ```
 
@@ -155,7 +163,7 @@ ls -la /opt/revizator/data                                              # fichie
 Le `.env` écrit par Komodo remplace le tien : vérifie qu'il contient les bonnes valeurs
 (`grep -c CLAUDE_CODE_OAUTH_TOKEN deploy/.env`, sans afficher la valeur).
 
-## 6. Jeton Claude Code et vraie génération (non testé dans le cloud)
+## 6. Jeton Claude Code, compte Révizator et vraie génération (non testé dans le cloud)
 
 1. Demande à l'utilisateur de lancer `claude setup-token`, sur le PC ou dans le conteneur
    (`docker exec -it revizator claude setup-token` : il ouvre l'URL dans son navigateur et colle le code).
@@ -170,20 +178,39 @@ Le `.env` écrit par Komodo remplace le tien : vérifie qu'il contient les bonne
    ```
 
    « Invalid API key » / « Not logged in » : jeton mal copié ou variable masquée par ton shell (Règles).
-4. Essai de fumée complet, **avec** la génération (Node 22 sur le LXC, ou depuis le PC). L'essai
-   réécrit `learning.json` tel quel. Pour ne rien risquer, fais-le avant l'import (étape 7), sur un
-   dossier de données encore vide, avec `--allow-empty-save` :
+4. **Créer le compte (action de l'utilisateur).** Demande-lui de choisir un identifiant (minuscules,
+   chiffres, `.`, `_`, `-`) et de lancer lui-même, dans un terminal sur le LXC :
 
    ```bash
-   docker exec revizator revizator-server token new smoke | sed -n '/Jeton seul/{n;p}'
-   node tools/revizator-server-smoke.mjs http://127.0.0.1:8080 <jeton> --allow-empty-save
-   docker exec revizator revizator-server token revoke smoke
+   docker exec -it revizator revizator-server user set <identifiant>
    ```
 
-   **Vérifier** : « Tout est bon. » et code de sortie 0 ; la section « Génération (Claude Code) » passe
-   (cardcheck, modèle haiku). `docker logs revizator | grep "Revizator cardcheck"` montre la durée.
+   La commande demande le mot de passe deux fois, sans l'afficher (10 caractères au moins). Rappelle-lui
+   de ne pas te le donner (Règles). **Vérifier** :
+
+   ```bash
+   docker exec revizator revizator-server user list     # <identifiant>  cree le …, 0 session(s)
+   stat -c '%a %u' /opt/revizator/data/users.json         # 600 1654
+   ```
+
+5. Essai de fumée complet, **avec** la génération (Node 22 sur le LXC, ou depuis le PC). L'essai
+   réécrit `learning.json` tel quel. Pour ne rien risquer, fais-le avant l'import (étape 7), sur un
+   dossier de données encore vide, avec `--allow-empty-save`. Il demande le mot de passe du compte :
+   c'est donc l'**utilisateur** qui le lance dans son terminal (tu lui donnes la commande) :
+
+   ```bash
+   cd /opt/revizator/src
+   node tools/revizator-server-smoke.mjs http://127.0.0.1:8080 <identifiant> --allow-empty-save
+   ```
+
+   Il ouvre deux sessions et les ferme à la fin. **Vérifier** (il te recopie la fin de la sortie) :
+   « Tout est bon. » et code de sortie 0 ; les sections « Connexion », « WebSocket » et « Génération
+   (Claude Code) » passent (cardcheck, modèle haiku). `docker logs revizator | grep "Revizator cardcheck"`
+   montre la durée ; `docker exec revizator revizator-server session list` ne garde aucune session de
+   l'essai.
    Pas de Node 22 : `apt install -y nodejs` donne souvent une version trop ancienne ; utilise plutôt
-   `docker run --rm --network host -v /opt/revizator/src/tools:/t:ro node:22-slim node /t/revizator-server-smoke.mjs …`.
+   `docker run --rm -it --network host -v /opt/revizator/src/tools:/t:ro node:22-slim node /t/revizator-server-smoke.mjs …`
+   (`-it` : pour que le mot de passe puisse être tapé).
 
 ## 7. Import des données du PC (sauvegarde d'abord)
 
@@ -211,32 +238,35 @@ Exploits, Let's Encrypt, Force SSL). Puis **vérifie** :
 
 ```bash
 curl -s https://revizator.daft-lab.fr/api/health                                  # {"ok":true,…}
-curl -s -o /dev/null -w '%{http_code}\n' https://revizator.daft-lab.fr/           # 401
+curl -s -o /dev/null -w '%{http_code}\n' https://revizator.daft-lab.fr/           # 302 (vers /login)
+curl -sI https://revizator.daft-lab.fr/login | grep -iE '^(HTTP|referrer-policy|content-security)'   # 200, same-origin, CSP
 curl -s -o /dev/null -w '%{http_code}\n' https://revizator.daft-lab.fr/learning.json   # 404 : jamais servi
 curl -s -o /dev/null -w '%{http_code}\n' https://revizator.daft-lab.fr/tokens.json     # 404
-curl -s -o /dev/null -w '%{http_code}\n' https://revizator.daft-lab.fr/learn/x.json    # 401 sans jeton
+curl -s -o /dev/null -w '%{http_code}\n' https://revizator.daft-lab.fr/users.json      # 404
+curl -s -o /dev/null -w '%{http_code}\n' https://revizator.daft-lab.fr/learn/x.json    # 401 sans session
 ```
 
-Puis, avec un jeton `smoke` temporaire : l'essai de fumée **par l'adresse publique**
-(`node tools/revizator-server-smoke.mjs https://revizator.daft-lab.fr <jeton>`) doit dire « Tout est
-bon. » — il passe par NPM, WebSocket compris. Révoque `smoke` ensuite. Le journal doit montrer les
-vraies IP des clients (`docker logs revizator | grep "Jeton refuse"` : l'IP d'où tu as lancé l'essai,
-pas celle de NPM).
+Puis l'essai de fumée **par l'adresse publique**, lancé par l'utilisateur avec son compte
+(`node tools/revizator-server-smoke.mjs https://revizator.daft-lab.fr <identifiant>`) : il doit dire
+« Tout est bon. » — il passe par NPM, WebSocket et cookie `Secure` compris. Le journal doit montrer les
+vraies IP des clients (`docker logs revizator | grep -E "Connexion (:|refusee)"` : l'IP d'où l'essai a
+été lancé, pas celle de NPM).
 
 ## 9. Téléphone (action de l'utilisateur)
 
-```bash
-docker exec -it revizator revizator-server token new "Téléphone"
-```
+Demande-lui de vérifier, dans l'ordre :
 
-Montre le QR code à l'utilisateur. Demande-lui de vérifier, dans l'ordre :
-
-1. le scan ouvre Révizator, avec ses données importées (profil, progrès) ;
+1. `https://revizator.daft-lab.fr` dans le navigateur du téléphone affiche la page de connexion ; avec
+   son identifiant et son mot de passe, **Se connecter** ouvre Révizator, avec ses données importées
+   (profil, progrès). Côté serveur : `docker logs revizator | grep "Connexion :"` (son identifiant,
+   l'appareil, son IP publique en 4G) et `docker exec revizator revizator-server session list` ;
 2. installation sur l'écran d'accueil (README § 8), puis ouverture par l'icône : plein écran, en ligne ;
-   **iPhone** : si l'appli installée affiche « Appareil non appairé », note-le (limite connue possible :
-   l'appli installée n'a pas les cookies de Safari ; la page d'appairage n'a pas de champ pour coller un
-   jeton) et signale-le comme point à corriger dans le serveur ;
-3. Réglages › Révizator : **télécharger les voix** (Kokoro, ~330 Mo) ; Réglages › Dictée : **Parakeet**
+   **iPhone** : si l'appli installée affiche la page de connexion, il s'y connecte une fois (la page
+   fonctionne dans l'appli) ; vérifie qu'il reste connecté après avoir fermé puis rouvert l'appli, et
+   note le résultat dans le compte rendu ;
+3. Réglages › Révizator › **Compte** : son identifiant s'affiche ; **Se déconnecter** ramène à la page de
+   connexion (« Vous êtes déconnecté »), puis il se reconnecte ;
+4. Réglages › Révizator : **télécharger les voix** (Kokoro, ~330 Mo) ; Réglages › Dictée : **Parakeet**
    (~650 Mo). Suis-le côté serveur :
 
    ```bash
@@ -247,26 +277,26 @@ Montre le QR code à l'utilisateur. Demande-lui de vérifier, dans l'ordre :
    docker stats --no-stream revizator          # RAM après chargement : doit rester nettement sous 6 Go
    ```
 
-4. une phrase lue à voix haute (bouton d'écoute) : le son arrive ;
-5. le **tuteur** à voix haute (micro autorisé) : il entend, répond, parle ; une interruption fonctionne ;
-6. **générer un exercice** et **un cours du jour** (cours : utilise le menu RSS ; journal :
+5. une phrase lue à voix haute (bouton d'écoute) : le son arrive ;
+6. le **tuteur** à voix haute (micro autorisé) : il entend, répond, parle ; une interruption fonctionne ;
+7. **générer un exercice** et **un cours du jour** (cours : utilise le menu RSS ; journal :
    `Revizator lesson : …` sans « menu RSS indisponible », sinon vérifier l'accès aux flux depuis le
    LXC) ; `docker logs revizator | grep -E "Revizator (lesson|exercise|toeic|sw|grade|tutor|cardcheck|cardfix) :"` montre les durées ;
    aucune ligne « echec apres » ;
-7. une dictée (Parakeet) reconnue correctement.
+8. une dictée (Parakeet) reconnue correctement.
 
 Whisper (optionnel) : s'il le télécharge, vérifie qu'une transcription d'un enregistrement fonctionne
 et que la langue détectée est juste (non testé sous Linux).
 
 ## 10. PC (action de l'utilisateur)
 
-```bash
-docker exec -it revizator revizator-server token new "PC"
-```
-
-Il colle l'adresse `https://revizator.daft-lab.fr` et le jeton dans Organizator › Réglages › Révizator ›
-Serveur Révizator › Tester la connexion (→ connecté) › Enregistrer. **Vérifier** :
-`docker logs revizator | grep "WebSocket ouvert (PC"` ; une réponse faite sur le PC apparaît sur le
+Dans Organizator › Réglages › Révizator › Serveur Révizator, il saisit l'adresse
+`https://revizator.daft-lab.fr`, son identifiant et son mot de passe, puis **Se connecter** (la carte
+affiche ensuite « connecté en tant que <identifiant> ») ; **Tester la connexion** → « Connecté ».
+**Vérifier** : `docker logs revizator | grep -E "Connexion : .*Organizator \(PC\)"` puis
+`grep "WebSocket ouvert (.*Organizator (PC)"` ; le mot de passe n'est pas gardé sur le PC (il peut
+vérifier que `%LOCALAPPDATA%\Organizator\settings.json` ne contient que `revizatorServerToken` et
+`revizatorServerLogin`) ; une réponse faite sur le PC apparaît sur le
 téléphone après retour à l'accueil (événement `learnChanged`), et inversement ; l'onglet File
 d'Organizator fonctionne comme avant (rien de la file ne doit apparaître dans `/opt/revizator/data` :
 `ls /opt/revizator/data` ne contient ni `data.json` ni `sessions`).
@@ -277,7 +307,8 @@ d'Organizator fonctionne comme avant (rien de la file ne doit apparaître dans `
   (`tar -tzf … | head`).
 - Propose à l'utilisateur d'ajouter le CT 110 à ses sauvegardes Proxmox.
 - `rm -rf /opt/revizator/data/import-pc` (après accord).
-- `docker exec revizator revizator-server token list` : seuls « Téléphone » et « PC » (pas de `smoke`).
+- `docker exec revizator revizator-server session list` : seules les sessions du téléphone et du PC
+  (aucune de l'essai de fumée) ; `user list` : le seul compte de l'utilisateur.
 - Vérifie le redémarrage : `pct reboot 110` depuis l'hôte (ou `reboot` du LXC, avec accord), puis
   conteneur `healthy` et page joignable sans action.
 

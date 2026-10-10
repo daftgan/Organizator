@@ -11,7 +11,7 @@ Claude Code installé sur le serveur : [`FINALISER.md`](FINALISER.md).
 ```
 Téléphone (PWA) ──┐  cookie
                   ├─ https://revizator.daft-lab.fr ─→ NPM (192.168.1.11) ─→ LXC 110 revizator (192.168.1.30:8080)
-PC : Organizator ─┘  jeton                                                    └─ conteneur revizator
+PC : Organizator ─┘  jeton de session                                         └─ conteneur revizator
                                                                                   ├─ claude -p (abonnement Claude)
                                                                                   ├─ voix Kokoro, dictée Parakeet/Whisper
                                                                                   └─ /opt/revizator/data → /data
@@ -21,9 +21,9 @@ PC : Organizator ─┘  jeton                                                  
 
 | Service | Adresse | Remarque |
 |---|---|---|
-| Révizator (public) | https://revizator.daft-lab.fr | appareils appairés seulement (jeton) |
+| Révizator (public) | https://revizator.daft-lab.fr | identifiant et mot de passe (page `/login`) |
 | Révizator (LAN) | http://192.168.1.30:8080 | sans HTTPS : pas de micro ni d'installation sur le téléphone |
-| Santé | https://revizator.daft-lab.fr/api/health | `{"ok":true,"version":"…"}`, sans jeton |
+| Santé | https://revizator.daft-lab.fr/api/health | `{"ok":true,"version":"…"}`, sans connexion |
 | SSH | `ssh root@192.168.1.30` | |
 | Komodo | http://192.168.1.21:9120 | stack `revizator` sur le serveur `revizator` |
 | NPM | http://192.168.1.11:81 | hôte proxy `revizator.daft-lab.fr` |
@@ -206,7 +206,7 @@ docker exec revizator claude -p "Réponds seulement OK" --model haiku   # OK (le
 |---|---|---|
 | Details | Domain Names | `revizator.daft-lab.fr` |
 | | Scheme / Forward Hostname / Port | `http` / `192.168.1.30` / `8080` |
-| | Cache Assets | **non** (sinon NPM garde et ressert les fichiers privés `/learn`, `/t/…` sans jeton) |
+| | Cache Assets | **non** (sinon NPM garde et ressert les fichiers privés `/learn`, `/t/…` sans session) |
 | | Block Common Exploits | oui |
 | | Websockets Support | **oui** (indispensable : tout passe par `/api/ws`) |
 | SSL | SSL Certificate | Request a new SSL Certificate (Let's Encrypt), ou ton certificat `*.daft-lab.fr` |
@@ -216,20 +216,23 @@ HTTPS est obligatoire pour le téléphone : micro (`getUserMedia`), installation
 cookie sécurisé. Le serveur lit `X-Forwarded-For` / `X-Forwarded-Proto` posés par NPM, et seulement
 quand la connexion vient d'une adresse de `REVIZATOR_TRUSTED_PROXIES` (défaut `private` : tout le réseau
 privé). Pour durcir : `REVIZATOR_TRUSTED_PROXIES=192.168.1.11` (NPM seul), puis vérifier dans
-`docker logs revizator` qu'un appairage depuis la 4G affiche l'adresse publique du téléphone
-(`Appareil appaire : telephone (<IP publique>)`) ; s'il affiche `192.168.1.11` ou `172.x`, revenir à
-`private` (Docker ne voit pas NPM sous sa propre adresse).
+`docker logs revizator` qu'une connexion depuis la 4G affiche l'adresse publique du téléphone
+(`Connexion : <identifiant> (iPhone Safari, <IP publique>)`) ; s'il affiche `192.168.1.11` ou `172.x`,
+revenir à `private` (Docker ne voit pas NPM sous sa propre adresse).
 
-Les jetons passent dans l'adresse (`/pair?token=`, `/api/ws?token=` du PC, médias `/t/<jeton>/`) : le
-journal d'accès de NPM (`/data/logs/proxy-host-*_access.log`) les contient. Garder NPM et ses journaux
-fermés au reste du réseau ; en cas de doute, `revizator-server token new <appareil>` remplace un jeton.
+Le mot de passe ne passe jamais dans une adresse (formulaire POST, ou JSON pour le PC). Le **jeton de
+session** d'Organizator sur le PC, lui, y passe (`/api/ws?token=`, médias `/t/<jeton>/`) : le journal
+d'accès de NPM (`/data/logs/proxy-host-*_access.log`) le contient. Garder NPM et ses journaux fermés au
+reste du réseau ; en cas de doute, fermer la session (`revizator-server session revoke …`, ou « Se
+déconnecter » dans Organizator) et se reconnecter.
 
 Vérifier depuis n'importe où : `curl -s https://revizator.daft-lab.fr/api/health`, et
-`https://revizator.daft-lab.fr/` dans un navigateur → « Appareil non appairé » (normal : pas de jeton).
+`https://revizator.daft-lab.fr/` dans un navigateur → renvoi vers la page de connexion `/login`
+(normal : pas encore de session).
 
 ## 7. Importer les données du PC
 
-À faire **avant** d'appairer les appareils (une page ouverte réécrirait son état).
+À faire **avant** de connecter les appareils (une page ouverte réécrirait son état).
 
 Sur le PC, Révizator garde tout dans `%LOCALAPPDATA%\Organizator\`
 (`C:\Users\<toi>\AppData\Local\Organizator\`). Seuls comptent :
@@ -264,46 +267,73 @@ Le reste (`data.json`, `settings.json`, sessions, modèles de voix…) **ne part
    rangé sous `/opt/revizator/data/import-backup-<date>/`.
 4. Quand tout est vérifié (étape 8) : `rm -rf /opt/revizator/data/import-pc`.
 
-## 8. Appairer les appareils
+## 8. Créer le compte et connecter les appareils
 
-Chaque appareil a son jeton (32 octets aléatoires ; le serveur n'en garde que l'empreinte).
+### Créer le compte
+
+Un compte = un identifiant et un mot de passe. Sur le LXC (`<conteneur>` = `revizator`) :
+
+```bash
+docker exec -it revizator revizator-server user set <identifiant>
+```
+
+La commande demande le mot de passe **deux fois**, sans l'afficher (10 à 200 caractères). L'identifiant
+est mis en minuscules : lettres, chiffres, `.`, `_`, `-`, 40 caractères au plus. Le serveur n'en garde
+qu'une empreinte (PBKDF2-SHA256, 600 000 itérations, sel de 16 octets) dans
+`/opt/revizator/data/users.json` (lisible par le seul utilisateur du conteneur). Il n'y a ni page
+d'inscription ni « mot de passe oublié » : tout se fait par cette commande.
+
+La même commande, sur un compte existant, **change le mot de passe** et ferme toutes ses sessions (les
+appareils ouverts reviennent à la page de connexion). Pour un script : `--password-stdin` lit le mot de
+passe sur l'entrée standard (`printf '%s\n' "$MDP" | docker exec -i revizator revizator-server user set
+<identifiant> --password-stdin`) ; ne jamais le mettre sur la ligne de commande ni dans un fichier.
 
 ### Téléphone
 
-```bash
-docker exec -it revizator revizator-server token new "Téléphone"
-```
-
-La commande affiche le lien `https://revizator.daft-lab.fr/pair?token=…` et son **QR code**. Le scanner
-avec l'appareil photo du téléphone → Révizator s'ouvre, l'appareil est appairé (cookie de 400 jours).
-
-Puis l'installer :
-
-- **Android (Chrome)** : menu ⋮ › « Ajouter à l'écran d'accueil » / « Installer l'application » ;
-- **iPhone (Safari)** : bouton Partager › « Sur l'écran d'accueil ».
+1. Ouvrir **https://revizator.daft-lab.fr** dans le navigateur du téléphone : la page de connexion
+   s'affiche.
+2. Saisir l'identifiant et le mot de passe, **Se connecter** → Révizator s'ouvre (session de 400 jours,
+   cookie `HttpOnly`).
+3. L'installer :
+   - **Android (Chrome)** : menu ⋮ › « Ajouter à l'écran d'accueil » / « Installer l'application » ;
+   - **iPhone (Safari)** : bouton Partager › « Sur l'écran d'accueil ».
 
 Ouvrir Révizator depuis l'icône : il démarre en plein écran, en ligne (pastille de connexion en haut).
-Si l'application installée affiche « Appareil non appairé » (iPhone : l'application installée peut ne
-pas partager les cookies de Safari), voir **Dépannage**.
+Si l'application installée affiche la page de connexion (iPhone : elle ne partage pas toujours les
+cookies de Safari), il suffit de **se connecter une fois de plus dans l'application** : la page de
+connexion fonctionne aussi depuis l'écran d'accueil.
+
+Réglages › Révizator › **Compte** : l'identifiant connecté et **Se déconnecter** (ferme la session de
+ce téléphone seulement ; les autres appareils restent connectés).
 
 ### PC (Organizator)
 
+Dans Organizator : **Réglages › Révizator › Serveur Révizator** : adresse
+`https://revizator.daft-lab.fr`, identifiant, mot de passe, **Se connecter**. Organizator n'enregistre
+que le jeton de session rendu par le serveur (`revizatorServerToken` dans son `settings.json`, avec
+l'identifiant pour l'affichage) ; le mot de passe n'est **jamais** enregistré. L'onglet Révizator lit et
+écrit alors sur le serveur ; le reste d'Organizator ne change pas.
+
+Une fois connecté, la carte montre le serveur et le compte, **Tester la connexion** (→ « Connecté ») et
+**Se déconnecter** : la session est fermée sur le serveur et Révizator revient aux données locales du PC
+(qui ne sont plus à jour).
+
+### Gérer les comptes et les sessions
+
+Chaque connexion ouvre une **session**, nommée « compte · appareil · date #xxxx » (par exemple
+`moi · iPhone Safari · 2026-10-11 08:12 #3fa2`, ou `… · Organizator (PC) · …`) ; 50 sessions par
+compte au plus (les plus anciennes partent).
+
 ```bash
-docker exec -it revizator revizator-server token new "PC"
+docker exec revizator revizator-server user list                     # comptes et nombre de sessions
+docker exec revizator revizator-server session list                  # sessions ouvertes
+docker exec revizator revizator-server session revoke "moi · iPhone"   # par son nom ou son début (une seule)
+docker exec revizator revizator-server session revoke --all          # toutes : chaque appareil se reconnecte
+docker exec -it revizator revizator-server user set <identifiant>    # nouveau mot de passe (ferme ses sessions)
+docker exec revizator revizator-server user remove <identifiant>     # supprime le compte et ses sessions
 ```
 
-Copier la ligne « Jeton seul ». Dans Organizator : **Réglages › Révizator › Serveur Révizator** :
-adresse `https://revizator.daft-lab.fr`, coller le jeton, **Tester la connexion** (→ connecté), puis
-**Enregistrer**. L'onglet Révizator lit et écrit alors sur le serveur ; le reste d'Organizator ne change
-pas. Vider l'adresse ramène Révizator sur les données locales du PC (qui ne sont plus à jour).
-
-### Gérer les jetons
-
-```bash
-docker exec revizator revizator-server token list
-docker exec revizator revizator-server token revoke "Téléphone"     # effet immédiat
-docker exec -it revizator revizator-server token new "Téléphone"    # remplace l'ancien jeton
-```
+Tout prend effet aussitôt, WebSocket déjà ouverts compris (fermés en 20 s au plus).
 
 ## 9. Voix et dictée
 
@@ -343,7 +373,7 @@ Tout est dans `/opt/revizator/data` :
 | Élément | Rôle | À sauvegarder |
 |---|---|---|
 | `learning.json`, `learning/` | profil, progrès, cartes, cours, exercices | **oui** |
-| `tokens.json`, `settings.json` | appareils appairés, réglages du téléphone | oui |
+| `users.json`, `tokens.json`, `settings.json` | comptes (mots de passe hachés), sessions ouvertes, réglages du téléphone | oui |
 | `tts/`, `asr/`, `whisper/` | modèles et cache des phrases lues | non (re-téléchargeables) |
 | `host.log`, `launch/`, `import-backup-*` | journal, fichiers temporaires, anciens imports | non |
 
@@ -352,7 +382,7 @@ Sauvegarde quotidienne (cron du LXC, 14 jours gardés) :
 ```bash
 mkdir -p /root/backups
 cat > /etc/cron.d/revizator-backup <<'EOF'
-30 3 * * * root tar -czf /root/backups/revizator-$(date +\%F).tar.gz -C /opt/revizator/data learning.json learning tokens.json settings.json 2>/dev/null; find /root/backups -name 'revizator-*.tar.gz' -mtime +14 -delete
+30 3 * * * root tar -czf /root/backups/revizator-$(date +\%F).tar.gz -C /opt/revizator/data learning.json learning users.json tokens.json settings.json 2>/dev/null; find /root/backups -name 'revizator-*.tar.gz' -mtime +14 -delete
 EOF
 ```
 
@@ -366,32 +396,38 @@ Restauration : `docker compose stop`, extraire l'archive dans `/opt/revizator/da
 ```bash
 docker logs -f revizator                                   # journal (aussi dans /opt/revizator/data/host.log)
 docker ps --filter name=revizator                          # état et santé
-docker exec revizator revizator-server token list          # appareils appairés
-docker exec -it revizator revizator-server token new "X"   # nouvel appareil (QR code)
-docker exec revizator revizator-server token revoke "X"    # retirer un appareil
+docker exec revizator revizator-server user list           # comptes
+docker exec revizator revizator-server session list        # sessions ouvertes (compte, appareil, date)
+docker exec revizator revizator-server session revoke "X"  # fermer une session (nom ou début)
+docker exec -it revizator revizator-server user set <id>   # créer un compte / changer son mot de passe
 docker exec revizator claude --version                     # version de Claude Code
 docker exec revizator claude -p "OK ?" --model haiku       # le jeton Claude marche
 docker stats revizator                                     # RAM / CPU
 cd /opt/revizator/src/deploy && docker compose restart     # redémarrer
 ```
 
-Essai complet du serveur (depuis le PC ou le LXC, Node 22) : créer un jeton `smoke`, puis
+Essai complet du serveur (depuis le PC ou le LXC, Node 22), avec un compte existant (le mot de passe
+est demandé ; il peut aussi venir de `REVIZATOR_PASSWORD`, jamais de la ligne de commande) :
 
 ```bash
-node tools/revizator-server-smoke.mjs https://revizator.daft-lab.fr <jeton>
-docker exec revizator revizator-server token revoke smoke
+node tools/revizator-server-smoke.mjs https://revizator.daft-lab.fr <identifiant>
 ```
+
+L'essai ouvre deux sessions et les ferme à la fin ; il ne laisse rien derrière lui.
 
 ## 13. Dépannage
 
 | Symptôme | Cause probable | Remède |
 |---|---|---|
-| La page reste sur « connexion… » / hors ligne | WebSocket non transmis par NPM | NPM › hôte › **Websockets Support** coché ; tester : `curl -i -m 5 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "https://revizator.daft-lab.fr/api/ws?token=<jeton>"` → `101` |
-| « Appareil non appairé » | pas de cookie, ou jeton révoqué | rouvrir le lien d'appairage (nouveau `token new` au besoin) |
-| « Appareil non appairé » dans l'appli installée (iPhone) | cookies de Safari non partagés avec l'appli | rouvrir le lien d'appairage dans Safari puis réinstaller l'icône depuis la page appairée ; si l'appli installée ne garde toujours pas l'appairage, utiliser Révizator dans Safari |
-| « Trop d'essais » (429) | 10 jetons faux en une minute depuis cette IP | attendre une minute |
+| La page reste sur « connexion… » / hors ligne | WebSocket non transmis par NPM | NPM › hôte › **Websockets Support** coché ; tester : `curl -i -m 5 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "https://revizator.daft-lab.fr/api/ws"` → `401` (le WebSocket arrive bien au serveur, qui demande une session) ; `400` ou une page de NPM : WebSocket non transmis |
+| La page de connexion revient sans cesse | session fermée (déconnexion, mot de passe changé, `session revoke`), ou cookies bloqués | se reconnecter ; autoriser les cookies pour le site |
+| Page de connexion dans l'appli installée (iPhone) | cookies de Safari non partagés avec l'appli | se connecter dans l'application elle-même |
+| « Identifiant ou mot de passe incorrect » | faute de frappe ; l'identifiant est en minuscules | réessayer ; au besoin `docker exec -it revizator revizator-server user set <identifiant>` |
+| « Trop d'essais » | 10 échecs en une minute depuis cette adresse (attendre une minute), ou 5 échecs de suite sur ce compte (verrou de 1 min, puis 2, 4… jusqu'à 15 min) | attendre ; une connexion réussie remet le compteur du compte à zéro |
+| « Requête refusée : rouvrez cette page » | formulaire envoyé depuis une autre origine, ou page trop ancienne | rouvrir `https://revizator.daft-lab.fr/login` |
+| « Aucun compte n'existe encore » sur la page de connexion | `users.json` vide | `docker exec -it revizator revizator-server user set <identifiant>` |
 | Organizator : « Serveur Révizator injoignable » | serveur arrêté, DNS, NPM | `curl https://revizator.daft-lab.fr/api/health` ; `docker ps` |
-| Organizator : « jeton refusé » | jeton mal collé ou révoqué | nouveau `token new "PC"` |
+| Organizator : « Refusé » | mauvais mot de passe, ou session fermée sur le serveur | « Se déconnecter » si besoin, puis se reconnecter |
 | Générations en échec, journal « Claude Code introuvable » | image sans `claude` | `docker exec revizator claude --version` ; reconstruire |
 | Générations en échec, « Not logged in » / 401 | `CLAUDE_CODE_OAUTH_TOKEN` absent ou expiré | `claude setup-token`, mettre le jeton dans la stack, Deploy |
 | Générations en échec, « usage limit » / limite atteinte | quota de l'abonnement Claude (partagé avec le PC) | attendre la remise à zéro indiquée ; `docker logs revizator` donne l'heure |
