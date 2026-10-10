@@ -9,6 +9,8 @@
      configureRemote({ url, token })  serveur Révizator d'Organizator (cas 3 ci-dessous) ; url vide : tout local
      remote() -> { url, state } | null ; connection() -> état de la liaison ou null
      testRemote({ url, token }) -> Promise<{ state: 'online'|'unreachable'|'refused'|'invalid', version, error }>
+     loginRemote({ url, login, password }) -> Promise<{ state: 'online'|'refused'|'unreachable'|'invalid', token, login, error }>
+     logoutRemote({ url, token }) -> Promise (la session est fermée sur le serveur ; jamais d'échec)
    Trois transports, décidés au chargement (docs/REVIZATOR-SERVER.md § 5.1) :
      1. WebView2 (window.chrome.webview) : postMessage vers l'hôte WPF ;
      2. page servie par le serveur Révizator (window.REVIZATOR_SERVER) : tout passe par son WebSocket ;
@@ -233,6 +235,15 @@
     gone.forEach(function (it) { clearTimeout(it.timer); it.reject(offlineError('connexion perdue')); });
     if (this.closed) return;
     this.setState('offline');
+    /* Page servie par le serveur : une session fermée (déconnexion, mot de passe changé) renvoie à la
+       page de connexion plutôt que de réessayer sans fin. */
+    if (this === SERVER && !this.authCheck) {
+      this.authCheck = true;
+      fetch('/api/me', { cache: 'no-store', credentials: 'same-origin' }).then(function (r) {
+        self.authCheck = false;
+        if (r.status === 401) location.replace('/login');
+      }, function () { self.authCheck = false; });
+    }
     if (!this.timer) {
       var delay = RETRY_MS[Math.min(this.retry, RETRY_MS.length - 1)];
       this.retry++;
@@ -383,7 +394,7 @@
         timer = setTimeout(function () { finish('unreachable', 'Le WebSocket ne répond pas : le proxy le laisse-t-il passer ?'); }, 8000);
         try { ws = new WebSocket(url.replace(/^http/, 'ws') + '/api/ws?token=' + encodeURIComponent(token)); } catch (e) { finish('unreachable', e.message); return; }
         ws.onopen = function () { finish('online'); };
-        ws.onerror = ws.onclose = function () { finish('refused', 'Le serveur répond mais refuse ce jeton.'); };
+        ws.onerror = ws.onclose = function () { finish('refused', 'Le serveur répond mais refuse cette session : reconnectez-vous.'); };
       });
     }, function (e) {
       clearTimeout(abort);
@@ -391,6 +402,36 @@
       return { state: 'unreachable', version: '', error: e && e.name === 'AbortError' ? 'Pas de réponse en 8 s.'
         : (/^HTTP|réponse HTTP/.test(String(e && e.message)) ? String(e.message) : 'Pas de réponse : vérifiez l’adresse, le réseau et le certificat.') };
     });
+  }
+
+  /* Connexion d'Organizator au serveur : identifiant et mot de passe contre un jeton de session
+     (POST /api/login). Le mot de passe ne fait que passer : seul le jeton est gardé dans les réglages. */
+  function loginRemote(opts) {
+    var url = normServerUrl(opts && opts.url);
+    var login = String((opts && opts.login) || '').trim();
+    var password = String((opts && opts.password) || '');
+    if (!url) return Promise.resolve({ state: 'invalid', token: '', login: '', error: 'Adresse invalide : https://revizator.exemple.fr' });
+    if (!login || !password) return Promise.resolve({ state: 'invalid', token: '', login: '', error: 'Identifiant et mot de passe attendus.' });
+    return fetch(url + '/api/login', {
+      method: 'POST', cache: 'no-store', credentials: 'omit',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ login: login, password: password, device: 'Organizator (PC)' })
+    }).then(function (r) {
+      return r.json()['catch'](function () { return {}; }).then(function (b) {
+        if (r.ok && b && b.token) return { state: 'online', token: String(b.token), login: String(b.login || login), error: '' };
+        return { state: 'refused', token: '', login: '', error: (b && b.error) || ('Réponse HTTP ' + r.status) };
+      });
+    }, function () {
+      return { state: 'unreachable', token: '', login: '', error: 'Pas de réponse : vérifiez l’adresse, le réseau et le certificat.' };
+    });
+  }
+
+  function logoutRemote(opts) {
+    var url = normServerUrl(opts && opts.url);
+    var token = String((opts && opts.token) || '').trim();
+    if (!url || !token) return Promise.resolve();
+    return fetch(url + '/api/logout', { method: 'POST', cache: 'no-store', credentials: 'omit', headers: { Authorization: 'Bearer ' + token } })
+      .then(function () { /* fermée */ }, function () { /* serveur injoignable : le jeton est oublié quand même */ });
   }
 
   /* ── Shim navigateur ────────────────────────────────────────────────── */
@@ -1345,6 +1386,8 @@
   if (!SERVER) {
     window.bridge.configureRemote = configureRemote;
     window.bridge.testRemote = testRemote;
+    window.bridge.loginRemote = loginRemote;
+    window.bridge.logoutRemote = logoutRemote;
   }
   /* Hors WebView2 et hors serveur seulement : de quoi simuler les messages d’une page et pousser ses événements. */
   if (!wv && !SERVER) {

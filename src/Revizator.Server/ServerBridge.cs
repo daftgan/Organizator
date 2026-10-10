@@ -337,6 +337,7 @@ public sealed class ServerBridge : IDisposable
         // Le reglage « serveur Revizator » n'a de sens que sur le PC : aucun jeton ne se garde ici.
         incoming.RevizatorServerUrl = "";
         incoming.RevizatorServerToken = "";
+        incoming.RevizatorServerLogin = "";
         _store.SaveSettings(incoming);
         return new JsonObject();
     }

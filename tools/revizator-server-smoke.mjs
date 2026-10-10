@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /* Essai de fumée du serveur Révizator (docs/REVIZATOR-SERVER.md).
  *
- *   node tools/revizator-server-smoke.mjs <url> <jeton> [--skip-generate] [--allow-empty-save]
+ *   REVIZATOR_PASSWORD=… node tools/revizator-server-smoke.mjs <url> <identifiant> [--skip-generate] [--allow-empty-save]
  *
- *   <url>    adresse du serveur, par exemple http://localhost:8080 ou https://revizator.daft-lab.fr
- *   <jeton>  un jeton valide (revizator-server token new smoke), à révoquer ensuite
+ *   <url>          adresse du serveur, par exemple http://localhost:8080 ou https://revizator.daft-lab.fr
+ *   <identifiant>  un compte du serveur (revizator-server user set <identifiant>) ; son mot de passe est lu
+ *                  dans REVIZATOR_PASSWORD, sinon sur l'entrée standard (jamais sur la ligne de commande)
  *
- * Vérifie : santé, refus sans jeton, appairage et cookie, page avec ses injections, WebSocket
+ * Vérifie : santé, refus sans session, connexion (formulaire → cookie, API → jeton), mauvais mot de
+ * passe refusé, page avec ses injections, WebSocket
  * (learnLoad / learnSave / learnChanged entre deux connexions, refus des types hors liste,
  * learnGenerate), fichiers de learning/ (cookie et /t/<jeton>/) et refus des traversées de chemin.
  *
@@ -14,7 +16,8 @@
  * s'il n'existe pas encore : l'essai est alors sauté, sauf --allow-empty-save qui écrit {}), et le
  * document d'essai est supprimé à la fin. learnGenerate appelle Claude Code (genre « cardcheck »,
  * modèle haiku : quelques secondes, un appel bon marché) ; --skip-generate le saute.
- * Les échecs successifs volontaires (mauvais jetons) restent sous la limite de 10 par minute.
+ * Les deux sessions ouvertes par l'essai sont fermées à la fin (déconnexion). Les échecs volontaires
+ * (mauvais jetons, mauvais mot de passe sur un compte inexistant) restent sous la limite de 10 par minute.
  * Node 18+ (fetch), 22+ conseillé (WebSocket global). Code de sortie : nombre d'échecs. */
 
 import http from 'node:http';
@@ -22,11 +25,19 @@ import https from 'node:https';
 
 const args = process.argv.slice(2);
 const flags = new Set(args.filter(a => a.startsWith('--')));
-const [base, token] = args.filter(a => !a.startsWith('--'));
-if (!base || !token) {
-  console.error('Usage : node tools/revizator-server-smoke.mjs <url> <jeton> [--skip-generate] [--allow-empty-save]');
+const [base, login] = args.filter(a => !a.startsWith('--'));
+if (!base || !login) {
+  console.error('Usage : REVIZATOR_PASSWORD=… node tools/revizator-server-smoke.mjs <url> <identifiant> [--skip-generate] [--allow-empty-save]');
   process.exit(2);
 }
+async function readPassword() {
+  if (process.env.REVIZATOR_PASSWORD) return process.env.REVIZATOR_PASSWORD;
+  if (process.stdin.isTTY) process.stderr.write('Mot de passe de « ' + login + ' » (affiché) : ');
+  let text = '';
+  for await (const chunk of process.stdin) { text += chunk; if (text.includes('\n')) break; }
+  return text.split('\n')[0].replace(/\r$/, '');
+}
+let token = '';
 const BASE = base.replace(/\/+$/, '');
 const WS_BASE = BASE.replace(/^http/, 'ws');
 if (typeof WebSocket === 'undefined') {
@@ -122,21 +133,40 @@ async function main() {
   const other = await fetch(BASE + '/api/health', { headers: { Origin: 'https://evil.example' } });
   check(!other.headers.get('access-control-allow-origin'), 'pas de CORS pour une autre origine');
 
-  section('Refus sans jeton');
+  const password = await readPassword();
+
+  section('Refus sans session');
   const page = await fetch(BASE + '/', { redirect: 'manual' });
   const pageText = await page.text();
-  check(page.status === 401 && !pageText.includes('bridge.js'), 'GET / sans cookie : page « appareil non appairé »', page.status);
+  check(page.status === 302 && page.headers.get('location') === '/login' && !pageText.includes('bridge.js'), 'GET / sans cookie : renvoi vers /login', page.status + ' ' + page.headers.get('location'));
+  const loginPage = await fetch(BASE + '/login');
+  const loginHtml = await loginPage.text();
+  check(loginPage.status === 200 && /<form method="post" action="\/login">/.test(loginHtml) && !/<script/i.test(loginHtml), 'GET /login : formulaire sans script', loginPage.status);
   check((await fetch(BASE + '/learn/news.json')).status === 401, 'GET /learn/… sans cookie : 401');
   check((await fetch(BASE + '/t/mauvais-jeton/learn/news.json')).status === 401, 'GET /t/<mauvais jeton>/learn/… : 401');
   check(await upgrades('/api/ws', {}) === 401, 'WebSocket sans jeton : 401');
   check(await upgrades('/api/ws?token=mauvais', {}) === 401, 'WebSocket avec un mauvais jeton : 401');
-  const badPair = await fetch(BASE + '/pair?token=mauvais', { redirect: 'manual' });
-  check(badPair.status === 401 && !badPair.headers.get('set-cookie'), '/pair avec un mauvais jeton : 401, pas de cookie', badPair.status);
+  check((await fetch(BASE + '/pair?token=x', { redirect: 'manual' })).status === 404, '/pair n’existe plus : 404');
+  const wrongName = 'smoke-inconnu-' + Date.now().toString(36);
+  const badApi = await fetch(BASE + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: wrongName, password: 'mauvais-mot-de-passe' }) });
+  const badApiBody = await badApi.json().catch(() => ({}));
+  check(badApi.status === 401 && !badApiBody.token && /incorrect/.test(badApiBody.error || ''), 'POST /api/login avec un mauvais mot de passe : 401', badApi.status + ' ' + JSON.stringify(badApiBody));
+  const badForm = await fetch(BASE + '/login', { method: 'POST', redirect: 'manual', body: new URLSearchParams({ login: wrongName, password: 'mauvais-mot-de-passe' }) });
+  check(badForm.status === 302 && badForm.headers.get('location') === '/login?e=bad' && !badForm.headers.get('set-cookie'), 'POST /login avec un mauvais mot de passe : retour au formulaire, pas de cookie', badForm.status + ' ' + badForm.headers.get('location'));
+  const evilForm = await fetch(BASE + '/login', { method: 'POST', redirect: 'manual', headers: { Origin: 'https://evil.example' }, body: new URLSearchParams({ login, password }) });
+  check(evilForm.status === 302 && !evilForm.headers.get('set-cookie'), 'POST /login depuis une autre origine : refusé', evilForm.status);
 
-  section('Appairage et cookie');
-  const pair = await fetch(BASE + '/pair?token=' + encodeURIComponent(token), { redirect: 'manual' });
+  section('Connexion');
+  const apiLogin = await fetch(BASE + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://app.organizator' }, body: JSON.stringify({ login, password, device: 'essai de fumée (API)' }) });
+  const apiBody = await apiLogin.json().catch(() => ({}));
+  check(apiLogin.status === 200 && typeof apiBody.token === 'string' && apiBody.token.length >= 40 && apiLogin.headers.get('access-control-allow-origin') === 'https://app.organizator',
+    'POST /api/login (comme Organizator sur le PC) : jeton de session, CORS', apiLogin.status + ' ' + (apiBody.error || ''));
+  token = apiBody.token || 'absent';
+  const me = await fetch(BASE + '/api/me', { headers: { Authorization: 'Bearer ' + token } });
+  check(me.status === 200 && (await me.json()).login === login.toLowerCase(), 'GET /api/me avec le jeton : le compte', me.status);
+  const pair = await fetch(BASE + '/login', { method: 'POST', redirect: 'manual', headers: { Origin: BASE }, body: new URLSearchParams({ login, password }) });
   const setCookie = pair.headers.get('set-cookie') || '';
-  check(pair.status === 302 && pair.headers.get('location') === '/', '/pair redirige vers /', pair.status + ' ' + pair.headers.get('location'));
+  check(pair.status === 302 && pair.headers.get('location') === '/', 'POST /login (formulaire) redirige vers /', pair.status + ' ' + pair.headers.get('location'));
   check(/rz_token=/.test(setCookie) && /httponly/i.test(setCookie) && /samesite=lax/i.test(setCookie) && /max-age=34560000/i.test(setCookie),
     'cookie rz_token HttpOnly, SameSite=Lax, 400 jours', setCookie);
   if (BASE.startsWith('https:')) check(/secure/i.test(setCookie), 'cookie Secure en HTTPS', setCookie);
@@ -214,7 +244,7 @@ async function main() {
   ];
   for (const path of traversal) {
     const r = await raw(path, { Cookie: cookie }).catch(e => ({ status: 0, body: e.message }));
-    const leak = /"hash"|"tokens"|root:x:0|"data"\s*:/.test(r.body);
+    const leak = /"hash"|"tokens"|pbkdf2|root:x:0|"data"\s*:/.test(r.body);
     check(r.status >= 400 && !leak, 'traversée refusée : ' + path, r.status);
   }
   const del = await a.call('learnDocDelete', { kind: 'exercise', id: docId });
@@ -239,6 +269,14 @@ async function main() {
 
   a.close();
   b.close();
+
+  section('Déconnexion');
+  const out = await fetch(BASE + '/api/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+  check(out.status === 200 && (await out.json()).ok === true, 'POST /api/logout ferme la session du jeton');
+  check((await fetch(BASE + '/api/me', { headers: { Authorization: 'Bearer ' + token } })).status === 401, 'le jeton ne vaut plus rien');
+  const outForm = await fetch(BASE + '/logout', { method: 'POST', redirect: 'manual', headers: { Cookie: cookie, Origin: BASE } });
+  check(outForm.status === 302 && outForm.headers.get('location') === '/login?e=out', 'POST /logout (bouton de la page) renvoie vers /login', outForm.status);
+  check((await fetch(BASE + '/', { redirect: 'manual', headers: { Cookie: cookie } })).status === 302, 'l’ancien cookie renvoie vers /login');
   console.log('\n' + (failures === 0 ? 'Tout est bon.' : failures + ' échec(s).'));
   process.exit(failures);
 }

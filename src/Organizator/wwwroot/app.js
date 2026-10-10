@@ -47,7 +47,7 @@
     voiceModel: 'sonnet', voiceEffort: 'low', voiceVoice: '', voiceRate: 1, voicePersona: 'Alma', voiceTopic: 'libre',
     voiceInstructions: '', voiceWeb: true, voiceWhisperModel: 'base', voiceSensitivity: 40, voiceBargeIn: 'words',
     /* Serveur Révizator (docs/REVIZATOR-SERVER.md) : vide = Révizator reste sur ce PC. */
-    revizatorServerUrl: '', revizatorServerToken: ''
+    revizatorServerUrl: '', revizatorServerToken: '', revizatorServerLogin: ''
   };
 
   /* Agents disponibles. `short` sert dans les listes, `example` dans le champ de modèle libre. */
@@ -348,7 +348,8 @@
       voiceInstructions: S.settings.voiceInstructions, voiceWeb: S.settings.voiceWeb,
       voiceWhisperModel: S.settings.voiceWhisperModel, voiceSensitivity: S.settings.voiceSensitivity,
       voiceBargeIn: S.settings.voiceBargeIn,
-      revizatorServerUrl: S.settings.revizatorServerUrl, revizatorServerToken: S.settings.revizatorServerToken
+      revizatorServerUrl: S.settings.revizatorServerUrl, revizatorServerToken: S.settings.revizatorServerToken,
+      revizatorServerLogin: S.settings.revizatorServerLogin
     })['catch'](function (e) { toast('Réglages non sauvegardés : ' + e.message); });
     return setInFlight;
   }
@@ -9417,6 +9418,7 @@
     S.settings.whisperModel = String(S.settings.whisperModel || DEFAULTS.whisperModel);
     S.settings.revizatorServerUrl = String(S.settings.revizatorServerUrl || '').trim();
     S.settings.revizatorServerToken = String(S.settings.revizatorServerToken || '').trim();
+    S.settings.revizatorServerLogin = String(S.settings.revizatorServerLogin || '').trim();
     S.settings.whisperLanguage = WHISPER_LANGS.some(function (l) { return l.id === S.settings.whisperLanguage; })
       ? S.settings.whisperLanguage : DEFAULTS.whisperLanguage;
 
@@ -9522,8 +9524,8 @@
 
     bridge.call('getState').then(function (st) {
       normalize(st || {});
-      /* Serveur Révizator réglé : branché avant le démarrage des pages (Révizator lit ses données). */
-      if (bridge.configureRemote) bridge.configureRemote({ url: S.settings.revizatorServerUrl, token: S.settings.revizatorServerToken });
+      /* Serveur Révizator réglé et session ouverte : branché avant le démarrage des pages (Révizator lit ses données). */
+      if (bridge.configureRemote && S.settings.revizatorServerToken) bridge.configureRemote({ url: S.settings.revizatorServerUrl, token: S.settings.revizatorServerToken });
       booted = true;
       PAGES.forEach(function (p) { if (p.onBoot) { try { p.onBoot(); } catch (e) { /* page fautive : la file démarre quand même */ } } });
       render();

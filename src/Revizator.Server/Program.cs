@@ -1,8 +1,7 @@
 using Organizator.Services;
-using QRCoder;
 using Revizator.Server;
 
-// revizator-server : sans argument, lance le serveur ; sinon ligne de commande (jetons, import).
+// revizator-server : sans argument, lance le serveur ; sinon ligne de commande (comptes, sessions, import).
 // Voir docs/REVIZATOR-SERVER.md, § 3.
 try
 {
@@ -19,61 +18,106 @@ static int Command(ServerConfig config, string[] args)
 {
     Directory.CreateDirectory(config.DataDir);
     var tokens = new TokenStore(config.DataDir);
+    var users = new UserStore(config.DataDir);
     switch (args[0])
     {
-        case "token" when args.Length >= 3 && args[1] == "new":
+        case "user" when args.Length >= 3 && args[1] == "set":
         {
-            var device = string.Join(' ', args.Skip(2));
-            var replaced = tokens.List().Any(t => string.Equals(t.Device, device.Trim(), StringComparison.OrdinalIgnoreCase));
-            var token = tokens.Create(device);
-            var link = config.PublicUrl + "/pair?token=" + token;
-            Console.WriteLine(replaced
-                ? $"Nouveau jeton pour « {device.Trim()} » (l'ancien est revoque)."
-                : $"Jeton cree pour « {device.Trim()} ».");
-            Console.WriteLine();
-            Console.WriteLine("Lien d'appairage (a ouvrir sur l'appareil) :");
-            Console.WriteLine("  " + link);
-            Console.WriteLine();
-            using (var generator = new QRCodeGenerator())
-            using (var data = generator.CreateQrCode(link, QRCodeGenerator.ECCLevel.L))
+            var login = UserStore.CleanLogin(args[2]);
+            var fromStdin = args.Length >= 4 && args[3] == "--password-stdin";
+            string password;
+            if (fromStdin || Console.IsInputRedirected)
             {
-                Console.WriteLine(new AsciiQRCode(data).GetGraphicSmall());
+                password = (Console.In.ReadLine() ?? "").TrimEnd('\r', '\n');
+            }
+            else
+            {
+                password = ReadSecret($"Mot de passe pour « {login} » ({UserStore.MinPassword} caracteres au moins) : ");
+                if (ReadSecret("Encore une fois : ") != password)
+                {
+                    Console.Error.WriteLine("Les deux saisies different : rien n'est change.");
+                    return 1;
+                }
             }
 
-            Console.WriteLine("Jeton seul (Organizator sur le PC : Reglages > Revizator > Serveur) :");
-            Console.WriteLine("  " + token);
-            Console.WriteLine();
-            Console.WriteLine("Il n'est affiche qu'une fois : le serveur n'en garde que l'empreinte.");
+            var existed = users.Set(login, password);
+            var closed = existed ? tokens.RevokeUser(login) : 0;
+            Console.WriteLine(existed
+                ? $"Mot de passe de « {login} » change ; {closed} session(s) fermee(s), reconnectez vos appareils."
+                : $"Compte « {login} » cree. Connectez-vous sur {config.PublicUrl}/login");
             return 0;
         }
 
-        case "token" when args.Length == 2 && args[1] == "list":
+        case "user" when args.Length == 2 && args[1] == "list":
+        {
+            var list = users.List();
+            if (list.Count == 0)
+            {
+                Console.WriteLine("Aucun compte. Creez-le : revizator-server user set <identifiant>");
+                return 0;
+            }
+
+            foreach (var u in list)
+            {
+                var sessions = tokens.List().Count(t => t.User == u.Login);
+                Console.WriteLine($"{u.Login,-24} cree le {u.Created}, mot de passe change le {u.Changed}, {sessions} session(s)");
+            }
+
+            return 0;
+        }
+
+        case "user" when args.Length == 3 && args[1] == "remove":
+        {
+            var login = args[2].Trim().ToLowerInvariant();
+            if (!users.Remove(login))
+            {
+                Console.Error.WriteLine($"Aucun compte « {login} ».");
+                return 1;
+            }
+
+            Console.WriteLine($"Compte « {login} » supprime ; {tokens.RevokeUser(login)} session(s) fermee(s).");
+            return 0;
+        }
+
+        case "session" when args.Length == 2 && args[1] == "list":
         {
             var list = tokens.List();
             if (list.Count == 0)
             {
-                Console.WriteLine("Aucun appareil appaire.");
+                Console.WriteLine("Aucune session ouverte.");
                 return 0;
             }
 
             foreach (var t in list)
             {
-                Console.WriteLine($"{t.Device,-30} cree le {t.Created}");
+                Console.WriteLine($"{t.Device}   (ouverte le {t.Created})");
             }
 
             return 0;
         }
 
-        case "token" when args.Length >= 3 && args[1] == "revoke":
+        case "session" when args.Length >= 3 && args[1] == "revoke":
         {
-            var device = string.Join(' ', args.Skip(2));
-            if (!tokens.Revoke(device))
+            var name = string.Join(' ', args.Skip(2));
+            if (name == "--all")
             {
-                Console.Error.WriteLine($"Aucun appareil « {device} ».");
+                var all = tokens.List().Select(t => t.Device).ToList();
+                foreach (var d in all)
+                {
+                    tokens.Revoke(d);
+                }
+
+                Console.WriteLine($"{all.Count} session(s) fermee(s).");
+                return 0;
+            }
+
+            if (!tokens.Revoke(name))
+            {
+                Console.Error.WriteLine($"Aucune session (ou plusieurs) ne commence par « {name} » : voir revizator-server session list.");
                 return 1;
             }
 
-            Console.WriteLine($"Jeton de « {device} » revoque.");
+            Console.WriteLine("Session fermee : l'appareil devra se reconnecter.");
             return 0;
         }
 
@@ -84,18 +128,55 @@ static int Command(ServerConfig config, string[] args)
         default:
             Console.Error.WriteLine("""
                 Usage :
-                  revizator-server                         lance le serveur
-                  revizator-server token new <appareil>    cree un jeton (lien d'appairage, QR code, jeton seul)
-                  revizator-server token list              liste les appareils appaires
-                  revizator-server token revoke <appareil> revoque le jeton d'un appareil
-                  revizator-server import <dossier>        importe learning.json et learning/ depuis une copie
-                                                           du dossier %LOCALAPPDATA%\Organizator\ du PC
+                  revizator-server                          lance le serveur
+                  revizator-server user set <identifiant>   cree le compte ou change son mot de passe (demande deux fois ;
+                                                            --password-stdin pour le lire sur l'entree standard) ;
+                                                            un changement ferme les sessions de ce compte
+                  revizator-server user list                liste les comptes
+                  revizator-server user remove <identif.>   supprime un compte et ferme ses sessions
+                  revizator-server session list             liste les sessions ouvertes (compte, appareil, date)
+                  revizator-server session revoke <nom>     ferme une session (son nom, ou son debut) ; --all : toutes
+                  revizator-server import <dossier>         importe learning.json et learning/ depuis une copie
+                                                            du dossier %LOCALAPPDATA%\Organizator\ du PC
                 Variables : REVIZATOR_DATA, REVIZATOR_PORT, REVIZATOR_PUBLIC_URL, REVIZATOR_ALLOWED_ORIGINS,
                             REVIZATOR_TRUSTED_PROXIES, REVIZATOR_CLAUDE, CLAUDE_CODE_OAUTH_TOKEN
                             (voir docs/REVIZATOR-SERVER.md).
                 """);
             return 2;
     }
+}
+
+/// <summary>Saisie masquee au terminal (docker exec -it) : les caracteres ne s'affichent pas.</summary>
+static string ReadSecret(string prompt)
+{
+    Console.Write(prompt);
+    var text = new System.Text.StringBuilder();
+    while (true)
+    {
+        var key = Console.ReadKey(intercept: true);
+        if (key.Key == ConsoleKey.Enter)
+        {
+            break;
+        }
+
+        if (key.Key == ConsoleKey.Backspace)
+        {
+            if (text.Length > 0)
+            {
+                text.Length--;
+            }
+
+            continue;
+        }
+
+        if (!char.IsControl(key.KeyChar))
+        {
+            text.Append(key.KeyChar);
+        }
+    }
+
+    Console.WriteLine();
+    return text.ToString();
 }
 
 static async Task<int> ServeAsync(ServerConfig config)
@@ -132,7 +213,13 @@ static async Task<int> ServeAsync(ServerConfig config)
     var app = builder.Build();
     using var bridge = new ServerBridge(config, log);
     var hub = new WsHub(bridge, log, app.Lifetime.ApplicationStopping);
-    var routes = new HttpRoutes(config, new TokenStore(config.DataDir), new FailureLimiter(config.TrustedProxies), bridge, hub, log);
+    var users = new UserStore(config.DataDir);
+    var routes = new HttpRoutes(config, new TokenStore(config.DataDir), users, new FailureLimiter(config.TrustedProxies), bridge, hub, log);
+    if (users.List().Count == 0)
+    {
+        log.Warn("Aucun compte : creez-le avec « revizator-server user set <identifiant> » (docker exec -it revizator revizator-server user set ...)");
+    }
+
     log.Info(bridge.HasClaude ? "Claude Code present" : "Claude Code introuvable : les generations de Revizator echoueront (REVIZATOR_CLAUDE ?)");
 
     app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });

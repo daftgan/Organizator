@@ -121,8 +121,11 @@ public sealed class AppSettings
     /// <summary>Serveur Revizator (https://revizator.exemple.fr) : l'onglet Revizator y lit et y ecrit ses donnees ; vide = tout reste sur ce PC.</summary>
     [JsonPropertyName("revizatorServerUrl")] public string RevizatorServerUrl { get; set; } = "";
 
-    /// <summary>Jeton d'appareil du serveur Revizator (revizator-server token new), transmis dans l'adresse du WebSocket et des medias.</summary>
+    /// <summary>Jeton de session du serveur Revizator (rendu par la connexion identifiant + mot de passe), transmis dans l'adresse du WebSocket et des medias.</summary>
     [JsonPropertyName("revizatorServerToken")] public string RevizatorServerToken { get; set; } = "";
+
+    /// <summary>Identifiant du compte connecte au serveur Revizator (affichage seulement ; le mot de passe n'est jamais garde).</summary>
+    [JsonPropertyName("revizatorServerLogin")] public string RevizatorServerLogin { get; set; } = "";
 
     [JsonPropertyName("window")] public WindowPlacement? Window { get; set; }
 
@@ -167,6 +170,7 @@ public sealed class AppSettings
         VoiceBargeIn = VoiceBargeIn,
         RevizatorServerUrl = RevizatorServerUrl,
         RevizatorServerToken = RevizatorServerToken,
+        RevizatorServerLogin = RevizatorServerLogin,
         Window = Window is null
             ? null
             : new WindowPlacement
@@ -254,6 +258,12 @@ public sealed class AppSettings
         if (RevizatorServerToken.Length > 200 || RevizatorServerToken.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '-' or '_')))
         {
             RevizatorServerToken = "";
+        }
+
+        RevizatorServerLogin = (RevizatorServerLogin ?? "").Trim();
+        if (RevizatorServerLogin.Length > 40 || RevizatorServerLogin.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')))
+        {
+            RevizatorServerLogin = "";
         }
     }
 

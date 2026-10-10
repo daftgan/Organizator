@@ -1793,25 +1793,34 @@
   ];
 
   /* Serveur Révizator, dans Organizator seulement (la page du serveur n'a pas de serveur à régler).
-     Les champs remplissent un brouillon ; « Enregistrer » le passe aux réglages et au pont. */
+     On s'y connecte par identifiant et mot de passe : le serveur rend un jeton de session, seul gardé
+     dans les réglages (le mot de passe n'est jamais enregistré). « Se déconnecter » ferme la session. */
   function serverSettable() { return !!bridge.configureRemote && (bridge.mode === 'webview' || !!window.__shimRemote); }
-  function serverSettings() { var s = (A && A.state && A.state.settings) || {}; return { url: String(s.revizatorServerUrl || ''), token: String(s.revizatorServerToken || '') }; }
+  function serverSettings() {
+    var s = (A && A.state && A.state.settings) || {};
+    return { url: String(s.revizatorServerUrl || ''), token: String(s.revizatorServerToken || ''), login: String(s.revizatorServerLogin || '') };
+  }
   function serverDraft() {
-    var u = R.ui.server = R.ui.server || { draft: null, test: null, testing: false };
-    if (!u.draft) u.draft = serverSettings();
+    var u = R.ui.server = R.ui.server || { draft: null, test: null, testing: false, busy: false };
+    if (!u.draft) { var cur = serverSettings(); u.draft = { url: cur.url, login: cur.login, password: '' }; }
     return u;
   }
-  var SERVER_STATES = { online: 'Connecté', connecting: 'Connexion…', offline: 'Injoignable', unreachable: 'Injoignable', refused: 'Jeton refusé', invalid: 'Adresse invalide' };
+  var SERVER_STATES = { online: 'Connecté', connecting: 'Connexion…', offline: 'Injoignable', unreachable: 'Injoignable', refused: 'Refusé', invalid: 'À compléter' };
 
   function serverCardHtml() {
     var u = serverDraft(), cur = serverSettings(), live = bridge.remote ? bridge.remote() : null;
     var h = ['<div class="set-card"><div class="set-card-head"><span class="set-card-title">Serveur Révizator</span></div>'];
-    h.push('<div class="rz-set-help">Vos cartes, cours et progrès sont alors lus et écrits sur le serveur ; vos tâches restent sur ce PC. Adresse vide : Révizator garde tout sur ce PC.</div>');
-    h.push(A.setFieldHtml('Adresse', '<input class="input set-cwd" type="url" data-role="rz-server" data-field="url" data-focus-key="rz-server-url" spellcheck="false" autocomplete="off" placeholder="https://revizator.daft-lab.fr" value="' + esc(u.draft.url) + '">'));
-    h.push(A.setFieldHtml('Jeton', '<input class="input set-cwd" type="password" data-role="rz-server" data-field="token" data-focus-key="rz-server-token" spellcheck="false" autocomplete="off" placeholder="revizator-server token new pc" value="' + esc(u.draft.token) + '">'));
-    var dirty = u.draft.url.trim() !== cur.url || u.draft.token.trim() !== cur.token;
-    h.push(A.setFieldHtml('', '<button type="button" class="btn btn-secondary" data-act="rz-server-test"' + (u.testing ? ' disabled' : '') + '>' + (u.testing ? 'Test…' : 'Tester la connexion') + '</button>'
-      + '<button type="button" class="btn ' + (dirty ? 'btn-primary' : 'btn-ghost') + '" data-act="rz-server-save">Enregistrer</button>'));
+    h.push('<div class="rz-set-help">Vos cartes, cours et progrès sont alors lus et écrits sur le serveur ; vos tâches restent sur ce PC. Sans serveur, Révizator garde tout sur ce PC.</div>');
+    if (cur.url && cur.token) {
+      h.push(A.setFieldHtml('Serveur', '<span>' + esc(cur.url) + (cur.login ? ' — connecté en tant que <strong>' + esc(cur.login) + '</strong>' : '') + '</span>'));
+      h.push(A.setFieldHtml('', '<button type="button" class="btn btn-secondary" data-act="rz-server-test"' + (u.testing ? ' disabled' : '') + '>' + (u.testing ? 'Test…' : 'Tester la connexion') + '</button>'
+        + '<button type="button" class="btn btn-ghost" data-act="rz-server-logout"' + (u.busy ? ' disabled' : '') + '>Se déconnecter</button>'));
+    } else {
+      h.push(A.setFieldHtml('Adresse', '<input class="input set-cwd" type="url" data-role="rz-server" data-field="url" data-focus-key="rz-server-url" spellcheck="false" autocomplete="off" placeholder="https://revizator.daft-lab.fr" value="' + esc(u.draft.url) + '">'));
+      h.push(A.setFieldHtml('Identifiant', '<input class="input set-cwd" type="text" data-role="rz-server" data-field="login" data-focus-key="rz-server-login" spellcheck="false" autocomplete="username" autocapitalize="none" value="' + esc(u.draft.login) + '">'));
+      h.push(A.setFieldHtml('Mot de passe', '<input class="input set-cwd" type="password" data-role="rz-server" data-field="password" data-focus-key="rz-server-password" autocomplete="current-password" value="' + esc(u.draft.password) + '">'));
+      h.push(A.setFieldHtml('', '<button type="button" class="btn btn-primary" data-act="rz-server-login"' + (u.busy ? ' disabled' : '') + '>' + (u.busy ? 'Connexion…' : 'Se connecter') + '</button>'));
+    }
     var t = u.test;
     if (t) {
       h.push('<div class="rz-set-help rz-server-test is-' + esc(t.state) + '"><strong>' + esc(SERVER_STATES[t.state] || t.state) + '</strong>'
@@ -1820,14 +1829,28 @@
     var foot = live
       ? 'En service : ' + esc(live.url) + ' — <strong>' + esc(SERVER_STATES[live.state] || live.state) + '</strong>.'
       : 'Aucun serveur : Révizator lit et écrit learning.json sur ce PC.';
-    h.push('<div class="set-card-foot">' + foot + ' Le jeton vient de <code>revizator-server token new pc</code> sur le serveur.</div></div>');
+    h.push('<div class="set-card-foot">' + foot + ' Le compte se crée sur le serveur : <code>revizator-server user set &lt;identifiant&gt;</code>.</div></div>');
     return h.join('');
+  }
+
+  /* Page servie par le serveur : le compte connecté et la déconnexion (formulaire POST /logout, sans script). */
+  var ACCOUNT = { login: null, asked: false };
+  function accountCardHtml() {
+    if (!ACCOUNT.asked) {
+      ACCOUNT.asked = true;
+      fetch('/api/me', { cache: 'no-store', credentials: 'same-origin' }).then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (b) { if (b && b.login) { ACCOUNT.login = b.login; R.renderSoon(); } }, function () { /* hors ligne */ });
+    }
+    return '<div class="set-card"><div class="set-card-head"><span class="set-card-title">Compte</span></div>'
+      + A.setFieldHtml('Connecté', '<span>' + (ACCOUNT.login ? '<strong>' + esc(ACCOUNT.login) + '</strong>' : '…') + '</span>')
+      + A.setFieldHtml('', '<form method="post" action="/logout" class="rz-logout"><button type="submit" class="btn btn-secondary">Se déconnecter</button></form>')
+      + '<div class="set-card-foot">La déconnexion ferme la session de cet appareil ; les autres restent connectés.</div></div>';
   }
 
   function settingsHtml() {
     var p = R.prefs, pr = R.profile;
     var h = [];
-    var srv = serverSettable() ? serverCardHtml() : '';
+    var srv = serverSettable() ? serverCardHtml() : (bridge.mode === 'server' ? accountCardHtml() : '');
     if (!loaded) return srv + '<div class="set-note">' + esc(loadError || 'Chargement…') + '</div>';
     h.push(srv);
     h.push('<div class="set-card"><div class="set-card-head"><span class="set-card-title">Voix</span></div>');
@@ -1960,26 +1983,45 @@
     R.act('rz-reload', function () { if (!loaded) { loadError = ''; R.render(); load().then(reattachJobs); } });
     R.input('rz-server', function (el) { serverDraft().draft[el.getAttribute('data-field')] = el.value; });
     R.act('rz-server-test', function () {
-      var u = serverDraft();
+      var u = serverDraft(), cur = serverSettings();
       u.testing = true; u.test = null;
       R.render();
-      bridge.testRemote({ url: u.draft.url, token: u.draft.token }).then(function (r) {
+      bridge.testRemote({ url: cur.url, token: cur.token }).then(function (r) {
         u.testing = false; u.test = r;
         R.render();
       });
     });
-    R.act('rz-server-save', function () {
+    R.act('rz-server-login', function () {
       var u = serverDraft();
-      var url = u.draft.url.trim(), token = u.draft.token.trim();
-      if (url && !/^(https?:\/\/)?[^\/?#\s@]+\/?$/i.test(url)) { u.test = { state: 'invalid', error: 'Une adresse seule, sans chemin : https://revizator.exemple.fr' }; R.render(); return; }
+      var url = u.draft.url.trim();
+      if (!url || !/^(https?:\/\/)?[^\/?#\s@]+\/?$/i.test(url)) { u.test = { state: 'invalid', error: 'Une adresse seule, sans chemin : https://revizator.exemple.fr' }; R.render(); return; }
       url = url.replace(/\/+$/, '');
-      if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
-      u.draft = { url: url, token: token };
-      u.test = null;
-      window.organizatorApp.setSettings({ revizatorServerUrl: url, revizatorServerToken: token });
-      bridge.configureRemote({ url: url, token: token });
-      R.toast(url ? 'Révizator lit maintenant ses données sur ' + url + '.' : 'Révizator garde de nouveau ses données sur ce PC.');
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+      u.busy = true; u.test = null;
       R.render();
+      bridge.loginRemote({ url: url, login: u.draft.login, password: u.draft.password }).then(function (r) {
+        u.busy = false;
+        u.draft.password = '';
+        if (r.state !== 'online') { u.test = r; R.render(); return; }
+        u.draft = { url: url, login: r.login, password: '' };
+        window.organizatorApp.setSettings({ revizatorServerUrl: url, revizatorServerToken: r.token, revizatorServerLogin: r.login });
+        bridge.configureRemote({ url: url, token: r.token });
+        R.toast('Connecté : Révizator lit maintenant ses données sur ' + url + '.');
+        R.render();
+      });
+    });
+    R.act('rz-server-logout', function () {
+      var u = serverDraft(), cur = serverSettings();
+      u.busy = true;
+      R.render();
+      bridge.logoutRemote({ url: cur.url, token: cur.token }).then(function () {
+        u.busy = false; u.test = null;
+        u.draft = { url: cur.url, login: cur.login, password: '' };
+        window.organizatorApp.setSettings({ revizatorServerToken: '' });
+        bridge.configureRemote({ url: '', token: '' });
+        R.toast('Déconnecté : Révizator garde de nouveau ses données sur ce PC.');
+        R.render();
+      });
     });
 
     R.input('rz-profile', function (el) { R.profile[el.getAttribute('data-field')] = el.value.slice(0, 600); R.save(); });

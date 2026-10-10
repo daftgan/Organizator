@@ -6,8 +6,9 @@ using Organizator.Services;
 namespace Revizator.Server;
 
 /// <summary>
-/// Routes HTTP du serveur (§ 3 du contrat) : sante, appairage, page avec ses deux injections, fichiers
-/// statiques de la page, dossiers <c>learning/</c> et cache TTS (cookie ou jeton dans le chemin), WebSocket.
+/// Routes HTTP du serveur (§ 3 du contrat) : sante, connexion (identifiant et mot de passe), page avec ses
+/// deux injections, fichiers statiques de la page, dossiers <c>learning/</c> et cache TTS (cookie ou jeton
+/// de session dans le chemin), WebSocket.
 /// Aucun chemin ne sort de son dossier racine.
 /// </summary>
 public sealed class HttpRoutes
@@ -20,15 +21,18 @@ public sealed class HttpRoutes
 
     private readonly ServerConfig _config;
     private readonly TokenStore _tokens;
+    private readonly UserStore _users;
+    private readonly LoginLockout _lockout = new();
     private readonly FailureLimiter _limiter;
     private readonly ServerBridge _bridge;
     private readonly WsHub _hub;
     private readonly HostLog _log;
 
-    public HttpRoutes(ServerConfig config, TokenStore tokens, FailureLimiter limiter, ServerBridge bridge, WsHub hub, HostLog log)
+    public HttpRoutes(ServerConfig config, TokenStore tokens, UserStore users, FailureLimiter limiter, ServerBridge bridge, WsHub hub, HostLog log)
     {
         _config = config;
         _tokens = tokens;
+        _users = users;
         _limiter = limiter;
         _bridge = bridge;
         _hub = hub;
@@ -59,7 +63,8 @@ public sealed class HttpRoutes
         response.Headers["X-Frame-Options"] = "DENY";
 
         // CORS : seulement pour les origines autorisees, et seulement la ou la page d'Organizator lit.
-        var corsPath = path == "/api/health" || path.StartsWith("/learn/", StringComparison.Ordinal)
+        var apiAuth = path is "/api/login" or "/api/logout" or "/api/me";
+        var corsPath = path == "/api/health" || apiAuth || path.StartsWith("/learn/", StringComparison.Ordinal)
             || path.StartsWith("/tts/", StringComparison.Ordinal) || path.StartsWith("/t/", StringComparison.Ordinal);
         if (corsPath)
         {
@@ -73,8 +78,8 @@ public sealed class HttpRoutes
 
             if (HttpMethods.IsOptions(request.Method))
             {
-                response.Headers.AccessControlAllowMethods = "GET, HEAD, OPTIONS";
-                response.Headers.AccessControlAllowHeaders = "Range, Content-Type";
+                response.Headers.AccessControlAllowMethods = apiAuth ? "GET, POST, OPTIONS" : "GET, HEAD, OPTIONS";
+                response.Headers.AccessControlAllowHeaders = apiAuth ? "Content-Type, Authorization" : "Range, Content-Type";
                 response.Headers.AccessControlMaxAge = "600";
                 response.StatusCode = StatusCodes.Status204NoContent;
                 return;
@@ -85,6 +90,25 @@ public sealed class HttpRoutes
         {
             await WebSocketAsync(context).ConfigureAwait(false);
             return;
+        }
+
+        if (HttpMethods.IsPost(request.Method))
+        {
+            switch (path)
+            {
+                case "/login":
+                    await LoginFormAsync(context).ConfigureAwait(false);
+                    return;
+                case "/logout":
+                    await LogoutFormAsync(context).ConfigureAwait(false);
+                    return;
+                case "/api/login":
+                    await LoginApiAsync(context).ConfigureAwait(false);
+                    return;
+                case "/api/logout":
+                    await LogoutApiAsync(context).ConfigureAwait(false);
+                    return;
+            }
         }
 
         if (!HttpMethods.IsGet(request.Method) && !HttpMethods.IsHead(request.Method))
@@ -99,9 +123,15 @@ public sealed class HttpRoutes
             return;
         }
 
-        if (path == "/pair")
+        if (path == "/login")
         {
-            await PairAsync(context).ConfigureAwait(false);
+            await LoginPageAsync(context).ConfigureAwait(false);
+            return;
+        }
+
+        if (path == "/api/me")
+        {
+            await MeAsync(context).ConfigureAwait(false);
             return;
         }
 
@@ -147,7 +177,7 @@ public sealed class HttpRoutes
             return;
         }
 
-        if (path.StartsWith("/api/", StringComparison.Ordinal) || path.StartsWith("/pair/", StringComparison.Ordinal))
+        if (path.StartsWith("/api/", StringComparison.Ordinal) || path.StartsWith("/login/", StringComparison.Ordinal))
         {
             response.StatusCode = StatusCodes.Status404NotFound;
             return;
@@ -203,7 +233,7 @@ public sealed class HttpRoutes
         context.Response.ContentType = "text/plain; charset=utf-8";
         await context.Response.WriteAsync(blocked
             ? "Trop d'essais : réessayez dans une minute."
-            : message ?? "Appareil non appairé.").ConfigureAwait(false);
+            : message ?? "Connexion requise.").ConfigureAwait(false);
     }
 
     /// <summary>L'appareil du cookie, sinon reponse 401 (ou 429) deja ecrite et null.</summary>
@@ -243,21 +273,74 @@ public sealed class HttpRoutes
         => context.Request.IsHttps || (_limiter.FromTrustedProxy(context)
             && string.Equals(context.Request.Headers["X-Forwarded-Proto"].ToString().Split(',')[0].Trim(), "https", StringComparison.OrdinalIgnoreCase));
 
-    /// <summary><c>/pair?token=…</c> : pose le cookie de l'appareil et renvoie vers la page.</summary>
-    private async Task PairAsync(HttpContext context)
+    // ------------------------------------------------------------------ connexion
+
+    private enum LoginResult { Ok, Bad, Blocked, Locked }
+
+    /// <summary>
+    /// Verifie un identifiant et un mot de passe. Refus sans calcul quand l'adresse a deja 10 echecs dans la
+    /// minute ou que le compte est verrouille (5 echecs de suite) ; un echec compte pour l'adresse et pour le
+    /// compte, et la reponse attend 400 ms (essais en serie plus lents, sans gener une faute de frappe).
+    /// </summary>
+    private async Task<(LoginResult Result, string? User, TimeSpan Wait)> CheckLoginAsync(HttpContext context, string login, string password)
     {
-        var token = context.Request.Query["token"].ToString();
-        if (!Authorize(context, token, out var device))
+        var ip = _limiter.ClientIp(context);
+        if (_limiter.Blocked(ip))
         {
-            context.Response.ContentType = "text/html; charset=utf-8";
-            context.Response.Headers.ContentSecurityPolicy = PagePolicy(context.Request);
-            context.Response.StatusCode = context.Items.ContainsKey("rz-blocked") ? StatusCodes.Status429TooManyRequests : StatusCodes.Status401Unauthorized;
-            await context.Response.WriteAsync(Page("Lien d'appairage invalide",
-                "Ce lien n'est pas (ou plus) valable. Créez-en un nouveau sur le serveur : <code>revizator-server token new &lt;appareil&gt;</code>.")).ConfigureAwait(false);
-            return;
+            return (LoginResult.Blocked, null, TimeSpan.FromMinutes(1));
         }
 
-        context.Response.Cookies.Append(CookieName, token, new CookieOptions
+        var locked = _lockout.Locked(login);
+        if (locked > TimeSpan.Zero)
+        {
+            return (LoginResult.Locked, null, locked);
+        }
+
+        var user = await _users.VerifyAsync(login, password).ConfigureAwait(false);
+        if (user is null)
+        {
+            _limiter.Fail(ip);
+            _lockout.Fail(login);
+            _log.Warn($"Connexion refusee ({ip}, identifiant de {Math.Min(login.Length, 40)} caracteres)");
+            await Task.Delay(400).ConfigureAwait(false);
+            return (LoginResult.Bad, null, TimeSpan.Zero);
+        }
+
+        _lockout.Succeed(login);
+        return (LoginResult.Ok, user, TimeSpan.Zero);
+    }
+
+    private static string LoginError(LoginResult result, TimeSpan wait) => result switch
+    {
+        LoginResult.Blocked => "Trop d'essais depuis cette adresse : réessayez dans une minute.",
+        LoginResult.Locked => $"Trop d'essais pour ce compte : réessayez dans {Math.Max(1, (int)Math.Ceiling(wait.TotalMinutes))} min.",
+        _ => "Identifiant ou mot de passe incorrect.",
+    };
+
+    /// <summary>
+    /// Un formulaire ou un appel de connexion vient-il d'une page autorisee ? Sans <c>Origin</c> (client hors
+    /// navigateur, ancien navigateur pour un formulaire meme origine) : oui ; sinon le serveur lui-meme, ou
+    /// une origine autorisee pour l'API (Organizator sur le PC).
+    /// </summary>
+    private bool OriginAllowed(HttpContext context, bool api)
+    {
+        var origin = context.Request.Headers.Origin.ToString().TrimEnd('/');
+        return origin.Length == 0 || SameOrigin(context, origin) || (api && _config.AllowedOrigins.Contains(origin));
+    }
+
+    /// <summary>Nom court de l'appareil pour la liste des sessions : systeme et navigateur d'apres le User-Agent.</summary>
+    private static string DeviceLabel(HttpRequest request)
+    {
+        var ua = request.Headers.UserAgent.ToString();
+        var os = ua.Contains("iPhone") ? "iPhone" : ua.Contains("iPad") ? "iPad" : ua.Contains("Android") ? "Android"
+            : ua.Contains("Windows") ? "Windows" : ua.Contains("Mac OS") ? "Mac" : ua.Contains("Linux") ? "Linux" : "navigateur";
+        var browser = ua.Contains("Edg/") ? "Edge" : ua.Contains("Firefox/") ? "Firefox" : ua.Contains("Chrome/") ? "Chrome"
+            : ua.Contains("Safari/") ? "Safari" : "";
+        return browser.Length > 0 ? os + " " + browser : os;
+    }
+
+    private void SetSessionCookie(HttpContext context, string token)
+        => context.Response.Cookies.Append(CookieName, token, new CookieOptions
         {
             HttpOnly = true,
             Secure = IsHttps(context),
@@ -266,28 +349,241 @@ public sealed class HttpRoutes
             Path = "/",
             IsEssential = true,
         });
-        _log.Info($"Appareil appaire : {device} ({_limiter.ClientIp(context)})");
+
+    /// <summary>
+    /// Pages sans secret dans leur adresse (<c>/</c>, <c>/login</c>) : Referer du meme site seulement. Avec
+    /// <c>no-referrer</c>, les navigateurs envoient <c>Origin: null</c> pour leurs formulaires POST, et le
+    /// controle d'origine de <c>/login</c> et <c>/logout</c> ne pourrait plus les reconnaitre.
+    /// </summary>
+    private static void SameOriginReferrer(HttpResponse response) => response.Headers["Referrer-Policy"] = "same-origin";
+
+    /// <summary><c>GET /login</c> : le formulaire (sans script : le CSP n'en permet aucun en ligne).</summary>
+    private async Task LoginPageAsync(HttpContext context)
+    {
+        var response = context.Response;
+        SameOriginReferrer(response);
+        var cookie = context.Request.Cookies[CookieName];
+        if (!string.IsNullOrEmpty(cookie) && _tokens.Validate(cookie) is not null)
+        {
+            NoCache(response);
+            response.Redirect("/", permanent: false);
+            return;
+        }
+
+        var message = context.Request.Query["e"].ToString() switch
+        {
+            "bad" => "Identifiant ou mot de passe incorrect.",
+            "blocked" => "Trop d'essais : réessayez dans une minute.",
+            "locked" => "Trop d'essais pour ce compte : réessayez dans quelques minutes.",
+            "out" => "Vous êtes déconnecté.",
+            "origin" => "Requête refusée : rouvrez cette page et réessayez.",
+            _ => "",
+        };
+        NoCache(response);
+        response.ContentType = "text/html; charset=utf-8";
+        response.Headers.ContentSecurityPolicy = PagePolicy(context.Request);
+        var noAccount = _users.List().Count == 0
+            ? "<p class=\"note\">Aucun compte n'existe encore : créez-le sur le serveur avec <code>revizator-server user set &lt;identifiant&gt;</code>.</p>"
+            : "";
+        await response.WriteAsync(LoginHtml(message, noAccount)).ConfigureAwait(false);
+    }
+
+    private static string LoginHtml(string message, string extra)
+        => "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            + "<title>Révizator — connexion</title><link rel=\"manifest\" href=\"manifest.webmanifest\"><meta name=\"theme-color\" content=\"#f5ead8\">"
+            + "<link rel=\"apple-touch-icon\" href=\"icons/icon-192.png\"><link rel=\"icon\" type=\"image/png\" href=\"icons/icon-192.png\">"
+            + "<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;"
+            + "background:#f5ead8;color:#2b2118;font-family:system-ui,-apple-system,sans-serif;padding:24px max(24px,env(safe-area-inset-right)) 24px max(24px,env(safe-area-inset-left))}"
+            + "main{width:100%;max-width:360px}h1{font-size:1.6rem;margin:0 0 4px}p.lead{margin:0 0 24px;color:#6b5a48}"
+            + "label{display:block;font-weight:600;margin:16px 0 6px}input{width:100%;font-size:16px;padding:12px 14px;border:1px solid #cdb99c;border-radius:10px;background:#fffaf2;color:inherit}"
+            + "input:focus{outline:2px solid #b5651d;outline-offset:1px}button{margin-top:24px;width:100%;min-height:48px;font-size:16px;font-weight:600;border:0;border-radius:10px;background:#b5651d;color:#fff}"
+            + ".msg{margin:0 0 8px;padding:10px 12px;border-radius:8px;background:#fde2d2;color:#7a2e0b}.note{color:#6b5a48;font-size:.9rem}"
+            + "code{background:#fff6;padding:2px 4px;border-radius:4px}</style></head><body><main>"
+            + "<h1>Révizator</h1><p class=\"lead\">Connectez-vous pour retrouver vos cours, vos cartes et vos progrès.</p>"
+            + (message.Length > 0 ? "<p class=\"msg\" role=\"alert\">" + message + "</p>" : "")
+            + "<form method=\"post\" action=\"/login\">"
+            + "<label for=\"login\">Identifiant</label><input id=\"login\" name=\"login\" autocomplete=\"username\" autocapitalize=\"none\" spellcheck=\"false\" required maxlength=\"40\">"
+            + "<label for=\"password\">Mot de passe</label><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required maxlength=\"200\">"
+            + "<button type=\"submit\">Se connecter</button></form>" + extra + "</main></body></html>";
+
+    /// <summary>Lit un formulaire court (4 Ko au plus) ; null s'il est trop gros ou illisible.</summary>
+    private static async Task<IFormCollection?> SmallFormAsync(HttpContext context)
+    {
+        if (context.Request.ContentLength is > 4096 || !context.Request.HasFormContentType)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await context.Request.ReadFormAsync(new Microsoft.AspNetCore.Http.Features.FormOptions
+            {
+                BufferBody = false,
+                ValueLengthLimit = 1024,
+                KeyLengthLimit = 64,
+                ValueCountLimit = 8,
+            }, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary><c>POST /login</c> (formulaire de la page) : cookie de session puis la page, ou retour au formulaire.</summary>
+    private async Task LoginFormAsync(HttpContext context)
+    {
         NoCache(context.Response);
+        if (!OriginAllowed(context, api: false))
+        {
+            context.Response.Redirect("/login?e=origin", permanent: false);
+            return;
+        }
+
+        var form = await SmallFormAsync(context).ConfigureAwait(false);
+        var login = form?["login"].ToString() ?? "";
+        var (result, user, _) = await CheckLoginAsync(context, login, form?["password"].ToString() ?? "").ConfigureAwait(false);
+        if (result != LoginResult.Ok)
+        {
+            context.Response.Redirect("/login?e=" + result.ToString().ToLowerInvariant(), permanent: false);
+            return;
+        }
+
+        var label = DeviceLabel(context.Request);
+        SetSessionCookie(context, _tokens.CreateSession(user!, label));
+        _log.Info($"Connexion : {user} ({label}, {_limiter.ClientIp(context)})");
         context.Response.Redirect("/", permanent: false);
     }
 
-    /// <summary>La page, avec ses deux injections ; sans cookie valide, la petite page « appareil non appairé ».</summary>
+    /// <summary><c>POST /logout</c> (bouton des Reglages, page servie ici) : la session est revoquee, le cookie retire.</summary>
+    private async Task LogoutFormAsync(HttpContext context)
+    {
+        NoCache(context.Response);
+        if (!OriginAllowed(context, api: false))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
+
+        var cookie = context.Request.Cookies[CookieName];
+        if (_tokens.RevokeToken(cookie))
+        {
+            _log.Info($"Deconnexion ({_limiter.ClientIp(context)})");
+        }
+
+        context.Response.Cookies.Delete(CookieName, new CookieOptions { Path = "/", Secure = IsHttps(context), HttpOnly = true, SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax });
+        context.Response.Redirect("/login?e=out", permanent: false);
+        await Task.CompletedTask.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// <c>POST /api/login</c> (Organizator sur le PC, scripts) : <c>{ login, password, device? }</c> en JSON →
+    /// <c>{ token, login, session }</c>. Le mot de passe n'est jamais garde par le client : seulement le jeton.
+    /// </summary>
+    private async Task LoginApiAsync(HttpContext context)
+    {
+        NoCache(context.Response);
+        if (!OriginAllowed(context, api: true))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsJsonAsync(new { error = "Origine refusée." }).ConfigureAwait(false);
+            return;
+        }
+
+        string login = "", password = "", device = "";
+        if (context.Request.ContentLength is null or <= 4096 && context.Request.HasJsonContentType())
+        {
+            try
+            {
+                var body = await System.Text.Json.Nodes.JsonNode.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted).ConfigureAwait(false);
+                login = body?["login"]?.GetValue<string>() ?? "";
+                password = body?["password"]?.GetValue<string>() ?? "";
+                device = body?["device"]?.GetValue<string>() ?? "";
+            }
+            catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException)
+            {
+                login = "";
+            }
+        }
+
+        var (result, user, wait) = await CheckLoginAsync(context, login, password).ConfigureAwait(false);
+        if (result != LoginResult.Ok)
+        {
+            context.Response.StatusCode = result == LoginResult.Bad ? StatusCodes.Status401Unauthorized : StatusCodes.Status429TooManyRequests;
+            if (result != LoginResult.Bad)
+            {
+                context.Response.Headers.RetryAfter = ((int)Math.Ceiling(wait.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            await context.Response.WriteAsJsonAsync(new { error = LoginError(result, wait) }).ConfigureAwait(false);
+            return;
+        }
+
+        var label = device.Trim().Length > 0 ? device : DeviceLabel(context.Request);
+        var token = _tokens.CreateSession(user!, label);
+        _log.Info($"Connexion : {user} ({label}, {_limiter.ClientIp(context)}, API)");
+        await context.Response.WriteAsJsonAsync(new { token, login = user, session = _tokens.Validate(token) }).ConfigureAwait(false);
+    }
+
+    /// <summary><c>POST /api/logout</c> avec <c>Authorization: Bearer &lt;jeton&gt;</c> : revoque cette session.</summary>
+    private async Task LogoutApiAsync(HttpContext context)
+    {
+        NoCache(context.Response);
+        if (!OriginAllowed(context, api: true))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
+
+        var revoked = _tokens.RevokeToken(BearerToken(context.Request));
+        await context.Response.WriteAsJsonAsync(new { ok = revoked }).ConfigureAwait(false);
+    }
+
+    /// <summary><c>GET /api/me</c> : le compte de la session (cookie ou <c>Authorization: Bearer</c>), sinon 401.</summary>
+    private async Task MeAsync(HttpContext context)
+    {
+        NoCache(context.Response);
+        var token = BearerToken(context.Request) ?? context.Request.Cookies[CookieName];
+        if (string.IsNullOrEmpty(token) || !Authorize(context, token, out _))
+        {
+            await DenyAsync(context).ConfigureAwait(false);
+            return;
+        }
+
+        await context.Response.WriteAsJsonAsync(new { login = _tokens.UserOf(token) ?? "", version = ServerConfig.Version }).ConfigureAwait(false);
+    }
+
+    private static string? BearerToken(HttpRequest request)
+    {
+        var header = request.Headers.Authorization.ToString();
+        return header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? header[7..].Trim() : null;
+    }
+
+    /// <summary>La page, avec ses deux injections ; sans session valide, renvoi vers la page de connexion.</summary>
     private async Task IndexAsync(HttpContext context)
     {
         var response = context.Response;
         NoCache(response);
+        SameOriginReferrer(response);
         response.ContentType = "text/html; charset=utf-8";
         response.Headers.ContentSecurityPolicy = PagePolicy(context.Request);
         var cookie = context.Request.Cookies[CookieName];
         if (string.IsNullOrEmpty(cookie) || !Authorize(context, cookie, out _))
         {
-            var blocked = context.Items.ContainsKey("rz-blocked");
-            response.StatusCode = blocked ? StatusCodes.Status429TooManyRequests : StatusCodes.Status401Unauthorized;
-            await response.WriteAsync(blocked
-                ? Page("Trop d'essais", "Réessayez dans une minute.")
-                : Page("Appareil non appairé",
-                    "Pour utiliser Révizator ici, ouvrez le lien d'appairage (ou scannez son QR code) créé sur le serveur avec "
-                    + "<code>revizator-server token new &lt;appareil&gt;</code>.")).ConfigureAwait(false);
+            if (context.Items.ContainsKey("rz-blocked"))
+            {
+                response.StatusCode = StatusCodes.Status429TooManyRequests;
+                await response.WriteAsync(Page("Trop d'essais", "Réessayez dans une minute.")).ConfigureAwait(false);
+                return;
+            }
+
+            // Cookie perime (session revoquee, mot de passe change) : il est retire.
+            if (!string.IsNullOrEmpty(cookie))
+            {
+                response.Cookies.Delete(CookieName, new CookieOptions { Path = "/", Secure = IsHttps(context), HttpOnly = true, SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax });
+            }
+
+            response.Redirect("/login", permanent: false);
             return;
         }
 

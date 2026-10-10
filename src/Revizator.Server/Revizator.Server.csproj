@@ -62,8 +62,6 @@
          SherpaRuntime (telechargement depuis nuget.org, ou copie de celles livrees a cote de l'exe). -->
     <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.8" ExcludeAssets="native" />
     <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.linux-x64" Version="1.13.8" ExcludeAssets="all" GeneratePathProperty="true" />
-    <!-- QR code d'appairage, dessine en caracteres dans le terminal (token new). -->
-    <PackageReference Include="QRCoder" Version="1.6.0" />
   </ItemGroup>
 
   <ItemGroup>

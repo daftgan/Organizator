@@ -7,13 +7,14 @@ using System.Text.Json.Nodes;
 
 namespace Revizator.Server;
 
-/// <summary>Un appareil appaire : son nom, l'empreinte SHA-256 (hex) de son jeton, sa date de creation.</summary>
-public sealed record DeviceToken(string Device, string Hash, string Created);
+/// <summary>Une session ouverte : son nom (compte, appareil, date), l'empreinte SHA-256 (hex) de son jeton, sa date de creation, son compte.</summary>
+public sealed record DeviceToken(string Device, string Hash, string Created, string User);
 
 /// <summary>
-/// Jetons d'appairage, dans <c>tokens.json</c> du dossier de donnees. Un jeton = 32 octets aleatoires en
-/// base64url ; seule son empreinte est gardee. Le fichier est relu des qu'il change : un jeton cree ou
-/// revoque en ligne de commande vaut aussitot pour le serveur qui tourne.
+/// Sessions, dans <c>tokens.json</c> du dossier de donnees : chaque connexion reussie (identifiant et mot
+/// de passe) cree un jeton de session = 32 octets aleatoires en base64url, dont seule l'empreinte est
+/// gardee ; le navigateur le garde en cookie, Organizator sur le PC dans ses reglages. Le fichier est relu
+/// des qu'il change : une session revoquee en ligne de commande l'est aussitot pour le serveur qui tourne.
 /// </summary>
 public sealed class TokenStore
 {
@@ -41,42 +42,100 @@ public sealed class TokenStore
         }
     }
 
-    /// <summary>Cree le jeton d'un appareil (remplace celui du meme nom) ; rend le jeton en clair, jamais garde.</summary>
-    public string Create(string device)
+    /// <summary>
+    /// Ouvre une session pour <paramref name="user"/> depuis l'appareil <paramref name="label"/> ; rend le jeton en
+    /// clair, jamais garde. Son nom (« compte · appareil · date #xxxx ») sert a la lister et a la revoquer.
+    /// </summary>
+    public string CreateSession(string user, string? label)
     {
-        var name = CleanDevice(device);
+        var device = CleanDevice(label);
+        var now = DateTimeOffset.UtcNow;
+        var name = $"{user} · {device} · {now:yyyy-MM-dd HH:mm} #{Convert.ToHexString(RandomNumberGenerator.GetBytes(2)).ToLowerInvariant()}";
         var token = Base64Url(RandomNumberGenerator.GetBytes(32));
         lock (_gate)
         {
             Refresh();
-            var kept = _tokens.Where(t => !string.Equals(t.Device, name, StringComparison.OrdinalIgnoreCase)).ToList();
-            kept.Add(new DeviceToken(name, HashOf(token), DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")));
+            var kept = _tokens.ToList();
+            // Au plus 50 sessions par compte : les plus anciennes partent (connexions repetees sans deconnexion).
+            var mine = kept.Where(t => t.User == user).OrderBy(t => t.Created, StringComparer.Ordinal).ToList();
+            foreach (var old in mine.Take(Math.Max(0, mine.Count - 49)))
+            {
+                kept.Remove(old);
+            }
+
+            kept.Add(new DeviceToken(name, HashOf(token), now.ToString("yyyy-MM-ddTHH:mm:ssZ"), user));
             Write(kept);
         }
 
         return token;
     }
 
-    /// <summary>Revoque le jeton d'un appareil ; faux s'il n'y en avait pas.</summary>
+    /// <summary>Revoque une session par son nom (ou le debut de son nom, s'il n'en designe qu'une) ; faux sinon.</summary>
     public bool Revoke(string device)
     {
         var name = (device ?? "").Trim();
         lock (_gate)
         {
             Refresh();
-            var kept = _tokens.Where(t => !string.Equals(t.Device, name, StringComparison.OrdinalIgnoreCase)).ToList();
-            if (kept.Count == _tokens.Count)
+            var match = _tokens.Where(t => string.Equals(t.Device, name, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (match.Count == 0 && name.Length > 0)
+            {
+                match = _tokens.Where(t => t.Device.StartsWith(name, StringComparison.OrdinalIgnoreCase)).ToList();
+            }
+
+            if (match.Count != 1)
             {
                 return false;
             }
 
-            Write(kept);
+            Write(_tokens.Where(t => t != match[0]).ToList());
             return true;
         }
     }
 
-    /// <summary>L'appareil dont c'est le jeton, sinon null. Toutes les empreintes sont comparees, a temps constant.</summary>
-    public string? Validate(string? token)
+    /// <summary>Revoque la session de ce jeton (deconnexion) ; faux s'il n'en designait aucune.</summary>
+    public bool RevokeToken(string? token)
+    {
+        var entry = Find(token);
+        if (entry is null)
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            Refresh();
+            Write(_tokens.Where(t => t.Hash != entry.Hash).ToList());
+        }
+
+        return true;
+    }
+
+    /// <summary>Revoque toutes les sessions d'un compte (mot de passe change, compte supprime) ; rend leur nombre.</summary>
+    public int RevokeUser(string user)
+    {
+        lock (_gate)
+        {
+            Refresh();
+            var kept = _tokens.Where(t => t.User != user).ToList();
+            var removed = _tokens.Count - kept.Count;
+            if (removed > 0)
+            {
+                Write(kept);
+            }
+
+            return removed;
+        }
+    }
+
+    /// <summary>La session dont c'est le jeton, sinon null.</summary>
+    public string? Validate(string? token) => Find(token)?.Device;
+
+    /// <summary>Le compte de la session dont c'est le jeton, sinon null.</summary>
+    public string? UserOf(string? token) => Find(token)?.User;
+
+    /// <summary>La session dont c'est le jeton, sinon null. Toutes les empreintes sont comparees, a temps constant.</summary>
+    public DeviceToken? Find(string? token)
     {
         if (string.IsNullOrEmpty(token) || token.Length > 200)
         {
@@ -84,7 +143,7 @@ public sealed class TokenStore
         }
 
         var hash = Convert.FromHexString(HashOf(token));
-        string? found = null;
+        DeviceToken? found = null;
         foreach (var entry in List())
         {
             byte[] stored;
@@ -99,7 +158,7 @@ public sealed class TokenStore
 
             if (CryptographicOperations.FixedTimeEquals(hash, stored))
             {
-                found ??= entry.Device;
+                found ??= entry;
             }
         }
 
@@ -114,13 +173,14 @@ public sealed class TokenStore
 
     private static string CleanDevice(string? device)
     {
-        var name = new string((device ?? "").Trim().Where(c => !char.IsControl(c)).ToArray());
-        if (name.Length == 0 || name.Length > 60)
+        // Nom d'appareil donne par le client (navigateur, Organizator) : nettoye et borne, jamais refuse.
+        var name = new string((device ?? "").Trim().Where(c => !char.IsControl(c) && c != '#').ToArray());
+        if (name.Length > 40)
         {
-            throw new InvalidOperationException("Nom d'appareil attendu (1 a 60 caracteres), par exemple « telephone » ou « pc ».");
+            name = name[..40];
         }
 
-        return name;
+        return name.Length == 0 ? "appareil" : name;
     }
 
     /// <summary>Relit le fichier s'il a change (sous <see cref="_gate"/>).</summary>
@@ -150,9 +210,10 @@ public sealed class TokenStore
                     var device = item["device"]?.GetValue<string>() ?? "";
                     var hash = item["hash"]?.GetValue<string>() ?? "";
                     var created = item["created"]?.GetValue<string>() ?? "";
+                    var user = item["user"]?.GetValue<string>() ?? "";
                     if (device.Length > 0 && hash.Length == 64)
                     {
-                        list.Add(new DeviceToken(device, hash.ToLowerInvariant(), created));
+                        list.Add(new DeviceToken(device, hash.ToLowerInvariant(), created, user));
                     }
                 }
             }
@@ -173,7 +234,7 @@ public sealed class TokenStore
         var array = new JsonArray();
         foreach (var t in tokens)
         {
-            array.Add(new JsonObject { ["device"] = t.Device, ["hash"] = t.Hash, ["created"] = t.Created });
+            array.Add(new JsonObject { ["device"] = t.Device, ["hash"] = t.Hash, ["created"] = t.Created, ["user"] = t.User });
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
