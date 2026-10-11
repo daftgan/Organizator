@@ -329,7 +329,7 @@ Un compte = un identifiant et un mot de passe. Sur le LXC (`<conteneur>` = `revi
 docker exec -it revizator revizator-server user set <identifiant>
 ```
 
-La commande demande le mot de passe **deux fois**, sans l'afficher (10 à 200 caractères). L'identifiant
+La commande demande le mot de passe **deux fois**, sans l'afficher (n'importe lequel, non vide). L'identifiant
 est mis en minuscules : lettres, chiffres, `.`, `_`, `-`, 40 caractères au plus. Le serveur n'en garde
 qu'une empreinte (PBKDF2-SHA256, 600 000 itérations, sel de 16 octets) dans
 `/opt/revizator/data/users.json` (lisible par le seul utilisateur du conteneur). Il n'y a ni page
