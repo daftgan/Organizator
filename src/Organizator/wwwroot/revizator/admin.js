@@ -127,7 +127,7 @@
       if (U.pw[u.login] != null) {
         h.push('<tr class="rza-sub"><td colspan="6"><div class="rza-inline">'
           + '<label class="rza-lbl" for="rza-pw-' + esc(u.login) + '">Nouveau mot de passe de ' + esc(u.login) + '</label>'
-          + '<input id="rza-pw-' + esc(u.login) + '" class="input" type="text" autocomplete="new-password" spellcheck="false" minlength="10" maxlength="200" data-role="rz-admin-pw" data-login="' + esc(u.login) + '" data-focus-key="rza-pw-' + esc(u.login) + '" value="' + esc(U.pw[u.login]) + '">'
+          + '<input id="rza-pw-' + esc(u.login) + '" class="input" type="text" autocomplete="new-password" spellcheck="false" maxlength="200" data-role="rz-admin-pw" data-login="' + esc(u.login) + '" data-focus-key="rza-pw-' + esc(u.login) + '" value="' + esc(U.pw[u.login]) + '">'
           + '<button type="button" class="btn btn-ghost" data-act="rz-admin-pw-gen" data-login="' + esc(u.login) + '">Générer</button>'
           + '<button type="button" class="btn btn-primary" data-act="rz-admin-pw-save" data-login="' + esc(u.login) + '"' + (U.busy ? ' disabled' : '') + '>Enregistrer</button>'
           + '<button type="button" class="btn btn-ghost" data-act="rz-admin-pw-cancel" data-login="' + esc(u.login) + '">Annuler</button></div>'
@@ -163,7 +163,7 @@
     }
     h.push('<div class="rza-form">'
       + '<label class="rza-field"><span>Identifiant</span><input class="input" type="text" maxlength="40" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="lea" data-role="rz-admin-form" data-field="login" data-focus-key="rza-new-login" value="' + esc(f.login) + '"></label>'
-      + '<label class="rza-field"><span>Mot de passe <small>(10 caractères au moins)</small></span><input class="input" type="' + (f.show ? 'text' : 'password') + '" autocomplete="new-password" spellcheck="false" maxlength="200" data-role="rz-admin-form" data-field="password" data-focus-key="rza-new-password" value="' + esc(f.password) + '"></label>'
+      + '<label class="rza-field"><span>Mot de passe</span><input class="input" type="' + (f.show ? 'text' : 'password') + '" autocomplete="new-password" spellcheck="false" maxlength="200" data-role="rz-admin-form" data-field="password" data-focus-key="rza-new-password" value="' + esc(f.password) + '"></label>'
       + '<div class="rza-form-btns"><button type="button" class="btn btn-ghost" data-act="rz-admin-gen">Générer</button>'
       + '<button type="button" class="btn btn-primary" data-act="rz-admin-add"' + (U.busy ? ' disabled' : '') + '>' + (U.busy === 'add' ? 'Création…' : 'Créer le compte') + '</button></div></div>');
     h.push('<div class="rz-card-foot">Identifiant : lettres, chiffres, point, tiret ou souligné (40 au plus), en minuscules. Chacun a ses propres données et apparaît dans le Classement (il peut s’en retirer). Pas d’inscription libre : seuls les administrateurs créent des comptes.</div></section>');
@@ -213,7 +213,7 @@
   R.act('rz-admin-add', function () {
     var login = String(U.form.login || '').trim().toLowerCase(), password = String(U.form.password || '');
     if (!/^[a-z0-9._-]{1,40}$/.test(login)) { R.toast('Identifiant attendu : lettres, chiffres, point, tiret ou souligné (40 au plus).'); return; }
-    if (password.length < 10) { R.toast('Mot de passe : 10 caractères au moins.'); return; }
+    if (!password) { R.toast('Mot de passe vide.'); return; }
     if ((U.users || []).some(function (u) { return u.login === login; })) { R.toast('« ' + login + ' » existe déjà : changez plutôt son mot de passe.'); return; }
     U.busy = 'add'; R.render();
     call('adminUserSet', { login: login, password: password }).then(function (r) {
@@ -231,7 +231,7 @@
   R.input('rz-admin-pw', function (el) { U.pw[el.getAttribute('data-login')] = el.value; });
   R.act('rz-admin-pw-save', function (el) {
     var login = el.getAttribute('data-login'), password = String(U.pw[login] || '');
-    if (password.length < 10) { R.toast('Mot de passe : 10 caractères au moins.'); return; }
+    if (!password) { R.toast('Mot de passe vide.'); return; }
     U.busy = 'pw'; R.render();
     call('adminUserSet', { login: login, password: password }).then(function (r) {
       adopt(r); U.busy = ''; delete U.pw[login];

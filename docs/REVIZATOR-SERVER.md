@@ -144,7 +144,7 @@ Routes :
   `Cache-Control` et resservirait ces fichiers sans session.
 - Comptes : `users.json` dans le dossier de données (mode 0600), `{ users: [{ login, hash, created,
   changed }] }`. Identifiant normalisé en minuscules : 1 à 40 caractères, lettres, chiffres, `.`, `_`,
-  `-`. Mot de passe de 10 à 200 caractères, haché par PBKDF2-SHA256 (600 000 itérations, sel de 16
+  `-`. Mot de passe libre (non vide, 200 caractères au plus : aucune règle de longueur ni de complexité), haché par PBKDF2-SHA256 (600 000 itérations, sel de 16
   octets, `pbkdf2-sha256$<itérations>$<sel>$<empreinte>`), comparé à temps constant ; un identifiant
   inconnu est vérifié au même coût (contre un hachage factice : la réponse ne dit pas si le compte
   existe) ; deux vérifications PBKDF2 en parallèle au plus. Pas d'inscription ni de « mot de passe

@@ -21,7 +21,8 @@ public sealed record UserAccount(string Login, string Hash, string Created, stri
 public sealed class UserStore
 {
     public const int Iterations = 600_000;
-    public const int MinPassword = 10;
+    /// <summary>Aucune regle de longueur : le mot de passe ne doit qu'etre non vide (200 caracteres au plus).</summary>
+    public const int MinPassword = 1;
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
     private static readonly SemaphoreSlim Hashing = new(2, 2);
@@ -65,7 +66,7 @@ public sealed class UserStore
         var name = CleanLogin(login);
         if ((password ?? "").Length < MinPassword || password!.Length > 200)
         {
-            throw new InvalidOperationException($"Mot de passe attendu : {MinPassword} a 200 caracteres.");
+            throw new InvalidOperationException("Mot de passe attendu : non vide, 200 caracteres au plus.");
         }
 
         var now = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");

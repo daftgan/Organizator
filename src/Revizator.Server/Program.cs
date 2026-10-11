@@ -32,7 +32,7 @@ static int Command(ServerConfig config, string[] args)
             }
             else
             {
-                password = ReadSecret($"Mot de passe pour « {login} » ({UserStore.MinPassword} caracteres au moins) : ");
+                password = ReadSecret($"Mot de passe pour « {login} » : ");
                 if (ReadSecret("Encore une fois : ") != password)
                 {
                     Console.Error.WriteLine("Les deux saisies different : rien n'est change.");

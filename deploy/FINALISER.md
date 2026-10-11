@@ -188,7 +188,7 @@ jeton (`grep -c CLAUDE_CODE_OAUTH_TOKEN deploy/.env` doit rendre 0).
    docker exec -it revizator revizator-server user set <identifiant>
    ```
 
-   La commande demande le mot de passe deux fois, sans l'afficher (10 caractères au moins). Rappelle-lui
+   La commande demande le mot de passe deux fois, sans l'afficher (n'importe lequel, non vide). Rappelle-lui
    de ne pas te le donner (Règles). **Vérifier** :
 
    ```bash
