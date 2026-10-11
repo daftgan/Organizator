@@ -7,6 +7,9 @@
 #   l'exe portable.
 # - Sans git : Actions › Organizator › Run workflow, avec une version (1.2.0) : le runner cree le tag
 #   v1.2.0 sur le commit construit, puis la meme Release.
+# - A chaque fusion sur main qui touche l'application : version suivante automatique (derniere Release
+#   v1.2.3 -> v1.2.4), tag et Release ; les PC la recoivent par le serveur Revizator. « [skip release] »
+#   dans le message du commit (de fusion) s'en passe : simple construction.
 name: Organizator
 
 on:
@@ -32,9 +35,10 @@ on:
 permissions:
   contents: write
 
+# Sur main, une construction n'en coupe jamais une autre : chacune peut publier une version.
 concurrency:
   group: organizator-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build:
@@ -50,6 +54,8 @@ jobs:
       - name: Version
         id: version
         shell: pwsh
+        env:
+          SKIP_RELEASE: ${{ contains(github.event.head_commit.message, '[skip release]') && '1' || '' }}
         run: |
           $release = ''
           $wanted = '${{ inputs.version }}'.Trim() -replace '^v', ''
@@ -62,6 +68,16 @@ jobs:
             $numeric = $Matches[1]
             $version = $wanted
             $release = "v$wanted"
+          } elseif ('${{ github.event_name }}' -eq 'push' -and '${{ github.ref }}' -eq 'refs/heads/main' -and -not $env:SKIP_RELEASE) {
+            # Fusion sur main : la version qui suit la plus haute des tags vX.Y.Z (sans suffixe) du depot.
+            $tags = git ls-remote --tags origin 'v*' | ForEach-Object { ($_ -split 'refs/tags/')[1] -replace '\^\{\}$', '' }
+            if ($LASTEXITCODE -ne 0) { throw 'Tags du depot illisibles.' }
+            $last = $tags | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | ForEach-Object { [version]$_.Substring(1) } | Sort-Object -Descending | Select-Object -First 1
+            if (-not $last) { $last = [version]'1.0.0' }
+            $numeric = "$($last.Major).$($last.Minor).$($last.Build + 1)"
+            $version = $numeric
+            $release = "v$numeric"
+            Write-Host "Derniere version : v$last -> nouvelle version : $release"
           } else {
             $numeric = '1.0.0'
             $version = "1.0.0-ci.${{ github.run_number }}"
