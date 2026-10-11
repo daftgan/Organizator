@@ -23,7 +23,7 @@ PC : Organizator ─┘  jeton de session                                       
 |---|---|---|
 | Révizator (public) | https://revizator.daft-lab.fr | identifiant et mot de passe (page `/login`) |
 | Révizator (LAN) | http://192.168.1.30:8080 | sans HTTPS : pas de micro ni d'installation sur le téléphone |
-| Santé | https://revizator.daft-lab.fr/api/health | `{"ok":true,"version":"…"}`, sans connexion |
+| Santé | https://revizator.daft-lab.fr/api/health | `{"ok":true,"version":"…","commit":"…","builtAt":"…","startedAt":"…"}`, sans connexion |
 | SSH | `ssh root@192.168.1.30` | |
 | Komodo | http://192.168.1.21:9120 | stack `revizator` sur le serveur `revizator` |
 | NPM | http://192.168.1.11:81 | hôte proxy `revizator.daft-lab.fr` |
@@ -227,7 +227,7 @@ Vérifier :
 
 ```bash
 docker ps --filter name=revizator            # STATUS : Up … (healthy)
-curl -s http://127.0.0.1:8080/api/health     # {"ok":true,"version":"1.0.0"}
+curl -s http://127.0.0.1:8080/api/health     # {"ok":true,"version":"1.0.0","commit":"…",…}
 docker logs revizator | tail                 # « Claude Code present »
 docker exec revizator claude -p "Réponds seulement OK" --model haiku   # OK (le jeton marche)
 ```
@@ -428,11 +428,11 @@ Suivre ce qu'il fait :
 ```bash
 journalctl -u revizator-auto-update -f             # chaque mise à jour, sauvegarde, échec éventuel
 systemctl list-timers revizator-auto-update        # prochain passage
-curl -s http://localhost:8080/api/health           # {"ok":true,"version":"1.0.0","build":"…","commit":"…"}
+curl -s http://localhost:8080/api/health           # {"ok":true,"version":"1.0.0","commit":"…","builtAt":"…",…}
 ```
 
-`commit` est le commit en service (12 caractères, comme sur GitHub) ; il est vide après un Deploy à la
-main dans Komodo, qui ne le connaît pas. Les sauvegardes vont dans `/root/revizator-backups/` (les 10
+`commit` est le commit en service (lu dans `.git` à la construction de l'image, que le Deploy vienne du
+script ou de Komodo). Les sauvegardes vont dans `/root/revizator-backups/` (les 10
 dernières, sans les modèles de voix et de transcription ni les installateurs, re-téléchargeables).
 Arrêter : `systemctl disable --now revizator-auto-update.timer`. Réglages (branche suivie, nombre de
 sauvegardes, dossier) : lignes `Environment=` de `deploy/revizator-auto-update.service`, puis
@@ -450,8 +450,14 @@ cd /opt/revizator/src && git pull
 Puis Komodo › stack `revizator` › **Deploy** (reconstruit l'image et recrée le conteneur ; les données
 restent). Sans Komodo : `cd deploy && docker compose up -d --build`.
 
+Pour vérifier que la mise à jour est en ligne : **Réglages › Révizator › Compte › Serveur** sur le téléphone
+(ou **Tester la connexion** dans Organizator) affiche la version, le commit construit (les 7 premiers caractères,
+comme sur GitHub), l'heure de construction de l'image et celle du démarrage du serveur ; `curl -s
+https://revizator.daft-lab.fr/api/health` donne la même chose. Le commit est lu dans le `.git` du dossier
+construit : un `git pull` oublié se voit tout de suite.
+
 Après une mise à jour, le téléphone prend la nouvelle version au prochain lancement : le service worker
-porte l'empreinte des fichiers de la page (`build` de `/api/health`), qui change dès que la page change ;
+porte l'empreinte des fichiers de la page (`page` de `/api/health`), qui change dès que la page change ;
 au besoin, fermer et rouvrir l'application.
 
 **Claude Code** ne se met pas à jour tout seul dans le conteneur : il est figé dans l'image. Pour en

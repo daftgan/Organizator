@@ -24,6 +24,19 @@ RUN dotnet publish src/Revizator.Server/Revizator.Server.csproj -c Release -r li
     && test -f /app/runtimes/linux-x64/libwhisper.so \
     && test -f /app/sherpa/linux-x64/libsherpa-onnx-c-api.so
 
+# Le deploiement, montre dans les Reglages et par /api/health : le commit du depot (lu dans .git, sans
+# ses objets, voir .dockerignore) et l'heure de construction. Un depot absent laisse le commit vide.
+RUN --mount=type=bind,target=/ctx \
+    head=$(cat /ctx/.git/HEAD 2>/dev/null || true); \
+    case "$head" in \
+      "ref: "*) ref=${head#ref: }; \
+        commit=$(cat "/ctx/.git/$ref" 2>/dev/null || grep " $ref\$" /ctx/.git/packed-refs 2>/dev/null | cut -d' ' -f1 || true) ;; \
+      *) commit=$head ;; \
+    esac; \
+    commit=$(printf '%s' "$commit" | tr -d '[:space:]' | grep -E '^[0-9a-f]{40,64}$' || true); \
+    printf '{"commit":"%s","builtAt":"%s"}\n' "$commit" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /app/build-info.json \
+    && cat /app/build-info.json
+
 # ── Execution ─────────────────────────────────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-noble
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -69,10 +82,5 @@ EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${REVIZATOR_PORT:-8080}/api/health" > /dev/null || exit 1
-
-# Commit des sources (deploy/auto-update.sh le passe ; vide sinon), rendu par /api/health. En dernier : il
-# change a chaque mise a jour sans invalider les couches au-dessus.
-ARG REVIZATOR_COMMIT=
-ENV REVIZATOR_COMMIT=$REVIZATOR_COMMIT
 
 ENTRYPOINT ["dotnet", "/app/revizator-server.dll"]

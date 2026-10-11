@@ -94,10 +94,11 @@ ls -1t "$BACKUPS"/auto-*.tar.gz 2>/dev/null | tail -n +"$((KEEP + 1))" | xargs -
 
 # Construit et relance le conteneur sur le commit courant ; vrai si /api/health rend ce commit.
 deploy() {
+  # /api/health rend le commit complet, lu dans .git a la construction de l'image (deploy/Dockerfile).
   local commit
-  commit=$(git rev-parse --short=12 HEAD)
-  if ! (cd "$SRC/deploy" && REVIZATOR_COMMIT="$commit" docker compose up -d --build --remove-orphans); then
-    log "Construction ou demarrage en echec ($commit)."
+  commit=$(git rev-parse HEAD)
+  if ! (cd "$SRC/deploy" && docker compose up -d --build --remove-orphans); then
+    log "Construction ou demarrage en echec (${commit:0:12})."
     return 1
   fi
 
@@ -105,14 +106,14 @@ deploy() {
   while [ "$waited" -lt "$HEALTH_WAIT" ]; do
     body=$(curl -fsS --max-time 5 "$HEALTH_URL" 2>/dev/null || true)
     if printf '%s' "$body" | grep -q "\"commit\":\"$commit\""; then
-      log "Serveur en ligne sur $commit : $body"
+      log "Serveur en ligne sur ${commit:0:12} : $body"
       return 0
     fi
     sleep 5
     waited=$((waited + 5))
   done
 
-  log "Le serveur ne repond pas sur $commit apres ${HEALTH_WAIT} s (dernier /api/health : ${body:-rien})."
+  log "Le serveur ne repond pas sur ${commit:0:12} apres ${HEALTH_WAIT} s (dernier /api/health : ${body:-rien})."
   return 1
 }
 

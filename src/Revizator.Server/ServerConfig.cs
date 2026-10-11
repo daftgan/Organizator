@@ -9,22 +9,18 @@ public sealed class ServerConfig
     public static readonly string Version =
         typeof(ServerConfig).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
 
-    /// <summary>
-    /// Commit des sources de l'image (<c>REVIZATOR_COMMIT</c>, pose par deploy/auto-update.sh a la
-    /// construction) ; vide pour une image construite autrement (Deploy a la main dans Komodo).
-    /// </summary>
-    public static readonly string Commit =
-        new string((Environment.GetEnvironmentVariable("REVIZATOR_COMMIT") ?? "").Where(char.IsAsciiLetterOrDigit).Take(40).ToArray());
+    /// <summary>Le deploiement en cours : commit et heure de construction de l'image, heure de demarrage.</summary>
+    public static readonly BuildInfo Build = BuildInfo.Load(Path.Combine(AppContext.BaseDirectory, "build-info.json"));
 
     /// <summary>
-    /// Empreinte des fichiers de la page (<see cref="ComputeBuild"/>) : change a chaque mise a jour de la page,
+    /// Empreinte des fichiers de la page (<see cref="ComputePageHash"/>) : change a chaque mise a jour de la page,
     /// meme sans changement de <see cref="Version"/>. Le service worker du telephone s'enregistre sous ce
     /// numero : une page modifiee installe un nouveau cache, l'ancien est supprime.
     /// </summary>
-    public static string Build { get; private set; } = "";
+    public static string PageHash { get; private set; } = "";
 
-    /// <summary>Calcule <see cref="Build"/> : SHA-256 des chemins et contenus de <paramref name="wwwRoot"/>, 12 caracteres.</summary>
-    public static void ComputeBuild(string wwwRoot)
+    /// <summary>Calcule <see cref="PageHash"/> : SHA-256 des chemins et contenus de <paramref name="wwwRoot"/>, 12 caracteres.</summary>
+    public static void ComputePageHash(string wwwRoot)
     {
         try
         {
@@ -38,11 +34,11 @@ public sealed class ServerConfig
                 sha.AppendData(File.ReadAllBytes(Path.Combine(wwwRoot, file)));
             }
 
-            Build = Convert.ToHexString(sha.GetHashAndReset())[..12].ToLowerInvariant();
+            PageHash = Convert.ToHexString(sha.GetHashAndReset())[..12].ToLowerInvariant();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Build = "";
+            PageHash = "";
         }
     }
 
@@ -142,5 +138,32 @@ public sealed class ServerConfig
             ReleasesRepo = Read("REVIZATOR_RELEASES_REPO", "daftgan/Organizator") is var repo && repo.Equals("none", StringComparison.OrdinalIgnoreCase) ? "" : repo,
             GitHubToken = Read("REVIZATOR_GITHUB_TOKEN", ""),
         };
+    }
+}
+
+/// <summary>
+/// Ce qui identifie un deploiement, pour les Reglages et <c>/api/health</c> : le commit construit et
+/// l'heure de construction (ecrits par deploy/Dockerfile dans <c>build-info.json</c>, a cote de la DLL),
+/// et l'heure de demarrage du serveur. Hors image Docker, le fichier manque : commit et construction vides.
+/// </summary>
+public sealed record BuildInfo(string Commit, DateTimeOffset? BuiltAt, DateTimeOffset StartedAt)
+{
+    public static BuildInfo Load(string path)
+    {
+        var started = DateTimeOffset.UtcNow;
+        try
+        {
+            if (!File.Exists(path)) return new BuildInfo("", null, started);
+            var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path));
+            var commit = node?["commit"]?.GetValue<string>() ?? "";
+            if (!System.Text.RegularExpressions.Regex.IsMatch(commit, "^[0-9a-f]{7,64}$")) commit = "";
+            DateTimeOffset? built = DateTimeOffset.TryParse(node?["builtAt"]?.GetValue<string>(), System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal, out var at) ? at : null;
+            return new BuildInfo(commit, built, started);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException)
+        {
+            return new BuildInfo("", null, started);
+        }
     }
 }

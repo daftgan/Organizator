@@ -279,9 +279,8 @@ static async Task<int> ServeAsync(ServerConfig config)
     Directory.CreateDirectory(config.DataDir);
     var log = new HostLog(config.DataDir);
     log.Mirror = line => Console.WriteLine(line);
-    ServerConfig.ComputeBuild(config.WwwRoot);
-    log.Info($"Revizator serveur {ServerConfig.Version} (page {ServerConfig.Build}"
-        + (ServerConfig.Commit.Length > 0 ? ", commit " + ServerConfig.Commit : "") + $") : donnees {config.DataDir}, page {config.WwwRoot}, port {config.Port}");
+    ServerConfig.ComputePageHash(config.WwwRoot);
+    log.Info($"Revizator serveur {ServerConfig.Version}{(ServerConfig.Build.Commit.Length > 0 ? " (" + ServerConfig.Build.Commit[..7] + ")" : "")}, empreinte de la page {ServerConfig.PageHash} : donnees {config.DataDir}, page {config.WwwRoot}, port {config.Port}");
     log.Info("Proxys de confiance (X-Forwarded-*) : "
         + (config.TrustedProxies.Count == 0 ? "aucun" : string.Join(", ", config.TrustedProxies)));
 

@@ -9,7 +9,7 @@
      configureRemote({ url, token })  serveur Révizator d'Organizator (cas 3 ci-dessous) ; url vide : Révizator coupé
      needsServer() -> bool             vrai dans Organizator tant qu'aucun serveur Révizator n'est réglé
      remote() -> { url, state } | null ; connection() -> état de la liaison ou null
-     testRemote({ url, token }) -> Promise<{ state: 'online'|'unreachable'|'refused'|'invalid', version, error }>
+     testRemote({ url, token }) -> Promise<{ state: 'online'|'unreachable'|'refused'|'invalid', version, commit, builtAt, startedAt, error }>
      loginRemote({ url, login, password }) -> Promise<{ state: 'online'|'refused'|'unreachable'|'invalid', token, login, error }>
      logoutRemote({ url, token }) -> Promise (la session est fermée sur le serveur ; jamais d'échec)
      pairRemote({ url, token }) -> Promise<{ state: 'online'|'refused'|'unreachable'|'invalid', code, link, svg, expiresIn, error }>
@@ -395,7 +395,7 @@
           done = true;
           clearTimeout(timer);
           if (ws) { try { ws.close(); } catch (e) { /* déjà fermé */ } }
-          resolve({ state: state, version: version, error: error || '' });
+          resolve({ state: state, version: version, commit: (h && h.commit) || '', builtAt: (h && h.builtAt) || '', startedAt: (h && h.startedAt) || '', error: error || '' });
         };
         timer = setTimeout(function () { finish('unreachable', 'Le WebSocket ne répond pas : le proxy le laisse-t-il passer ?'); }, 8000);
         try { ws = new WebSocket(url.replace(/^http/, 'ws') + '/api/ws?token=' + encodeURIComponent(token)); } catch (e) { finish('unreachable', e.message); return; }

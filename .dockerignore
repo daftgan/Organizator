@@ -1,5 +1,10 @@
 # Contexte de construction de deploy/Dockerfile (racine du depot) : seul src/ sert a l'image.
-.git
+# .git sans ses objets : HEAD et les refs donnent le commit construit (deploy/Dockerfile, build-info.json).
+.git/objects
+.git/lfs
+.git/logs
+.git/index
+.git/hooks
 .vs
 .vscode
 **/bin
