@@ -28,6 +28,12 @@ public static class AudioDecoder
     /// <summary>Decode un fichier ; message lisible si Windows ne sait pas le lire.</summary>
     public static float[] FromFile(string path, CancellationToken ct)
     {
+        // Hors Windows (serveur Revizator), pas de Media Foundation : ffmpeg fait le meme travail.
+        if (!OperatingSystem.IsWindows())
+        {
+            return FromFileWithFfmpeg(path, ct);
+        }
+
         WaveStream reader;
         try
         {
@@ -42,6 +48,74 @@ public static class AudioDecoder
         using (reader)
         {
             return Read(reader, ct);
+        }
+    }
+
+    /// <summary>
+    /// <c>ffmpeg</c> (dans le PATH) decode et reechantillonne : flottants 32 bits, 16 kHz, mono, sur sa sortie.
+    /// </summary>
+    private static float[] FromFileWithFfmpeg(string path, CancellationToken ct)
+    {
+        var info = new System.Diagnostics.ProcessStartInfo("ffmpeg")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        foreach (var argument in new[] { "-nostdin", "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", SampleRate.ToString(System.Globalization.CultureInfo.InvariantCulture), "-f", "f32le", "-" })
+        {
+            info.ArgumentList.Add(argument);
+        }
+
+        System.Diagnostics.Process process;
+        try
+        {
+            process = System.Diagnostics.Process.Start(info) ?? throw new InvalidOperationException("processus absent");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException($"ffmpeg est introuvable : « {Path.GetFileName(path)} » ne peut pas être décodé ({ex.Message.Trim()}).");
+        }
+
+        using (process)
+        using (ct.Register(() => { try { process.Kill(); } catch (InvalidOperationException) { } }))
+        {
+            var error = process.StandardError.ReadToEndAsync();
+            var output = new List<float>(1 << 20);
+            var limit = (long)(MaxDuration.TotalSeconds * SampleRate);
+            var buffer = new byte[1 << 16];
+            var pending = 0;
+            int read;
+            var stream = process.StandardOutput.BaseStream;
+            while ((read = stream.Read(buffer, pending, buffer.Length - pending)) > 0)
+            {
+                ct.ThrowIfCancellationRequested();
+                var total = pending + read;
+                var whole = total - total % 4;
+                for (var i = 0; i < whole; i += 4)
+                {
+                    output.Add(BitConverter.ToSingle(buffer, i));
+                }
+
+                pending = total - whole;
+                Array.Copy(buffer, whole, buffer, 0, pending);
+                if (output.Count > limit)
+                {
+                    process.Kill();
+                    throw new InvalidOperationException($"Enregistrement trop long : {MaxDuration.TotalHours:0} h au plus.");
+                }
+            }
+
+            process.WaitForExit();
+            ct.ThrowIfCancellationRequested();
+            if (process.ExitCode != 0 || output.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    $"ffmpeg ne sait pas lire « {Path.GetFileName(path)} » ({error.Result.Trim()}). Convertissez-le en .mp3 ou .wav.");
+            }
+
+            return output.ToArray();
         }
     }
 

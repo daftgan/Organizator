@@ -760,7 +760,10 @@ public sealed class WhisperTranscriber
                 }
 
                 _resolved = true;
-                var module = GetModuleHandleW("whisper.dll");
+                // Hors Windows (serveur Revizator) : la bibliotheque chargee par Whisper.net, retrouvee par son chemin.
+                var module = OperatingSystem.IsWindows()
+                    ? GetModuleHandleW("whisper.dll")
+                    : NativeLibrary.TryLoad(Path.Combine(AppContext.BaseDirectory, "runtimes", "linux-x64", "libwhisper.so"), out var loaded) ? loaded : IntPtr.Zero;
                 if (module == IntPtr.Zero)
                 {
                     return null;
@@ -863,6 +866,15 @@ public sealed class WhisperTranscriber
     {
         if (_nativeReady)
         {
+            return;
+        }
+
+        // Hors Windows (serveur Revizator) : les bibliotheques sont livrees a cote de l'executable, sous
+        // runtimes/linux-x64/, la ou Whisper.net les cherche de lui-meme.
+        if (!OperatingSystem.IsWindows())
+        {
+            RuntimeOptions.RuntimeLibraryOrder = [RuntimeLibrary.Cpu];
+            _nativeReady = true;
             return;
         }
 

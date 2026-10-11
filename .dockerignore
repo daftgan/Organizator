@@ -1,0 +1,13 @@
+# Contexte de construction de deploy/Dockerfile (racine du depot) : seul src/ sert a l'image.
+.git
+.vs
+.vscode
+**/bin
+**/obj
+**/node_modules
+*.user
+Mockup
+docs
+tools
+publish.ps1
+deploy/.env

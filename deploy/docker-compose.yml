@@ -1,0 +1,43 @@
+# Revizator serveur : stack Komodo (ou « docker compose up -d --build » depuis ce dossier).
+# Voir deploy/README.md. Les reglages viennent de .env (modele : .env.example) ou de l'onglet
+# « Environment » de la stack Komodo, que Komodo ecrit dans .env a cote de ce fichier (lisible par tous :
+# rien de secret). Le jeton de Claude Code, lui, est dans /opt/revizator/secrets.env (0600, hors du depot
+# et hors de ce que Komodo reecrit), lu par env_file ci-dessous.
+name: revizator
+
+services:
+  revizator:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        # stable, latest ou un numero (2.1.30) : change-le pour forcer une nouvelle version de Claude Code.
+        CLAUDE_CODE_VERSION: ${REVIZATOR_CLAUDE_VERSION:-stable}
+    image: revizator-server:local
+    # Image construite ici, jamais tiree d'un registre : « up » (Deploy dans Komodo) la reconstruit depuis
+    # les sources (couches en cache : quelques secondes quand rien n'a change).
+    pull_policy: build
+    container_name: revizator
+    restart: unless-stopped
+    # tini en PID 1 : recolte les processus orphelins de claude.
+    init: true
+    ports:
+      - "8080:8080"
+    environment:
+      REVIZATOR_PUBLIC_URL: ${REVIZATOR_PUBLIC_URL:-https://revizator.daft-lab.fr}
+      REVIZATOR_ALLOWED_ORIGINS: ${REVIZATOR_ALLOWED_ORIGINS:-https://app.organizator}
+      REVIZATOR_TRUSTED_PROXIES: ${REVIZATOR_TRUSTED_PROXIES:-private}
+      TZ: ${TZ:-Europe/Paris}
+    # CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-… sur une seule ligne, sans guillemets ni « # » (chmod 600).
+    # Absent : le serveur demarre quand meme, et le dit dans ses journaux (les generations echoueront).
+    env_file:
+      - path: /opt/revizator/secrets.env
+        required: false
+    volumes:
+      # Proprietaire 1654:1654 (utilisateur « app » de l'image) : chown -R 1654:1654 /opt/revizator/data
+      - /opt/revizator/data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

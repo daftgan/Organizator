@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Organizator.Services;
@@ -118,10 +119,27 @@ public sealed class AppSettings
     /// <summary>Conversation vocale : quand couper la parole a l'avatar (words = quand on dit quelques mots, voice = des qu'on parle, off = jamais).</summary>
     [JsonPropertyName("voiceBargeIn")] public string VoiceBargeIn { get; set; } = "words";
 
+    /// <summary>Serveur Revizator (https://revizator.exemple.fr) : l'onglet Revizator y lit et y ecrit ses donnees ; vide = tout reste sur ce PC.</summary>
+    [JsonPropertyName("revizatorServerUrl")] public string RevizatorServerUrl { get; set; } = "";
+
+    /// <summary>Jeton de session du serveur Revizator (rendu par la connexion identifiant + mot de passe), transmis dans l'adresse du WebSocket et des medias.</summary>
+    [JsonPropertyName("revizatorServerToken")] public string RevizatorServerToken { get; set; } = "";
+
+    /// <summary>Identifiant du compte connecte au serveur Revizator (affichage seulement ; le mot de passe n'est jamais garde).</summary>
+    [JsonPropertyName("revizatorServerLogin")] public string RevizatorServerLogin { get; set; } = "";
+
     [JsonPropertyName("window")] public WindowPlacement? Window { get; set; }
+
+    /// <summary>
+    /// Reglages que cette version ne connait pas (ecrits par une version plus recente, ou plus ancienne) :
+    /// gardes tels quels et reecrits, pour qu'ouvrir une autre version d'Organizator ne les efface pas
+    /// (par exemple la connexion au serveur Revizator).
+    /// </summary>
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Unknown { get; set; }
 
     public AppSettings Clone() => new()
     {
+        Unknown = Unknown is null ? null : new Dictionary<string, JsonElement>(Unknown),
         TopCount = TopCount,
         ShowBands = ShowBands,
         Compact = Compact,
@@ -159,6 +177,9 @@ public sealed class AppSettings
         VoiceWhisperModel = VoiceWhisperModel,
         VoiceSensitivity = VoiceSensitivity,
         VoiceBargeIn = VoiceBargeIn,
+        RevizatorServerUrl = RevizatorServerUrl,
+        RevizatorServerToken = RevizatorServerToken,
+        RevizatorServerLogin = RevizatorServerLogin,
         Window = Window is null
             ? null
             : new WindowPlacement
@@ -239,5 +260,46 @@ public sealed class AppSettings
             : "base";
         VoiceSensitivity = Math.Clamp(VoiceSensitivity, 0, 100);
         VoiceBargeIn = VoiceBargeIn is "voice" or "off" ? VoiceBargeIn : "words";
+
+        RevizatorServerUrl = SanitizeServerUrl(RevizatorServerUrl);
+        RevizatorServerToken = (RevizatorServerToken ?? "").Trim();
+        // Jeton du serveur : base64url (43 caracteres) ; autre chose ne passerait pas dans une URL.
+        if (RevizatorServerToken.Length > 200 || RevizatorServerToken.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '-' or '_')))
+        {
+            RevizatorServerToken = "";
+        }
+
+        RevizatorServerLogin = (RevizatorServerLogin ?? "").Trim();
+        if (RevizatorServerLogin.Length > 40 || RevizatorServerLogin.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')))
+        {
+            RevizatorServerLogin = "";
+        }
+    }
+
+    /// <summary>
+    /// Adresse du serveur Revizator : http(s) seulement, sans chemin, requete ni barre finale ;
+    /// sans schema, https est suppose. Illisible : vide (Revizator reste local).
+    /// </summary>
+    public static string SanitizeServerUrl(string? url)
+    {
+        var raw = (url ?? "").Trim().TrimEnd('/');
+        if (raw.Length == 0 || raw.Length > 300)
+        {
+            return "";
+        }
+
+        if (!raw.Contains("://", StringComparison.Ordinal))
+        {
+            raw = "https://" + raw;
+        }
+
+        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp)
+            || string.IsNullOrEmpty(uri.Host) || !string.IsNullOrEmpty(uri.UserInfo))
+        {
+            return "";
+        }
+
+        return uri.GetLeftPart(UriPartial.Authority);
     }
 }

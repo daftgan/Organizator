@@ -1,9 +1,13 @@
-
+﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Organizator", "src\Organizator\Organizator.csproj", "{4C2B9E31-7A5D-4F18-9C36-1E8D0A7B5C42}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{A4907EEE-225B-425A-98F8-9166792451E1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Revizator.Server", "src\Revizator.Server\Revizator.Server.csproj", "{0CB9E62F-BAFC-4059-BE51-7763685C1484}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -15,11 +19,18 @@ Global
 		{4C2B9E31-7A5D-4F18-9C36-1E8D0A7B5C42}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4C2B9E31-7A5D-4F18-9C36-1E8D0A7B5C42}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4C2B9E31-7A5D-4F18-9C36-1E8D0A7B5C42}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0CB9E62F-BAFC-4059-BE51-7763685C1484}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0CB9E62F-BAFC-4059-BE51-7763685C1484}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0CB9E62F-BAFC-4059-BE51-7763685C1484}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0CB9E62F-BAFC-4059-BE51-7763685C1484}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {8F1D6A44-2C90-4B77-B3E5-9D4A6F2E1B08}
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{0CB9E62F-BAFC-4059-BE51-7763685C1484} = {A4907EEE-225B-425A-98F8-9166792451E1}
 	EndGlobalSection
 EndGlobal

@@ -16,3 +16,6 @@ packages/
 
 # Divers
 *.log
+
+# Secrets du deploiement du serveur Revizator (jeton de Claude Code)
+deploy/.env

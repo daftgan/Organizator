@@ -714,7 +714,7 @@
       'Distinct de celui de la dictée (' + esc(s.whisperModel || 'small') + ') : ici, chaque phrase doit être transcrite en moins d’une seconde.', 'vc-whisper'));
 
     h.push(fieldHtml('Transcription en direct', asrModelsHtml(),
-      'Un seul modèle pour l’anglais et le français (' + (c.language === 'en' ? 'anglais' : 'français') + ' pour ce sujet) : votre phrase s’écrit pendant que vous parlez et part dès que vous vous taisez. Tout reste sur ce poste.'));
+      'Un seul modèle pour l’anglais et le français (' + (c.language === 'en' ? 'anglais' : 'français') + ' pour ce sujet) : votre phrase s’écrit pendant que vous parlez et part dès que vous vous taisez. ' + (bridge.mode === 'server' || (bridge.remote && bridge.remote()) ? 'Tout se passe sur le serveur Révizator.' : 'Tout reste sur ce poste.')));
 
     h.push('<div class="vc-field"><div class="vc-label" id="vc-barge-l">Couper la parole</div>'
       + '<div class="vc-seg" role="radiogroup" aria-labelledby="vc-barge-l">' + BARGE.map(function (b) {

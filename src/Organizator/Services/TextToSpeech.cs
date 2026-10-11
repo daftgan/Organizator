@@ -83,7 +83,7 @@ public sealed class TextToSpeech
     private const string ModelBase = "https://huggingface.co/csukuangfj/kokoro-multi-lang-v1_0/resolve/" + ModelRevision + "/";
 
     // Le runtime (paquet NuGet win-x64, deux DLL controlees) est telecharge et charge par SherpaRuntime.
-    private const long RuntimeSize = SherpaRuntime.DownloadSize;
+    private static readonly long RuntimeSize = SherpaRuntime.DownloadSize;
 
     private sealed record Asset(string Path, long Size, string Sha256);
 

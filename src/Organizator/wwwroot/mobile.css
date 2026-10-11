@@ -1,0 +1,174 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Révizator sur téléphone (docs/REVIZATOR-SERVER.md § 5.3)
+   Chargé seulement par le serveur Révizator (injecté dans index.html) : l'hôte WPF ne le voit
+   jamais. Tout est sous media query : sur grand écran, la page servie par le serveur reste celle
+   du PC. Cible : 360 à 430 px de large, au doigt.
+   - en-tête d'une ligne, collé en haut : titre, semaine et niveau, réglages ;
+   - onglets de Révizator en bas d'écran (comme une application), masqués pendant une séance, une
+     série d'exercices, une révision de cartes, un bilan ou une conversation avec le tuteur : ces
+     vues ont leur propre bouton de retour et prennent tout l'écran ;
+   - cibles tactiles de 44 px, champs en 16 px (pas de zoom automatique d'iOS), encoches et
+     clavier virtuel pris en compte (100dvh, env(safe-area-inset-*)) ;
+   - traductions des mots : au toucher, dans une bulle posée en bas d'écran (pas de survol).
+   ═══════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 600px) {
+  :root {
+    --mb-gutter: 14px;
+    --mb-tabbar: 62px;
+    --mb-safe-b: env(safe-area-inset-bottom, 0px);
+    --mb-safe-t: env(safe-area-inset-top, 0px);
+    --mb-safe-l: env(safe-area-inset-left, 0px);
+    --mb-safe-r: env(safe-area-inset-right, 0px);
+  }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  body { -webkit-tap-highlight-color: transparent; overflow-x: hidden; }
+  .app { min-height: 100vh; min-height: 100dvh; }
+
+  /* ── En-tête : une ligne collée en haut ─────────────────────────────── */
+  .rz-only .shell { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto 1fr; align-items: stretch; }
+  .rz-only .app-header, .rz-only .filters {
+    grid-row: 1; position: sticky; top: 0; z-index: 30; background: var(--color-bg);
+    padding-top: calc(10px + var(--mb-safe-t)); padding-bottom: 8px;
+    box-shadow: 0 1px 0 color-mix(in srgb, var(--color-text) 7%, transparent);
+  }
+  .rz-only .app-header { grid-column: 1; padding-left: calc(var(--mb-gutter) + var(--mb-safe-l)); padding-right: 6px; align-items: center; flex-wrap: nowrap; gap: 8px; }
+  .rz-only .app-header .brand { flex-wrap: nowrap; }
+  .rz-only .app-header h1 { font-size: 25px; line-height: 1.1; white-space: nowrap; }
+  .rz-only .filters { grid-column: 2; padding-right: calc(var(--mb-gutter) + var(--mb-safe-r)); padding-left: 0; flex-wrap: nowrap; gap: 8px; }
+  .rz-only .page-bar { gap: 8px; }
+  .rz-only .filter-right { gap: 6px; min-width: 0; }
+  .rz-only .page-host { grid-column: 1 / -1; grid-row: 2; padding: 14px calc(var(--mb-gutter) + var(--mb-safe-r)) calc(var(--mb-tabbar) + 28px + var(--mb-safe-b)) calc(var(--mb-gutter) + var(--mb-safe-l)); }
+  .rz-only .list-wrap { display: none; }
+
+  .rz-only .icon-btn { width: 44px; height: 44px; }
+  .rz-bar-stats { margin-left: 0; gap: 6px; }
+  .rz-bar-stat { font-size: 12.5px; }
+  .rz-bar-job { height: 36px; max-width: 132px; padding: 0 10px; font-size: 12px; }
+
+  /* ── Onglets de Révizator en bas d'écran ────────────────────────────── */
+  .rz-only .rz-tabs {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; flex-wrap: nowrap; gap: 2px;
+    overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
+    padding: 5px calc(6px + var(--mb-safe-r)) calc(5px + var(--mb-safe-b)) calc(6px + var(--mb-safe-l));
+    background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+    border-top: 1px solid var(--color-divider); box-shadow: 0 -6px 18px rgba(60, 40, 20, 0.06);
+  }
+  .rz-only .rz-tabs::-webkit-scrollbar { display: none; }
+  .rz-only .rz-tab {
+    position: relative; flex: 1 0 52px; min-width: 0; height: 52px; padding: 5px 2px 4px; gap: 3px;
+    flex-direction: column; justify-content: center; border: 0; border-radius: 14px; box-shadow: none;
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.01em; color: var(--color-neutral-600);
+  }
+  .rz-only .rz-tab span:not(.rz-tab-badge) { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rz-only .rz-tab svg { width: 21px; height: 21px; }
+  .rz-only .rz-tab:hover { background: transparent; }
+  .rz-only .rz-tab.on { background: var(--color-accent-100); color: var(--color-accent-700); }
+  .rz-only .rz-tab-badge { position: absolute; top: 3px; left: calc(50% + 6px); min-width: 16px; height: 16px; font-size: 10px; }
+  .rz-only .rz-tab.is-session:not(.on)::after { position: absolute; top: 6px; right: calc(50% - 16px); }
+
+  /* Vues qui prennent tout l'écran : séance, série d'exercices, révision des cartes, bilan en
+     cours, conversation avec le tuteur. Elles ont leur bouton de retour. */
+  .rz-only .app:has(.rz-view-session, .rzx-play-head, .rzx-srs-end, .rzt-exam, .rzv-chathead) .rz-tabs { display: none; }
+  .rz-only .app:has(.rz-view-session, .rzx-play-head, .rzx-srs-end, .rzt-exam, .rzv-chathead) .page-host { padding-bottom: calc(24px + var(--mb-safe-b)); }
+
+  /* ── Cibles tactiles et champs ──────────────────────────────────────── */
+  .rz-only .btn { min-height: 44px; }
+  .rz-only .btn.btn-small, .rz-only .wm-btn { min-height: 36px; }
+  .rz-chip { min-height: 40px; padding-left: 14px; padding-right: 14px; }
+  .rz-only input.input, .rz-only select.input, .rz-only textarea.input,
+  .rz-only .rz input[type="text"], .rz-only .rz textarea, .rz-only .rz select { font-size: 16px; }
+  .rz-only input.input, .rz-only select.input { min-height: 44px; }
+  .rz-big { padding: 12px 20px; }
+
+  /* ── Briques du noyau ───────────────────────────────────────────────── */
+  .rz { gap: 14px; }
+  .rz-card { padding: 16px; border-radius: 18px; }
+  .rz-card-head { flex-wrap: wrap; row-gap: 4px; }
+  .rz-hello { font-size: 28px; }
+  .rz-section-title { font-size: 21px; }
+  .rz-grid2, .rz-grid3 { grid-template-columns: minmax(0, 1fr); }
+  .rz-wk-row, .rz-lv-row, .rz-lv-scale { grid-template-columns: 76px minmax(0, 1fr) 44px; }
+
+  /* Traductions des mots : au toucher (focus), dans une bulle en bas d'écran plutôt qu'au-dessus
+     du mot, où elle sortirait de l'écran près des bords. */
+  .rz-only .rzx-gloss-tip {
+    position: fixed; left: calc(var(--mb-gutter) + var(--mb-safe-l)); right: calc(var(--mb-gutter) + var(--mb-safe-r));
+    bottom: calc(var(--mb-tabbar) + 14px + var(--mb-safe-b)); top: auto; transform: none; width: auto; max-width: none;
+    z-index: 50; padding: 12px 16px; font-size: 15px; border-radius: 16px;
+  }
+  .rz-only .rzl-gl-pop {
+    position: fixed; left: calc(var(--mb-gutter) + var(--mb-safe-l)); right: calc(var(--mb-gutter) + var(--mb-safe-r));
+    top: auto; bottom: calc(92px + var(--mb-safe-b)); width: auto; max-width: none; z-index: 50; font-size: 15px;
+  }
+  .rz-only .rzl-x { width: 40px; height: 40px; }
+
+  /* Premier lancement : une colonne, le numéro de l'étape à côté du titre plutôt qu'en marge. */
+  .rz-onboard { padding: 18px 16px; }
+  .rz-onboard-grid { grid-template-columns: minmax(0, 1fr); }
+  .rz-ob-step { position: relative; display: block; padding: 14px; }
+  .rz-ob-n { position: absolute; top: 14px; left: 14px; }
+  .rz-ob-body > :first-child { padding-left: 42px; min-height: 30px; display: flex; align-items: center; }
+  .rz-ob-k { min-width: 0; flex-basis: 100%; }
+  .rz-onboard-foot .btn { width: 100%; justify-content: center; }
+
+  /* Série d'exercices : le retour au-dessus du titre. */
+  .rzx-play-head { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .rzx-play-card { padding: 18px 16px; }
+
+  /* Tuteur : le retour au-dessus du titre, la conversation sur toute la largeur. */
+  .rzv-chathead { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .rzv-chathead-t { min-width: 0; width: 100%; }
+  .rzv-thread { padding: 14px 10px 18px; }
+  .rzv-col { max-width: 92%; }
+  .rz-only .rzv-dock { padding: 12px 12px calc(12px + var(--mb-safe-b)); }
+
+  /* Liste des cartes : le recto et le verso sur toute la largeur, le type et les actions dessous. */
+  .rzx-crow { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; }
+  .rzx-crow > .rzx-cfront { grid-column: 1 / -1; }
+  .rzx-crow.is-head { display: none; }
+
+  /* ── Réglages : plein écran ─────────────────────────────────────────── */
+  .rz-only .dialog-backdrop { padding: 0; align-items: stretch; }
+  .rz-only .dialog-settings {
+    width: 100%; max-width: none; height: 100vh; height: 100dvh; max-height: none; border-radius: 0;
+    padding: calc(14px + var(--mb-safe-t)) calc(var(--mb-gutter) + var(--mb-safe-r)) calc(12px + var(--mb-safe-b)) calc(var(--mb-gutter) + var(--mb-safe-l));
+  }
+  .rz-only .dialog-settings .set-layout { flex: 1; min-height: 0; overflow: auto; }
+  .rz-only .set-tab { min-height: 44px; }
+  .rz-only .set-row { flex-wrap: wrap; }
+  .rz-only .set-row .set-label { flex: 1 1 200px; }
+  .rz-only .set-row .set-control { flex-wrap: wrap; max-width: 100%; }
+  .rz-only .set-field { flex-wrap: wrap; row-gap: 6px; }
+  .rz-only .set-field-control { flex-wrap: wrap; flex-basis: 100%; }
+  .rz-only .seg2 { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); width: 100%; border-radius: 14px; }
+  .rz-only .seg2 button { min-height: 44px; padding: 6px 4px; line-height: 1.2; white-space: normal; }
+  .rz-only .dialog-actions .btn { min-width: 120px; }
+
+  /* Messages passagers : au-dessus de la barre d'onglets, en bulle plutôt qu'en pilule sur plusieurs lignes. */
+  .rz-only .toast { bottom: calc(var(--mb-tabbar) + 18px + var(--mb-safe-b)); max-width: calc(100vw - 2 * var(--mb-gutter)); width: max-content; border-radius: 18px; }
+  /* Vues plein écran (pas de barre d'onglets) : la bulle des mots descend en bas. */
+  .rz-only .rzx-play-main .rzx-gloss-tip, .rz-only .rzx-play-side .rzx-gloss-tip { bottom: calc(16px + var(--mb-safe-b)); }
+
+  /* ── Progrès ────────────────────────────────────────────────────────── */
+  .rzp-start { display: block; line-height: 1.5; }
+  .rzp-start .btn { display: flex; width: 100%; justify-content: center; margin: 12px 0 0; }
+}
+
+/* Écrans tactiles sans survol, quelle que soit la largeur : la bulle de survol des mots du cours
+   ne s'affiche pas (le toucher ouvre la fiche du mot, qui dit déjà la traduction). */
+@media (hover: none) {
+  .rz-only .rzl-gl:hover .rzl-gl-tip { display: none; }
+  .rz-only .rzl-gl:hover:not(.is-open) { background: transparent; }
+}
+
+/* Au doigt, sans clavier : les aides de raccourcis clavier (Espace, Entrée, 1 à 4…) ne servent à
+   rien. Les lignes qui ne sont que des raccourcis disparaissent, les touches dans les boutons aussi. */
+@media (pointer: coarse) and (max-width: 600px) {
+  .rz-only .btn .rz-kbd, .rz-only .rzv-sc-top .rz-kbd,
+  .rz-only .rzt-keys, .rz-only .rzl-foot-keys, .rz-only .rzv-live-hint,
+  .rz-only .rzv-hint:not(.is-warn):has(.rz-kbd), .rz-only .rzl-under:has(.rz-kbd),
+  .rz-only .rzx-srs-foot > span:first-child, .rz-only .rzx-keys-hint { display: none; }
+  .rz-only .rzx-srs-foot { justify-content: flex-end; }
+}

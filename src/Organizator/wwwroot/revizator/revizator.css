@@ -276,3 +276,11 @@
 .rz-dl-line { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-accent-800); }
 .rz-set-voice { padding: 4px 0 8px; }
 .rz-set-help { font-size: 12.5px; color: var(--rz-ink-soft); margin: -2px 0 8px; line-height: 1.45; }
+
+/* Serveur Révizator : bandeau de liaison (discret, en tête de la page) et réglage. */
+.rz-conn { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 6px 12px; border-radius: 10px; font-size: 12.5px; line-height: 1.4; color: var(--rz-ink-soft); background: var(--color-neutral-100); border: 1px solid var(--rz-line); }
+.rz-conn-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--rz-bad); }
+.rz-load-actions { display: flex; gap: 8px; margin-top: 12px; }
+.rz-server-test { margin-top: 6px; }
+.rz-server-test.is-online strong { color: var(--rz-good); }
+.rz-server-test.is-unreachable strong, .rz-server-test.is-refused strong, .rz-server-test.is-invalid strong { color: var(--rz-bad); }
