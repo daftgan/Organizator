@@ -1,0 +1,96 @@
+# Organizator pour Windows : exe autonome (runtime .NET embarque) et installateur Inno Setup.
+#
+# - A chaque push ou pull request qui touche l'application : construction, et les deux fichiers en
+#   artefact du run (onglet Actions › le run › Artifacts).
+# - Sur un tag v* (git tag v1.2.0 && git push origin v1.2.0) : en plus, une Release GitHub avec
+#   Organizator-Setup-<version>.exe (a telecharger et lancer, sans droits d'administrateur) et
+#   l'exe portable.
+name: Organizator
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+    paths:
+      - 'src/Organizator/**'
+      - 'installer/**'
+      - '.github/workflows/organizator.yml'
+  pull_request:
+    paths:
+      - 'src/Organizator/**'
+      - 'installer/**'
+      - '.github/workflows/organizator.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: organizator-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          if ('${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -match '^v(\d+\.\d+\.\d+)(-.+)?$') {
+            $numeric = $Matches[1]
+            $version = '${{ github.ref_name }}'.Substring(1)
+          } else {
+            $numeric = '1.0.0'
+            $version = "1.0.0-ci.${{ github.run_number }}"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "numeric=$numeric" >> $env:GITHUB_OUTPUT
+
+      # Meme publication que publish.ps1 -SelfContained, par la CLI dotnet (MSBuild 18 n'est pas sur les runners).
+      - name: Publier l'exe autonome
+        shell: pwsh
+        run: |
+          dotnet publish src/Organizator/Organizator.csproj `
+            -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true `
+            -p:Version=${{ steps.version.outputs.version }} `
+            -p:FileVersion=${{ steps.version.outputs.numeric }}.0 -p:AssemblyVersion=${{ steps.version.outputs.numeric }}.0 `
+            -o publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem publish | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Construire l'installateur
+        shell: pwsh
+        run: |
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y | Out-Null
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc "/DAppVersion=${{ steps.version.outputs.version }}" "/DPublishDir=$PWD\publish" installer\Organizator.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item publish\Organizator.exe "publish\installer\Organizator-${{ steps.version.outputs.version }}-portable.exe"
+          Get-ChildItem publish\installer | Select-Object Name, Length | Format-Table -AutoSize
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Organizator-${{ steps.version.outputs.version }}
+          path: publish/installer/*.exe
+          if-no-files-found: error
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create '${{ github.ref_name }}' (Get-ChildItem publish\installer\*.exe).FullName `
+            --title 'Organizator ${{ steps.version.outputs.version }}' --generate-notes

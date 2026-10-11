@@ -317,18 +317,24 @@ passe sur l'entrée standard (`printf '%s\n' "$MDP" | docker exec -i revizator r
 
 ### Téléphone
 
-1. Ouvrir **https://revizator.daft-lab.fr** dans le navigateur du téléphone : la page de connexion
-   s'affiche.
-2. Saisir l'identifiant et le mot de passe, **Se connecter** → Révizator s'ouvre (session de 400 jours,
-   cookie `HttpOnly`).
-3. L'installer :
-   - **Android (Chrome)** : menu ⋮ › « Ajouter à l'écran d'accueil » / « Installer l'application » ;
-   - **iPhone (Safari)** : bouton Partager › « Sur l'écran d'accueil ».
+Le plus simple, depuis Organizator déjà connecté (§ PC ci-dessous) :
+
+1. Organizator › **Réglages › Révizator › Ajouter un téléphone** : un QR code s'affiche (valable
+   10 minutes, pour un seul appareil).
+2. Le scanner avec l'appareil photo du téléphone, ouvrir le lien, toucher **Connecter cet appareil** →
+   Révizator s'ouvre, connecté (session de 400 jours, cookie `HttpOnly`), sans identifiant ni mot de passe.
+3. Sur l'accueil, la carte **Installer Révizator** :
+   - **Android (Chrome)** : bouton **Installer l'application** (ou, à défaut, menu ⋮ › « Installer
+     l'application ») ;
+   - **iPhone (Safari)** : bouton Partager › « Sur l'écran d'accueil », comme indiqué sur la carte.
+
+Sans QR code : ouvrir **https://revizator.daft-lab.fr**, se connecter par identifiant et mot de passe, ou
+par **J'ai un code d'appairage** en tapant le code affiché sous le QR code.
 
 Ouvrir Révizator depuis l'icône : il démarre en plein écran, en ligne (pastille de connexion en haut).
 Si l'application installée affiche la page de connexion (iPhone : elle ne partage pas toujours les
-cookies de Safari), il suffit de **se connecter une fois de plus dans l'application** : la page de
-connexion fonctionne aussi depuis l'écran d'accueil.
+cookies de Safari), s'y connecter une fois de plus : **J'ai un code d'appairage** et un nouveau code
+d'Organizator, ou le mot de passe.
 
 Réglages › Révizator › **Compte** : l'identifiant connecté et **Se déconnecter** (ferme la session de
 ce téléphone seulement ; les autres appareils restent connectés).

@@ -12,6 +12,7 @@
      testRemote({ url, token }) -> Promise<{ state: 'online'|'unreachable'|'refused'|'invalid', version, error }>
      loginRemote({ url, login, password }) -> Promise<{ state: 'online'|'refused'|'unreachable'|'invalid', token, login, error }>
      logoutRemote({ url, token }) -> Promise (la session est fermée sur le serveur ; jamais d'échec)
+     pairRemote({ url, token }) -> Promise<{ state: 'online'|'refused'|'unreachable'|'invalid', code, link, svg, expiresIn, error }>
    Trois transports, décidés au chargement (docs/REVIZATOR-SERVER.md § 5.1) :
      1. WebView2 (window.chrome.webview) : postMessage vers l'hôte WPF ;
      2. page servie par le serveur Révizator (window.REVIZATOR_SERVER) : tout passe par son WebSocket ;
@@ -436,6 +437,25 @@
     if (!url || !token) return Promise.resolve();
     return fetch(url + '/api/logout', { method: 'POST', cache: 'no-store', credentials: 'omit', headers: { Authorization: 'Bearer ' + token } })
       .then(function () { /* fermée */ }, function () { /* serveur injoignable : le jeton est oublié quand même */ });
+  }
+
+  /* « Ajouter un téléphone » : un code d'appairage à usage unique pour le compte de cette session
+     (POST /api/pair), avec son QR code en SVG. Le téléphone qui l'ouvre est connecté sans mot de passe. */
+  function pairRemote(opts) {
+    var url = normServerUrl(opts && opts.url);
+    var token = String((opts && opts.token) || '').trim();
+    if (!url || !token) return Promise.resolve({ state: 'invalid', error: 'Connectez d’abord Organizator au serveur.' });
+    return fetch(url + '/api/pair', { method: 'POST', cache: 'no-store', credentials: 'omit', headers: { Authorization: 'Bearer ' + token } }).then(function (r) {
+      if (r.status === 404) return { state: 'refused', error: 'Ce serveur ne connaît pas encore l’appairage : mettez-le à jour.' };
+      if (r.status === 401) return { state: 'refused', error: 'Le serveur refuse cette session : déconnectez puis reconnectez Organizator.' };
+      if (r.status === 429) return { state: 'refused', error: 'Trop d’essais : réessayez dans une minute.' };
+      return r.json()['catch'](function () { return {}; }).then(function (b) {
+        if (r.ok && b && b.code && b.svg) return { state: 'online', code: String(b.code), link: String(b.link || ''), svg: String(b.svg), expiresIn: Number(b.expiresIn) || 600, error: '' };
+        return { state: 'refused', error: (b && b.error) || ('Réponse HTTP ' + r.status) };
+      });
+    }, function () {
+      return { state: 'unreachable', error: 'Pas de réponse : vérifiez l’adresse, le réseau et le certificat.' };
+    });
   }
 
   /* ── Shim navigateur ────────────────────────────────────────────────── */
@@ -1406,6 +1426,7 @@
     window.bridge.testRemote = testRemote;
     window.bridge.loginRemote = loginRemote;
     window.bridge.logoutRemote = logoutRemote;
+    window.bridge.pairRemote = pairRemote;
   }
   /* Hors WebView2 et hors serveur seulement : de quoi simuler les messages d’une page et pousser ses événements. */
   if (!wv && !SERVER) {

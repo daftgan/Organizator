@@ -54,6 +54,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- QR code d'appairage d'un telephone (POST /api/pair), dessine en SVG : aucune dependance native. -->
+    <PackageReference Include="QRCoder" Version="1.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Memes versions que l'hote WPF. -->
     <PackageReference Include="Whisper.net" Version="1.8.1" />
     <!-- Les cibles du paquet copieraient les natives de toutes les plateformes : seules celles de linux-x64
