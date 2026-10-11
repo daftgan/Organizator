@@ -13,6 +13,7 @@
      R.input(role, fn), R.change(role, fn)   saisie (data-role), rôle préfixé 'rz-'
      R.key(fn(e, el, role) → bool)            raccourcis (aucun dialogue ouvert)
      R.settingsSection(def)   def = { id, order, html() } — une section de l'onglet Révizator des Réglages
+     R.setField(label, html)  une ligne de réglage (libellé, contrôle), pour ces sections
      R.badge(fn)              pastille de l'onglet de page (ex. cartes à réviser)
      R.shim(type, fn(p, emit)), R.fixture(kind, fn(params) | doc | 'revizator/fixtures/x.json')   simulation hors WebView2
      R.on(name, fn) → off, R.emit(name, payload)
@@ -150,6 +151,7 @@
     spark: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path d="M19 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"></path></svg>',
     cards: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6.5" width="13" height="14" rx="2.5"></rect><path d="M8 3.5h10.5a2.5 2.5 0 0 1 2.5 2.5v11"></path></svg>',
     chart: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5h16"></path><path d="M6.5 15l4-4.5 3.5 3 5-6.5"></path></svg>',
+    trophy: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4.5h8v5a4 4 0 0 1-8 0z"></path><path d="M8 6.5H5.5a2.5 2.5 0 0 0 2.6 3.6M16 6.5h2.5a2.5 2.5 0 0 1-2.6 3.6"></path><path d="M12 13.5v3.5M8.5 19.5h7"></path></svg>',
     target: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><circle cx="12" cy="12" r="4.5"></circle><circle cx="12" cy="12" r="1" fill="currentColor"></circle></svg>',
     chat: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.5a2 2 0 0 1-2 2H8l-4.5 4v-14a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"></path><path d="M8 9.5h8M8 13h4.5"></path></svg>',
     pen: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l4.2-1 11-11a2.1 2.1 0 0 0-3-3l-11 11z"></path><path d="M14.5 6.5l3 3"></path></svg>',
@@ -306,6 +308,7 @@
   R.view = function (id, def) { if (id && def && typeof def.render === 'function') { def.id = id; VIEWS[id] = def; } };
   R.homeCard = function (def) { if (def && def.id && typeof def.html === 'function') { HOME_CARDS = HOME_CARDS.filter(function (c) { return c.id !== def.id; }); HOME_CARDS.push(def); } };
   R.settingsSection = function (def) { if (def && def.id && typeof def.html === 'function') SECTIONS.push(def); };
+  R.setField = function (label, control) { return A ? A.setFieldHtml(label, control) : control; };
   R.badge = function (fn) { BADGE = typeof fn === 'function' ? fn : null; };
   R.act = function (name, fn) { if (A) A.addAction(name, fn); else PENDING.act.push([name, fn]); };
   R.input = function (role, fn) { if (A) A.addInput(role, fn); else PENDING.input.push([role, fn]); };

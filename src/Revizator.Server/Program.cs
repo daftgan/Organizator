@@ -121,9 +121,41 @@ static int Command(ServerConfig config, string[] args)
             return 0;
         }
 
-        case "import" when args.Length == 2:
-            Importer.Run(args[1], config.DataDir, Console.Out);
+        case "import" when args.Length is 2 or 3:
+        {
+            // Sans compte nomme : le seul compte du serveur, s'il n'y en a qu'un (aucun : le premier qui sera cree).
+            var accounts = users.List();
+            string login;
+            if (args.Length == 3)
+            {
+                login = UserStore.CleanLogin(args[2]);
+                if (!accounts.Any(u => u.Login == login))
+                {
+                    Console.Error.WriteLine($"Aucun compte « {login} » : creez-le d'abord (revizator-server user set {login}).");
+                    return 1;
+                }
+            }
+            else if (accounts.Count == 0)
+            {
+                // Pas encore de compte : a la racine, comme avant ; le premier compte cree les reprendra.
+                Importer.Run(args[1], config.DataDir, Console.Out);
+                Console.WriteLine("Aucun compte encore : ces donnees iront au premier compte cree (revizator-server user set <identifiant>).");
+                return 0;
+            }
+            else if (accounts.Count == 1)
+            {
+                login = accounts[0].Login;
+            }
+            else
+            {
+                Console.Error.WriteLine("Plusieurs comptes : precisez lequel recoit les donnees (revizator-server import <dossier> <identifiant>).");
+                return 1;
+            }
+
+            Importer.Run(args[1], UserSpaces.DirOf(config.DataDir, login), Console.Out);
+            Console.WriteLine($"Donnees importees dans l'espace de « {login} ».");
             return 0;
+        }
 
         default:
             Console.Error.WriteLine("""
@@ -136,8 +168,11 @@ static int Command(ServerConfig config, string[] args)
                   revizator-server user remove <identif.>   supprime un compte et ferme ses sessions
                   revizator-server session list             liste les sessions ouvertes (compte, appareil, date)
                   revizator-server session revoke <nom>     ferme une session (son nom, ou son debut) ; --all : toutes
-                  revizator-server import <dossier>         importe learning.json et learning/ depuis une copie
-                                                            du dossier %LOCALAPPDATA%\Organizator\ du PC
+                  revizator-server import <dossier> [<identifiant>]
+                                                            importe learning.json et learning/ depuis une copie
+                                                            du dossier %LOCALAPPDATA%\Organizator\ du PC, dans
+                                                            l'espace du compte (facultatif s'il n'y en a qu'un ;
+                                                            sans compte, pour le premier qui sera cree)
                 Variables : REVIZATOR_DATA, REVIZATOR_PORT, REVIZATOR_PUBLIC_URL, REVIZATOR_ALLOWED_ORIGINS,
                             REVIZATOR_TRUSTED_PROXIES, REVIZATOR_CLAUDE, CLAUDE_CODE_OAUTH_TOKEN
                             (voir docs/REVIZATOR-SERVER.md).
@@ -244,9 +279,9 @@ static async Task<int> ServeAsync(ServerConfig config)
     });
 
     var app = builder.Build();
-    using var bridge = new ServerBridge(config, log);
-    var hub = new WsHub(bridge, log, app.Lifetime.ApplicationStopping);
     var users = new UserStore(config.DataDir);
+    using var bridge = new ServerBridge(config, log, users.List);
+    var hub = new WsHub(bridge, log, app.Lifetime.ApplicationStopping);
     using var releases = new OrganizatorReleases(config.DataDir, config.ReleasesRepo, config.GitHubToken, log);
     releases.Start();
     var routes = new HttpRoutes(config, new TokenStore(config.DataDir), users, new FailureLimiter(config.TrustedProxies), new PairingCodes(), releases, bridge, hub, log);

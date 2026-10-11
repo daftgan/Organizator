@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 namespace Revizator.Server;
 
 /// <summary>
-/// <c>revizator-server import &lt;dossier&gt;</c> : reprend <c>learning.json</c> et <c>learning/</c> d'une copie
+/// <c>revizator-server import &lt;dossier&gt; [&lt;compte&gt;]</c> : reprend <c>learning.json</c> et <c>learning/</c> d'une copie
 /// du dossier <c>%LOCALAPPDATA%\Organizator\</c> du PC. L'existant est d'abord deplace sous
 /// <c>import-backup-&lt;date&gt;/</c> ; rien d'autre du PC (taches, reglages, sessions) n'est lu.
 /// A lancer serveur arrete (ou sans page ouverte) : une page ouverte reecrirait son ancien etat.

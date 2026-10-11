@@ -1,0 +1,101 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Révizator — classement (board.js, préfixe .rzb-)
+   Quatre couleurs de joueurs, vérifiées ensemble (toutes les paires, daltonisme compris, sur la carte
+   #fffaf1) : bleu lecture, terracotta, prune, vert d'eau ; vous êtes toujours le premier. Les joueurs
+   suivants sont gris ; tous sont nommés en bout de courbe et dans la légende (jamais la couleur seule).
+   ═══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --rzb-c0: #286cab; --rzb-c1: #d96a42; --rzb-c2: #8b4486; --rzb-c3: #1f9a78;
+  --rzb-cx: var(--color-neutral-400);
+  --rzb-gold: #c9971c; --rzb-silver: #9aa3ad; --rzb-bronze: #b4703f;
+}
+
+.rzb-sw { display: inline-block; width: 12px; height: 12px; border-radius: 4px; flex: none; }
+.rzb-sw.rzb-c0 { background: var(--rzb-c0); } .rzb-sw.rzb-c1 { background: var(--rzb-c1); }
+.rzb-sw.rzb-c2 { background: var(--rzb-c2); } .rzb-sw.rzb-c3 { background: var(--rzb-c3); }
+.rzb-sw.rzb-cx { background: var(--rzb-cx); }
+.rzb-me { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 700;
+  background: var(--color-accent-100); color: var(--color-accent-700); vertical-align: 1px; }
+
+.rzb-warn { background: var(--rz-bad-bg); border-color: color-mix(in srgb, var(--rz-bad) 30%, transparent); }
+.rzb-lead { background: var(--rz-good-bg); border-color: color-mix(in srgb, var(--rz-good) 30%, transparent); }
+.rzb-chase { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rzb-chase > svg { flex: none; }
+.rzb-chase .btn { margin-left: auto; }
+.rzb-wait { display: flex; align-items: center; gap: 10px; padding: 24px; color: var(--rz-ink-soft); }
+.rzb-refresh { margin-left: 4px; }
+
+/* ── Podium ── */
+.rzb-steps { display: flex; justify-content: center; align-items: flex-end; gap: 12px; padding-top: 4px; }
+.rzb-step { flex: 0 1 180px; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+.rzb-step-name { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 14px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rzb-step-pts { font-size: 12.5px; color: var(--rz-ink-soft); font-variant-numeric: tabular-nums; }
+.rzb-step-block { width: 100%; border-radius: 10px 10px 4px 4px; display: flex; align-items: flex-start; justify-content: center; padding-top: 8px;
+  font-family: var(--font-display, inherit); font-size: 22px; font-weight: 700; color: #fffaf1; }
+.rzb-step1 .rzb-step-block { height: 84px; background: var(--rzb-gold); }
+.rzb-step2 .rzb-step-block { height: 60px; background: var(--rzb-silver); }
+.rzb-step3 .rzb-step-block { height: 44px; background: var(--rzb-bronze); }
+.rzb-step.is-me .rzb-step-block { box-shadow: 0 0 0 3px var(--color-accent-200); }
+
+/* ── Tableau ── */
+.rzb-table-wrap { overflow-x: auto; }
+.rzb-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.rzb-table th, .rzb-table td { padding: 8px 10px; text-align: left; border-top: 1px solid var(--rz-line); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rzb-table thead th { border-top: 0; font-size: 12px; font-weight: 600; color: var(--rz-ink-soft); }
+.rzb-table .is-num { text-align: right; }
+.rzb-table tr.is-me { background: color-mix(in srgb, var(--color-accent) 7%, transparent); }
+.rzb-table tr.is-me .rzb-name { font-weight: 700; }
+.rzb-name { font-weight: 600; }
+.rzb-name, .rzb-level { display: table-cell; }
+.rzb-name > span { margin-left: 8px; }
+.rzb-pts { font-weight: 700; }
+.rzb-col-rank { width: 64px; }
+.rzb-rank, .rzb-medal { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; font-weight: 700; font-size: 12.5px; }
+.rzb-rank { color: var(--rz-ink-soft); }
+.rzb-medal { color: #fffaf1; }
+.rzb-m1 { background: var(--rzb-gold); } .rzb-m2 { background: var(--rzb-silver); } .rzb-m3 { background: var(--rzb-bronze); }
+.rzb-move { margin-left: 4px; font-size: 11px; color: var(--rz-ink-soft); }
+.rzb-move.is-up, .rzb-delta.is-up { color: var(--rz-good); }
+.rzb-move.is-down, .rzb-delta.is-down { color: var(--rz-bad); }
+.rzb-delta { margin-left: 4px; font-weight: 700; }
+.rzb-toeic { margin-left: 8px; font-size: 12px; color: var(--rz-ink-soft); }
+
+/* ── Courbes ── */
+.rzb-legend { margin-bottom: 2px; }
+.rzb-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.rzb-line.is-me { stroke-width: 3; }
+.rzb-dot { stroke: var(--color-surface); stroke-width: 2; }
+.rzb-line.rzb-c0 { stroke: var(--rzb-c0); } .rzb-dot.rzb-c0 { fill: var(--rzb-c0); }
+.rzb-line.rzb-c1 { stroke: var(--rzb-c1); } .rzb-dot.rzb-c1 { fill: var(--rzb-c1); }
+.rzb-line.rzb-c2 { stroke: var(--rzb-c2); } .rzb-dot.rzb-c2 { fill: var(--rzb-c2); }
+.rzb-line.rzb-c3 { stroke: var(--rzb-c3); } .rzb-dot.rzb-c3 { fill: var(--rzb-c3); }
+.rzb-line.rzb-cx { stroke: var(--rzb-cx); stroke-width: 1.5; } .rzb-dot.rzb-cx { fill: var(--rzb-cx); }
+.rzb-end { font-size: 12.5px; fill: var(--color-text); }
+.rzb-end.is-me { font-weight: 700; }
+
+/* ── Carte de l'accueil ── */
+.rzb-home .rz-card-title { display: inline-flex; align-items: center; gap: 6px; }
+.rzb-home-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.rzb-home-list li { display: flex; align-items: center; gap: 8px; font-size: 13.5px; padding: 4px 6px; border-radius: 8px; }
+.rzb-home-list li.is-me { background: color-mix(in srgb, var(--color-accent) 8%, transparent); font-weight: 600; }
+.rzb-home-rank { width: 18px; text-align: right; color: var(--rz-ink-soft); font-variant-numeric: tabular-nums; }
+.rzb-home-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rzb-home-list b { font-variant-numeric: tabular-nums; }
+
+@media (max-width: 600px) {
+  .rzb-steps { gap: 6px; }
+  .rzb-step-name { font-size: 12.5px; }
+  .rzb-table { font-size: 12.5px; }
+  .rzb-table th, .rzb-table td { padding: 7px 6px; }
+  .rzb-chase .btn { margin-left: 0; }
+  /* Sur téléphone : rang, joueur, points, semaine, niveau ; le détail reste dans « Voir les données » des courbes. */
+  .rzb-table .rzb-opt, .rzb-toeic { display: none; }
+  .rzb-end { font-size: 13px; }
+  .rzb-svg .rzp-tick { font-size: 11px; }
+}
+@media (max-width: 600px) {
+  .rzb-move { display: none; }
+  .rzb-col-rank { width: auto; }
+  .rzb-me { display: none; }
+}

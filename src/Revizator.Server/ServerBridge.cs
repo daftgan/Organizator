@@ -10,7 +10,9 @@ namespace Revizator.Server;
 /// Le pont de la page, cote serveur : meme protocole et memes gestionnaires que <c>BridgeHost</c> de
 /// l'hote WPF (memes noms de champs, memes reponses), restreint aux types de Revizator (§ 4 du contrat).
 /// Tout autre type est refuse : il n'existe ici aucun gestionnaire pour les taches, sessions, pieces
-/// jointes, articles ou quotas. Les evenements partent vers toutes les connexions (<see cref="Broadcast"/>).
+/// jointes, articles ou quotas. Chaque compte a son espace (<see cref="UserSpaces"/>) : ses donnees, ses
+/// generations et leurs evenements ne vont qu'a ses propres connexions (<see cref="Broadcast"/>) ; les voix, la
+/// reconnaissance et Whisper sont communs, leurs evenements vont au compte qui a lance le travail.
 /// </summary>
 public sealed class ServerBridge : IDisposable
 {
@@ -26,7 +28,7 @@ public sealed class ServerBridge : IDisposable
     {
         // Revizator
         "learnLoad", "learnSave", "learnDoc", "learnDocSave", "learnDocDelete", "learnNews",
-        "learnGenerate", "learnCancel", "learnJobs", "learnWait",
+        "learnGenerate", "learnCancel", "learnJobs", "learnWait", "learnBoard",
         // voix anglaises
         "ttsStatus", "ttsDownload", "ttsRemove", "ttsWarm", "speak", "speakScript", "cancelSpeak", "ttsClearCache",
         // reconnaissance
@@ -47,25 +49,24 @@ public sealed class ServerBridge : IDisposable
     private readonly HostLog _log;
     private readonly DataStore _store;
     private readonly AgentLauncher _launcher;
-    private readonly LearningStore _learning;
-    private readonly NewsMenu _learnNews;
-    private readonly LearningAgent _learnAgent;
+    private readonly UserSpaces _spaces;
+    private readonly Leaderboard _board;
     private readonly TextToSpeech _tts;
     private readonly LiveAsr _asr;
     private readonly WhisperTranscriber _whisper;
     private readonly VoiceChat _voice;
 
-    // Compteur des ecritures de learning.json (learnChanged, § 6). Il part de l'heure du demarrage (ms) :
-    // une page ouverte avant un redemarrage ne retrouve jamais par hasard son ancien numero.
-    private long _rev = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    // Compte qui a lance un travail des services communs (job de voix ou de transcription, session de
+    // reconnaissance, conversation) : ses evenements ne vont qu'a lui. Purge des plus anciens au-dela de 4 000.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Login, long At)> _owners = new(StringComparer.Ordinal);
 
-    // Lecture (avec son rev) et ecriture conditionnelle de learning.json, une a la fois.
-    private readonly SemaphoreSlim _learnLock = new(1, 1);
+    /// <summary>
+    /// Envoi d'un evenement aux connexions du compte <c>login</c> (toutes si null), sauf <c>except</c>
+    /// (connexion d'origine).
+    /// </summary>
+    public Action<JsonObject, object?, string?>? Broadcast { get; set; }
 
-    /// <summary>Envoi d'un evenement a toutes les connexions, sauf <c>except</c> (connexion d'origine).</summary>
-    public Action<JsonObject, object?>? Broadcast { get; set; }
-
-    public ServerBridge(ServerConfig config, HostLog log)
+    public ServerBridge(ServerConfig config, HostLog log, Func<IReadOnlyList<UserAccount>> accounts)
     {
         _config = config;
         _log = log;
@@ -73,22 +74,30 @@ public sealed class ServerBridge : IDisposable
         _launcher = new AgentLauncher(_store, log);
         // Memes services et memes evenements que BridgeHost (learn, tts, asr, voice, whisper).
         _whisper = new WhisperTranscriber(config.DataDir, log, ServerConfig.Version);
-        _whisper.Progress += payload => PostEvent("whisper", payload);
+        _whisper.Progress += payload => PostOwned("whisper", payload, "job");
         _voice = new VoiceChat(_launcher, log, config.DataDir);
-        _voice.Progress += payload => PostEvent("voice", payload);
-        _learning = new LearningStore(config.DataDir, log);
-        _learnNews = new NewsMenu(_learning, log);
-        _learnAgent = new LearningAgent(_launcher, _learning, _learnNews, log, config.DataDir);
-        _learnAgent.Progress += payload => PostEvent("learn", payload);
+        _voice.Progress += payload => PostOwned("voice", payload, "conversationId");
+        _spaces = new UserSpaces(config.DataDir, accounts, CreateSpace, log);
+        _board = new Leaderboard(config.DataDir, accounts, log);
         var sherpa = new SherpaRuntime(config.DataDir, log, ServerConfig.Version);
         _tts = new TextToSpeech(config.DataDir, log, ServerConfig.Version, sherpa);
-        _tts.Progress += payload => PostEvent("tts", payload);
+        _tts.Progress += payload => PostOwned("tts", payload, "job");
         _asr = new LiveAsr(config.DataDir, log, ServerConfig.Version, sherpa);
-        _asr.Progress += payload => PostEvent("asr", payload);
+        _asr.Progress += payload => PostOwned("asr", payload, "session");
     }
 
-    /// <summary>Dossier <c>learning/</c>, servi sous <c>/learn/</c>.</summary>
-    public string LearningRoot => _learning.Root;
+    /// <summary>L'espace d'un compte : son <c>learning.json</c>, son dossier <c>learning/</c>, son agent.</summary>
+    private UserSpace CreateSpace(string login, string dir)
+    {
+        var learning = new LearningStore(dir, _log);
+        var news = new NewsMenu(learning, _log);
+        var agent = new LearningAgent(_launcher, learning, news, _log, dir);
+        agent.Progress += payload => PostEvent("learn", payload, login: login);
+        return new UserSpace { Login = login, Dir = dir, Learning = learning, News = news, Agent = agent };
+    }
+
+    /// <summary>Dossier <c>learning/</c> d'un compte, servi sous <c>/learn/</c>.</summary>
+    public string LearningRootOf(string login) => _spaces.Get(login).Learning.Root;
 
     /// <summary>Cache des phrases synthetisees, servi sous <c>/tts/</c>.</summary>
     public string TtsCacheRoot => _tts.CacheRoot;
@@ -108,7 +117,7 @@ public sealed class ServerBridge : IDisposable
         }
     }
 
-    public void PostEvent(string name, JsonObject? payload = null, object? except = null)
+    public void PostEvent(string name, JsonObject? payload = null, object? except = null, string? login = null)
     {
         var message = new JsonObject
         {
@@ -118,11 +127,46 @@ public sealed class ServerBridge : IDisposable
 
         try
         {
-            Broadcast?.Invoke(message, except);
+            Broadcast?.Invoke(message, except, login);
         }
         catch (Exception ex)
         {
             Debug.WriteLine("[Revizator] evenement non diffuse : " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Evenement d'un service commun : au compte qui a lance le travail designe par <c>payload[key]</c>, a
+    /// tous si le travail n'a pas de proprietaire connu (telechargement d'un modele, par exemple).
+    /// </summary>
+    private void PostOwned(string name, JsonObject payload, string key)
+    {
+        var id = payload[key] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+        string? login = null;
+        if (!string.IsNullOrEmpty(id) && _owners.TryGetValue(name + ":" + id, out var owner))
+        {
+            login = owner.Login;
+        }
+
+        PostEvent(name, payload, login: login);
+    }
+
+    /// <summary>Retient le compte qui lance le travail <paramref name="id"/> d'un service commun.</summary>
+    private void Own(string service, string? id, string login)
+    {
+        if (string.IsNullOrEmpty(id))
+        {
+            return;
+        }
+
+        var now = Environment.TickCount64;
+        _owners[service + ":" + id] = (login, now);
+        if (_owners.Count > 4000)
+        {
+            foreach (var old in _owners.OrderBy(o => o.Value.At).Take(1000).Select(o => o.Key).ToList())
+            {
+                _owners.TryRemove(old, out _);
+            }
         }
     }
 
@@ -133,7 +177,7 @@ public sealed class ServerBridge : IDisposable
     /// repondre). La partie synchrone d'un gestionnaire s'execute avant le premier <c>await</c> : appele
     /// dans l'ordre de reception, les paquets <c>asrFeed</c> arrivent dans l'ordre, comme sous WebView2.
     /// </summary>
-    public async Task<JsonObject?> HandleAsync(string raw, object connection)
+    public async Task<JsonObject?> HandleAsync(string raw, object connection, string login)
     {
         JsonNode? id = null;
         string? type = null;
@@ -172,7 +216,7 @@ public sealed class ServerBridge : IDisposable
                 return Reply(id, false, null, Unavailable + " : " + Clip(type, 60));
             }
 
-            var result = await DispatchAsync(type, payload, connection).ConfigureAwait(false);
+            var result = await DispatchAsync(type, payload, connection, login).ConfigureAwait(false);
             return Reply(id, true, result, null);
         }
         catch (Exception ex)
@@ -210,7 +254,7 @@ public sealed class ServerBridge : IDisposable
 
     // ------------------------------------------------------------------- dispatch
 
-    private async Task<JsonNode?> DispatchAsync(string type, JsonObject payload, object connection) => type switch
+    private async Task<JsonNode?> DispatchAsync(string type, JsonObject payload, object connection, string login) => type switch
     {
         "getState" => GetState(),
         "saveSettings" => SaveSettings(payload),
@@ -221,38 +265,39 @@ public sealed class ServerBridge : IDisposable
         "whisperDownload" => await DownloadWhisperAsync(payload).ConfigureAwait(false),
         "whisperRemove" => new JsonObject { ["removed"] = await _whisper.RemoveAsync(Str(payload, "model") ?? "").ConfigureAwait(false) },
         "whisperWarm" => WarmWhisper(payload),
-        "transcribe" => await TranscribeAsync(payload).ConfigureAwait(false),
+        "transcribe" => await TranscribeAsync(payload, login).ConfigureAwait(false),
         "cancelTranscribe" => new JsonObject { ["cancelled"] = _whisper.Cancel(Str(payload, "job")) },
-        "voiceStart" => StartVoice(payload),
+        "voiceStart" => StartVoice(payload, login),
         "voiceSay" => new JsonObject { ["turn"] = _voice.Say(Str(payload, "conversationId"), Str(payload, "text"), Str(payload, "heard")) },
         "voiceInterrupt" => InterruptVoice(payload),
         "voiceStop" => StopVoice(payload),
         // Voix SAPI absentes sous Linux : liste vide, la page retombe sur speechSynthesis.
         "voiceVoices" => new JsonObject { ["voices"] = new JsonArray(), ["default"] = "" },
         "voiceSpeak" => throw new InvalidOperationException("Voix Windows indisponibles sur le serveur Révizator : la voix du navigateur prend le relais."),
-        "learnLoad" => await LearnLoadAsync().ConfigureAwait(false),
-        "learnSave" => await LearnSaveAsync(payload, connection).ConfigureAwait(false),
-        "learnDoc" => await LearnDocAsync(payload).ConfigureAwait(false),
-        "learnDocSave" => await LearnDocSaveAsync(payload).ConfigureAwait(false),
-        "learnDocDelete" => await LearnDocDeleteAsync(payload).ConfigureAwait(false),
-        "learnNews" => await LearnNewsAsync(payload).ConfigureAwait(false),
-        "learnGenerate" => await _learnAgent.GenerateAsync(payload).ConfigureAwait(false),
-        "learnCancel" => new JsonObject { ["cancelled"] = _learnAgent.Cancel(Str(payload, "job")) },
-        "learnJobs" => _learnAgent.Jobs(),
-        "learnWait" => await _learnAgent.WaitAsync(Str(payload, "job")).ConfigureAwait(false),
+        "learnLoad" => await LearnLoadAsync(_spaces.Get(login)).ConfigureAwait(false),
+        "learnSave" => await LearnSaveAsync(_spaces.Get(login), payload, connection).ConfigureAwait(false),
+        "learnDoc" => await LearnDocAsync(_spaces.Get(login), payload).ConfigureAwait(false),
+        "learnDocSave" => await LearnDocSaveAsync(_spaces.Get(login), payload).ConfigureAwait(false),
+        "learnDocDelete" => await LearnDocDeleteAsync(_spaces.Get(login), payload).ConfigureAwait(false),
+        "learnNews" => await LearnNewsAsync(_spaces.Get(login), payload).ConfigureAwait(false),
+        "learnGenerate" => await _spaces.Get(login).Agent.GenerateAsync(payload).ConfigureAwait(false),
+        "learnCancel" => new JsonObject { ["cancelled"] = _spaces.Get(login).Agent.Cancel(Str(payload, "job")) },
+        "learnJobs" => _spaces.Get(login).Agent.Jobs(),
+        "learnWait" => await _spaces.Get(login).Agent.WaitAsync(Str(payload, "job")).ConfigureAwait(false),
+        "learnBoard" => await LearnBoardAsync(payload, login).ConfigureAwait(false),
         "ttsStatus" => await Task.Run(_tts.Status).ConfigureAwait(false),
         "ttsDownload" => await DownloadTtsAsync().ConfigureAwait(false),
         "ttsRemove" => new JsonObject { ["removed"] = await _tts.RemoveAsync().ConfigureAwait(false) },
         "ttsWarm" => WarmTts(payload),
-        "speak" => await SpeakTtsAsync(payload).ConfigureAwait(false),
-        "speakScript" => await SpeakScriptTtsAsync(payload).ConfigureAwait(false),
+        "speak" => await SpeakTtsAsync(payload, login).ConfigureAwait(false),
+        "speakScript" => await SpeakScriptTtsAsync(payload, login).ConfigureAwait(false),
         "cancelSpeak" => new JsonObject { ["cancelled"] = _tts.Cancel(Str(payload, "job")) },
         "ttsClearCache" => await Task.Run(_tts.ClearCache).ConfigureAwait(false),
         "asrStatus" => await Task.Run(_asr.Status).ConfigureAwait(false),
         "asrDownload" => await _asr.DownloadAsync(Str(payload, "lang")).ConfigureAwait(false),
         "asrRemove" => new JsonObject { ["removed"] = await _asr.RemoveAsync(Str(payload, "lang")).ConfigureAwait(false) },
         "asrWarm" => WarmAsr(payload),
-        "asrStart" => new JsonObject { ["session"] = await _asr.StartAsync(Str(payload, "lang")).ConfigureAwait(false) },
+        "asrStart" => await StartAsrAsync(payload, login).ConfigureAwait(false),
         "asrFeed" => FeedAsr(payload),
         "asrEnd" => new JsonObject { ["text"] = await _asr.EndAsync(Str(payload, "session")).ConfigureAwait(false) },
         "asrReset" => await ResetAsrAsync(payload).ConfigureAwait(false),
@@ -356,49 +401,49 @@ public sealed class ServerBridge : IDisposable
     // ------------------------------------------------------------- Revizator (H2)
 
     /// <summary><c>learnLoad</c> : comme l'hote WPF, plus <c>rev</c> (compteur des ecritures, § 6).</summary>
-    private async Task<JsonNode> LearnLoadAsync()
+    private static async Task<JsonNode> LearnLoadAsync(UserSpace space)
     {
-        await _learnLock.WaitAsync().ConfigureAwait(false);
+        await space.Lock.WaitAsync().ConfigureAwait(false);
         try
         {
-            var result = await Task.Run(() => _learning.Load()).ConfigureAwait(false);
-            result["rev"] = Interlocked.Read(ref _rev);
+            var result = await Task.Run(() => space.Learning.Load()).ConfigureAwait(false);
+            result["rev"] = Interlocked.Read(ref space.Rev);
             return result;
         }
         finally
         {
-            _learnLock.Release();
+            space.Lock.Release();
         }
     }
 
     /// <summary>
     /// <c>learnSave</c> : comme l'hote WPF, plus <c>rev</c> ; les autres connexions recoivent
-    /// <c>learnChanged { rev, at }</c> (§ 6). Avec <c>baseRev</c> (le rev que la page a lu ou ecrit en
+    /// <c>learnChanged { rev, at }</c> (§ 6) — celles du meme compte seulement. Avec <c>baseRev</c> (le rev que la page a lu ou ecrit en
     /// dernier) : si un autre appareil a ecrit depuis, rien n'est ecrit et la reponse est
     /// <c>{ conflict: true, rev }</c> ; la page fusionne alors avec la version du serveur et renvoie.
     /// </summary>
-    private async Task<JsonNode> LearnSaveAsync(JsonObject payload, object connection)
+    private async Task<JsonNode> LearnSaveAsync(UserSpace space, JsonObject payload, object connection)
     {
         payload.Remove("files");
         long? baseRev = payload["baseRev"] is JsonValue b && b.TryGetValue<long>(out var v) ? v : null;
         payload.Remove("baseRev");
         long rev;
         JsonObject result;
-        await _learnLock.WaitAsync().ConfigureAwait(false);
+        await space.Lock.WaitAsync().ConfigureAwait(false);
         try
         {
-            var current = Interlocked.Read(ref _rev);
+            var current = Interlocked.Read(ref space.Rev);
             if (baseRev is { } expected && expected != current)
             {
                 return new JsonObject { ["conflict"] = true, ["rev"] = current };
             }
 
-            result = await Task.Run(() => _learning.Save(payload)).ConfigureAwait(false);
-            rev = Interlocked.Increment(ref _rev);
+            result = await Task.Run(() => space.Learning.Save(payload)).ConfigureAwait(false);
+            rev = Interlocked.Increment(ref space.Rev);
         }
         finally
         {
-            _learnLock.Release();
+            space.Lock.Release();
         }
 
         result["rev"] = rev;
@@ -406,21 +451,21 @@ public sealed class ServerBridge : IDisposable
         {
             ["rev"] = rev,
             ["at"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        }, except: connection);
+        }, except: connection, login: space.Login);
         return result;
     }
 
     /// <summary><c>learnDoc</c> : <c>{ kind, id }</c> -> <c>{ doc }</c>, <c>null</c> si le document n'existe pas.</summary>
-    private async Task<JsonNode> LearnDocAsync(JsonObject payload)
+    private static async Task<JsonNode> LearnDocAsync(UserSpace space, JsonObject payload)
     {
         var kind = Str(payload, "kind");
         var id = Str(payload, "id");
-        var doc = await Task.Run(() => _learning.ReadDoc(kind, id)).ConfigureAwait(false);
+        var doc = await Task.Run(() => space.Learning.ReadDoc(kind, id)).ConfigureAwait(false);
         return new JsonObject { ["doc"] = doc };
     }
 
     /// <summary><c>learnDocSave</c> : <c>{ kind, id, doc }</c> -> <c>{}</c>.</summary>
-    private async Task<JsonNode> LearnDocSaveAsync(JsonObject payload)
+    private static async Task<JsonNode> LearnDocSaveAsync(UserSpace space, JsonObject payload)
     {
         var kind = Str(payload, "kind");
         var id = Str(payload, "id");
@@ -429,24 +474,37 @@ public sealed class ServerBridge : IDisposable
             throw new InvalidOperationException("Document absent ou invalide : un objet JSON est attendu.");
         }
 
-        await Task.Run(() => _learning.WriteDoc(kind, id, doc)).ConfigureAwait(false);
+        await Task.Run(() => space.Learning.WriteDoc(kind, id, doc)).ConfigureAwait(false);
         return new JsonObject();
     }
 
     /// <summary><c>learnDocDelete</c> : <c>{ kind, id }</c> -> <c>{ removed }</c>.</summary>
-    private async Task<JsonNode> LearnDocDeleteAsync(JsonObject payload)
+    private static async Task<JsonNode> LearnDocDeleteAsync(UserSpace space, JsonObject payload)
     {
         var kind = Str(payload, "kind");
         var id = Str(payload, "id");
-        var removed = await Task.Run(() => _learning.DeleteDoc(kind, id)).ConfigureAwait(false);
+        var removed = await Task.Run(() => space.Learning.DeleteDoc(kind, id)).ConfigureAwait(false);
         return new JsonObject { ["removed"] = removed };
     }
 
     /// <summary><c>learnNews</c> : <c>{ force? }</c> -> menu RSS du jour.</summary>
-    private async Task<JsonNode> LearnNewsAsync(JsonObject payload)
+    private static async Task<JsonNode> LearnNewsAsync(UserSpace space, JsonObject payload)
     {
         var force = payload["force"] is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
-        return await _learnNews.GetAsync(force).ConfigureAwait(false);
+        return await space.News.GetAsync(force).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// <c>learnBoard</c> : <c>{ weeks? }</c> (12 par defaut, 26 au plus) -> le classement des comptes du serveur
+    /// (<see cref="Leaderboard"/>), agregats seulement.
+    /// </summary>
+    private async Task<JsonNode> LearnBoardAsync(JsonObject payload, string login)
+    {
+        var weeks = int.TryParse(Str(payload, "weeks"), System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 12;
+        // L'espace du compte est ouvert au passage : ses donnees d'avant les comptes separes y sont rattachees.
+        _spaces.Get(login);
+        return await Task.Run(() => _board.Build(login, weeks)).ConfigureAwait(false);
     }
 
     // ------------------------------------------------------- dictee et transcription
@@ -468,9 +526,10 @@ public sealed class ServerBridge : IDisposable
     /// Comme <c>BridgeHost.TranscribeAsync</c>, sans <c>path</c> : il n'y a pas de pieces jointes sur le
     /// serveur, seule la dictee envoyee par la page (WAV en base64) se transcrit.
     /// </summary>
-    private async Task<JsonNode> TranscribeAsync(JsonObject payload)
+    private async Task<JsonNode> TranscribeAsync(JsonObject payload, string login)
     {
         var job = Str(payload, "job") ?? "";
+        Own("whisper", job, login);
         var model = WhisperTranscriber.SanitizeModel(Str(payload, "model"));
         var language = WhisperTranscriber.SanitizeLanguage(Str(payload, "language"));
         static bool Flag(JsonObject source, string name) => source[name] is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
@@ -513,7 +572,8 @@ public sealed class ServerBridge : IDisposable
 
         try
         {
-            var saved = await Task.Run(() => _learning.SaveAudio(bytes)).ConfigureAwait(false);
+            var learning = _spaces.Get(login).Learning;
+            var saved = await Task.Run(() => learning.SaveAudio(bytes)).ConfigureAwait(false);
             result["id"] = saved["id"]?.GetValue<string>();
             result["url"] = saved["url"]?.GetValue<string>();
             _log.Info($"Revizator : enregistrement garde ({result["id"]}, {bytes.Length} octets)");
@@ -543,12 +603,16 @@ public sealed class ServerBridge : IDisposable
         return new JsonObject();
     }
 
-    private async Task<JsonNode> SpeakTtsAsync(JsonObject payload)
-        => await _tts.SpeakAsync(Str(payload, "job") ?? "", Str(payload, "text") ?? "", Str(payload, "voice") ?? "",
-            TtsSpeed(payload)).ConfigureAwait(false);
-
-    private async Task<JsonNode> SpeakScriptTtsAsync(JsonObject payload)
+    private async Task<JsonNode> SpeakTtsAsync(JsonObject payload, string login)
     {
+        Own("tts", Str(payload, "job"), login);
+        return await _tts.SpeakAsync(Str(payload, "job") ?? "", Str(payload, "text") ?? "", Str(payload, "voice") ?? "",
+            TtsSpeed(payload)).ConfigureAwait(false);
+    }
+
+    private async Task<JsonNode> SpeakScriptTtsAsync(JsonObject payload, string login)
+    {
+        Own("tts", Str(payload, "job"), login);
         var lines = new List<TtsLine>();
         if (payload["lines"] is JsonArray array)
         {
@@ -579,6 +643,13 @@ public sealed class ServerBridge : IDisposable
         return new JsonObject();
     }
 
+    private async Task<JsonNode> StartAsrAsync(JsonObject payload, string login)
+    {
+        var session = await _asr.StartAsync(Str(payload, "lang")).ConfigureAwait(false);
+        Own("asr", session, login);
+        return new JsonObject { ["session"] = session };
+    }
+
     private JsonNode FeedAsr(JsonObject payload)
     {
         _asr.Feed(Str(payload, "session"), Str(payload, "pcm"));
@@ -600,7 +671,7 @@ public sealed class ServerBridge : IDisposable
     // ------------------------------------------------------------- conversation vocale
 
     /// <summary>Comme <c>BridgeHost.StartVoice</c> : chaque champ absent prend la valeur des reglages du serveur.</summary>
-    private JsonNode StartVoice(JsonObject payload)
+    private JsonNode StartVoice(JsonObject payload, string login)
     {
         var settings = _store.LoadSettings();
         var mode = VoiceChat.SanitizeMode(Str(payload, "mode"));
@@ -615,7 +686,9 @@ public sealed class ServerBridge : IDisposable
             Mode: mode,
             Tutor: tutor,
             Name: VoiceChat.SanitizeName(Str(payload, "name")));
-        return new JsonObject { ["conversationId"] = _voice.Start(options) };
+        var conversation = _voice.Start(options);
+        Own("voice", conversation, login);
+        return new JsonObject { ["conversationId"] = conversation };
     }
 
     private JsonNode InterruptVoice(JsonObject payload)

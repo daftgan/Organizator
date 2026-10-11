@@ -8,7 +8,7 @@ using Organizator.Services;
 namespace Revizator.Server;
 
 /// <summary>
-/// Connexions WebSocket du pont (§ 4) : une file d'envoi par connexion (les evenements ne bloquent jamais
+/// Connexions WebSocket du pont (§ 4), chacune attachee a son compte : une file d'envoi par connexion (les evenements ne bloquent jamais
 /// l'emetteur), <c>{ event: 'ping' }</c> toutes les 20 s, messages de 32 Mo au plus. Le jeton de chaque
 /// connexion est reverifie a chaque message et a chaque ping : <c>token revoke</c> coupe aussi les
 /// connexions deja ouvertes (code 1008).
@@ -27,7 +27,7 @@ public sealed class WsHub
     {
         _bridge = bridge;
         _log = log;
-        _bridge.Broadcast = (message, except) => Send(message, except as Connection);
+        _bridge.Broadcast = (message, except, login) => Send(message, except as Connection, login);
         _ping = new Timer(_ => Ping(), null, PingEvery, PingEvery);
         // Arret du serveur (docker stop) : Kestrel attendrait 30 s que les WebSocket se ferment d'eux-memes,
         // pendant lesquels les pages se croiraient connectees. On les ferme tout de suite (1001) : elles
@@ -47,17 +47,19 @@ public sealed class WsHub
     {
         public required WebSocket Socket { get; init; }
         public required string Device { get; init; }
+        public required string Login { get; init; }
         public required Func<bool> StillValid { get; init; }
         public int Revoked;
         public Channel<string> Outbox { get; } = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     }
 
-    private void Send(JsonObject message, Connection? except)
+    /// <summary>Aux connexions du compte <paramref name="login"/> (toutes si null), sauf <paramref name="except"/>.</summary>
+    private void Send(JsonObject message, Connection? except, string? login)
     {
         var text = message.ToJsonString();
         foreach (var connection in _connections.Keys)
         {
-            if (!ReferenceEquals(connection, except))
+            if (!ReferenceEquals(connection, except) && (login is null || connection.Login == login))
             {
                 connection.Outbox.Writer.TryWrite(text);
             }
@@ -107,9 +109,9 @@ public sealed class WsHub
     }
 
     /// <summary>Sert une connexion jusqu'a sa fermeture ; <paramref name="stillValid"/> dit si son jeton vaut encore.</summary>
-    public async Task RunAsync(WebSocket socket, string device, Func<bool> stillValid, CancellationToken stopping)
+    public async Task RunAsync(WebSocket socket, string device, string login, Func<bool> stillValid, CancellationToken stopping)
     {
-        var connection = new Connection { Socket = socket, Device = device, StillValid = stillValid };
+        var connection = new Connection { Socket = socket, Device = device, Login = login, StillValid = stillValid };
         _connections[connection] = 0;
         _log.Info($"WebSocket ouvert ({device}, {_connections.Count} connexion(s))");
         using var closing = CancellationTokenSource.CreateLinkedTokenSource(stopping);
@@ -183,7 +185,7 @@ public sealed class WsHub
 
             // Appel sans attendre la reponse : la partie synchrone du gestionnaire passe dans l'ordre de
             // reception (asrFeed), le reste avance en parallele, comme sous WebView2.
-            var pending = _bridge.HandleAsync(text, connection);
+            var pending = _bridge.HandleAsync(text, connection, connection.Login);
             _ = pending.ContinueWith(task =>
             {
                 if (task.Status == TaskStatus.RanToCompletion && task.Result is JsonObject reply)

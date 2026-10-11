@@ -9,7 +9,7 @@
  *
  * Vérifie : santé, refus sans session, connexion (formulaire → cookie, API → jeton), mauvais mot de
  * passe refusé, page avec ses injections, WebSocket
- * (learnLoad / learnSave / learnChanged entre deux connexions, refus des types hors liste,
+ * (learnLoad / learnSave / learnChanged entre deux connexions, learnBoard, refus des types hors liste,
  * learnGenerate), fichiers de learning/ (cookie et /t/<jeton>/) et refus des traversées de chemin.
  *
  * Sans danger pour les données : learnSave réécrit learning.json tel que learnLoad l'a rendu (sauf
@@ -243,6 +243,11 @@ async function main() {
     const again = await b.call('learnLoad');
     check(again.ok && JSON.stringify(again.payload.data) === JSON.stringify(data || {}), 'learnLoad depuis B rend le même contenu');
   }
+
+  const board = await a.call('learnBoard', { weeks: 4 });
+  check(board.ok && Array.isArray(board.payload.players) && board.payload.weeks.length === 4
+    && (!loaded.payload || !loaded.payload.data || board.payload.players.some(p => p.me)),
+    'learnBoard : classement sur 4 semaines' + (board.ok ? ' (' + board.payload.players.length + ' joueur(s))' : ''), JSON.stringify(board).slice(0, 200));
 
   for (const type of ['saveData', 'startSession', 'getSessions', 'pickFolder', 'openPath', 'getUsage']) {
     const r = await a.call(type, { data: {} });
