@@ -11,3 +11,5 @@ docs
 tools
 publish.ps1
 deploy/.env
+installer
+.github

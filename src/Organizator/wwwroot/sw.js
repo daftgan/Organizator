@@ -4,7 +4,7 @@
    une nouvelle version du serveur change l'adresse, donc installe un nouveau service worker, dont le
    cache porte la version ; l'ancien cache est supprimé à l'activation.
    Ne met en cache que l'enveloppe de la page (HTML, CSS, JS, polices, icônes) pour un démarrage
-   rapide. Jamais les données : /api, /learn, /tts, /t/, /login, /logout passent toujours au réseau, sans copie.
+   rapide. Jamais les données : /api, /learn, /tts, /t/, /login, /logout, /pair passent toujours au réseau, sans copie.
    - page (navigation) et revizator-server.js : réseau d'abord (le cookie décide de la page servie),
      copie de secours hors ligne ;
    - autres fichiers : copie d'abord, relue en arrière-plan (une modification sans changement de
@@ -29,7 +29,7 @@ var SHELL = [
 ];
 
 /* Chemins jamais mis en cache (données, médias, connexion). */
-var PRIVATE = /^\/(api|learn|tts|t|login|logout)(\/|$)/;
+var PRIVATE = /^\/(api|learn|tts|t|login|logout|pair)(\/|$)/;
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) {

@@ -1827,6 +1827,7 @@
       h.push(A.setFieldHtml('Serveur', '<span>' + esc(cur.url) + (cur.login ? ' — connecté en tant que <strong>' + esc(cur.login) + '</strong>' : '') + '</span>'));
       h.push(A.setFieldHtml('', '<button type="button" class="btn btn-secondary" data-act="rz-server-test"' + (u.testing ? ' disabled' : '') + '>' + (u.testing ? 'Test…' : 'Tester la connexion') + '</button>'
         + '<button type="button" class="btn btn-ghost" data-act="rz-server-logout"' + (u.busy ? ' disabled' : '') + '>Se déconnecter</button>'));
+      h.push(pairHtml(u));
     } else {
       h.push(A.setFieldHtml('Adresse', '<input class="input set-cwd" type="url" data-role="rz-server" data-field="url" data-focus-key="rz-server-url" spellcheck="false" autocomplete="off" placeholder="https://revizator.daft-lab.fr" value="' + esc(u.draft.url) + '">'));
       h.push(A.setFieldHtml('Identifiant', '<input class="input set-cwd" type="text" data-role="rz-server" data-field="login" data-focus-key="rz-server-login" spellcheck="false" autocomplete="username" autocapitalize="none" value="' + esc(u.draft.login) + '">'));
@@ -1845,6 +1846,96 @@
     return h.join('');
   }
 
+  /* « Ajouter un téléphone » : un QR code d'appairage (POST /api/pair). Le téléphone l'ouvre avec son
+     appareil photo, touche « Connecter cet appareil » et se retrouve connecté au même compte, sans
+     identifiant ni mot de passe ; la page lui propose ensuite de l'installer. Le code sert une fois. */
+  function pairHtml(u) {
+    var p = u.pair;
+    if (!p || (!p.busy && !p.result)) {
+      return A.setFieldHtml('Téléphone', '<button type="button" class="btn btn-secondary" data-act="rz-pair">' + R.icon('plus') + ' Ajouter un téléphone</button>'
+        + '<span class="rz-set-help rz-pair-hint">Un QR code à scanner : le téléphone est connecté sans mot de passe, puis Révizator s’installe sur son écran d’accueil.</span>');
+    }
+    if (p.busy) return A.setFieldHtml('Téléphone', '<span class="rz-set-help">Création du code…</span>');
+    var r = p.result;
+    if (r.state !== 'online') {
+      return A.setFieldHtml('Téléphone', '<span class="rz-set-help rz-server-test is-refused"><strong>Impossible</strong> — ' + esc(r.error || '') + '</span>'
+        + '<button type="button" class="btn btn-ghost" data-act="rz-pair">Réessayer</button>');
+    }
+    var expired = Date.now() > p.expires;
+    var until = new Date(p.expires).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    return '<div class="rz-pair' + (expired ? ' is-expired' : '') + '">'
+      + '<img class="rz-pair-qr" alt="QR code d’appairage" src="data:image/svg+xml;charset=utf-8,' + encodeURIComponent(r.svg) + '">'
+      + '<div class="rz-pair-body"><div class="rz-pair-title">Scannez ce code avec l’appareil photo du téléphone</div>'
+      + '<ol class="rz-pair-steps"><li>Ouvrez le lien proposé, puis touchez <strong>Connecter cet appareil</strong>.</li>'
+      + '<li>Révizator s’ouvre : touchez <strong>Installer l’application</strong> (sur iPhone, suivez les deux gestes indiqués).</li></ol>'
+      + '<div class="rz-pair-code">Pas d’appareil photo ? Ouvrez <span class="rz-pair-url">' + esc(r.link.replace(/\/pair\?c=.*$/, '/pair')) + '</span> et tapez <strong>' + esc(r.code) + '</strong></div>'
+      + '<div class="rz-set-help">' + (expired ? 'Ce code a expiré.' : 'Valable jusqu’à ' + esc(until) + ', pour un seul appareil.') + '</div>'
+      + '<div class="rz-pair-actions"><button type="button" class="btn btn-secondary" data-act="rz-pair">Nouveau code</button>'
+      + '<button type="button" class="btn btn-ghost" data-act="rz-pair-close">Fermer</button></div></div></div>';
+  }
+
+  /* ── Installer l'application (page servie par le serveur, hors appli installée) ──────────
+     Chrome et Edge (Android, PC) annoncent l'installation par beforeinstallprompt : on garde l'événement,
+     et le bouton ouvre la fenêtre du système. Safari (iPhone, iPad) n'en a pas : la carte montre les deux
+     gestes, Partager puis « Sur l'écran d'accueil ». « Plus tard » la cache une semaine (sur cet appareil). */
+  var INSTALL = { prompt: null, done: false };
+  var INSTALL_LATER = 'revizator.installLater';
+  if (window.REVIZATOR_SERVER) {
+    window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); INSTALL.prompt = e; R.renderSoon(); });
+    window.addEventListener('appinstalled', function () { INSTALL.prompt = null; INSTALL.done = true; R.renderSoon(); });
+  }
+  function standalone() {
+    return navigator.standalone === true || !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+  }
+  function installPlatform() {
+    var ua = navigator.userAgent || '';
+    if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'ios';
+    if (/Android/.test(ua)) return 'android';
+    return 'other';
+  }
+  function installLater() {
+    try { return Date.now() < Number(localStorage.getItem(INSTALL_LATER) || 0); } catch (e) { return false; }
+  }
+  /* 'prompt' (bouton du système), 'ios' ou 'android' (gestes à faire), ou '' (rien à proposer). */
+  function installMode() {
+    if (!onServer() || INSTALL.done || standalone()) return '';
+    if (INSTALL.prompt) return 'prompt';
+    var pf = installPlatform();
+    return pf === 'other' ? '' : pf;
+  }
+  var SHARE_ICON = '<svg class="rz-install-glyph" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M8 7l4-4 4 4"></path><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"></path></svg>';
+  function installStepsHtml(mode) {
+    if (mode === 'prompt') return '<button type="button" class="btn btn-primary rz-big" data-act="rz-install">' + R.icon('plus') + ' Installer l’application</button>';
+    if (mode === 'ios') {
+      return '<ol class="rz-install-steps"><li>Touchez <strong>Partager</strong> ' + SHARE_ICON + ' dans la barre de Safari (en bas, ou en haut sur iPad).</li>'
+        + '<li>Choisissez <strong>Sur l’écran d’accueil</strong>, puis <strong>Ajouter</strong>.</li></ol>'
+        + '<div class="rz-card-foot">Ouvrez ensuite Révizator depuis son icône. S’il demande de se connecter, touchez « J’ai un code d’appairage » et tapez un nouveau code affiché par Organizator.</div>';
+    }
+    return '<ol class="rz-install-steps"><li>Ouvrez le menu <strong>⋮</strong> du navigateur.</li>'
+      + '<li>Choisissez <strong>Installer l’application</strong> (ou <strong>Ajouter à l’écran d’accueil</strong>).</li></ol>';
+  }
+  R.homeCard({ id: 'install', area: 'hero', order: 1, html: function () {
+    var mode = installMode();
+    if (!mode || installLater()) return '';
+    return '<section class="rz-card rz-install"><div class="rz-card-head"><span class="rz-card-title">Installer Révizator</span>'
+      + '<button type="button" class="btn btn-ghost" data-act="rz-install-later">Plus tard</button></div>'
+      + '<div class="rz-install-lead">Une icône sur l’écran d’accueil, et Révizator s’ouvre en plein écran, comme une application.</div>'
+      + installStepsHtml(mode) + '</section>';
+  } });
+  R.act('rz-install', function () {
+    var e = INSTALL.prompt;
+    if (!e) return;
+    INSTALL.prompt = null;
+    e.prompt();
+    (e.userChoice || Promise.resolve({}))
+      .then(function (c) { if (c && c.outcome === 'accepted') INSTALL.done = true; R.render(); }, function () { R.render(); });
+  });
+  R.act('rz-install-later', function () {
+    try { localStorage.setItem(INSTALL_LATER, String(Date.now() + 7 * 86400000)); } catch (e) { /* stockage indisponible : cachée jusqu'au rechargement */ INSTALL.done = true; }
+    R.toast('Vous la retrouverez dans Réglages › Révizator.');
+    R.render();
+  });
+
   /* Page servie par le serveur : le compte connecté et la déconnexion (formulaire POST /logout, sans script). */
   var ACCOUNT = { login: null, asked: false };
   function accountCardHtml() {
@@ -1856,6 +1947,7 @@
     return '<div class="set-card"><div class="set-card-head"><span class="set-card-title">Compte</span></div>'
       + A.setFieldHtml('Connecté', '<span>' + (ACCOUNT.login ? '<strong>' + esc(ACCOUNT.login) + '</strong>' : '…') + '</span>')
       + A.setFieldHtml('', '<form method="post" action="/logout" class="rz-logout"><button type="submit" class="btn btn-secondary">Se déconnecter</button></form>')
+      + (installMode() ? A.setFieldHtml('Application', '<div class="rz-install">' + installStepsHtml(installMode()) + '</div>') : '')
       + '<div class="set-card-foot">La déconnexion ferme la session de cet appareil ; les autres restent connectés.</div></div>';
   }
 
@@ -2022,12 +2114,22 @@
         R.render();
       });
     });
+    R.act('rz-pair', function () {
+      var u = serverDraft(), cur = serverSettings();
+      u.pair = { busy: true, result: null, expires: 0 };
+      R.render();
+      bridge.pairRemote({ url: cur.url, token: cur.token }).then(function (r) {
+        u.pair = { busy: false, result: r, expires: Date.now() + (r.expiresIn || 600) * 1000 };
+        R.render();
+      });
+    });
+    R.act('rz-pair-close', function () { serverDraft().pair = null; R.render(); });
     R.act('rz-server-logout', function () {
       var u = serverDraft(), cur = serverSettings();
       u.busy = true;
       R.render();
       bridge.logoutRemote({ url: cur.url, token: cur.token }).then(function () {
-        u.busy = false; u.test = null;
+        u.busy = false; u.test = null; u.pair = null;
         u.draft = { url: cur.url, login: cur.login, password: '' };
         window.organizatorApp.setSettings({ revizatorServerToken: '' });
         bridge.configureRemote({ url: '', token: '' });

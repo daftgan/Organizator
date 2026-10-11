@@ -90,6 +90,9 @@ Routes :
 | `POST /api/login` | identifiant + mot de passe | JSON `{ login, password, device? }` → `{ token, login, session }` (Organizator sur le PC, scripts) ; échec : 401 `{ error }`, ou 429 avec `Retry-After` (adresse ou compte bloqués) ; origine refusée : 403 |
 | `POST /api/logout` | `Authorization: Bearer <jeton>` | ferme cette session → `{ ok }` |
 | `GET /api/me` | cookie ou `Authorization: Bearer` | `{ login, version }` ; sinon 401 (ou 429) |
+| `POST /api/pair` | `Authorization: Bearer <jeton>` | un code d'appairage pour le compte de cette session → `{ code, link, svg, expiresIn }` : `code` affichable (`K7QF-2MXP`), `link` = `<REVIZATOR_PUBLIC_URL>/pair?c=<code>` (adresse de la requête si `REVIZATOR_PUBLIC_URL` n'est pas réglé), `svg` = son QR code, `expiresIn` = 600 ; sans session : 401 ; origine refusée : 403 |
+| `GET /pair` | non | page **sans script** : avec `?c=<code>`, le code et un bouton « Connecter cet appareil » (rien n'est consommé : un aperçu de lien ne grille pas le code) ; sans, un champ pour le taper ; message selon `?e=` (`bad`, `blocked`, `origin`) |
+| `POST /pair` | code d'appairage | formulaire (`code`, tirets et minuscules tolérés) : le code est consommé, session ouverte pour son compte, cookie `rz_token` et 302 vers `/` ; échec (code inconnu, déjà servi, expiré) : 302 vers `/pair?e=bad`, compté comme un échec de connexion pour l'adresse |
 | `GET /` , `/index.html` | cookie | `wwwroot/index.html` avec deux injections (ci-dessous) ; sans session valide : 302 vers `/login` (un cookie périmé est retiré au passage ; 429 au-delà de la limite d'essais) |
 | `GET /revizator-server.js` | non | généré : `window.REVIZATOR_SERVER = { mode: 'revizator', version, wsUrl: '/api/ws' }` |
 | `GET /<fichier de wwwroot>` | non | fichiers statiques de la page (aucune donnée personnelle) |
@@ -112,11 +115,14 @@ Routes :
 - Statique : aucun chemin ne sort de son dossier racine (`..`, chemins absolus, liens symboliques,
   segments vides ou cachés — commençant par un point —, `\ : %` et caractères de contrôle refusés) ; `Cache-Control: no-cache` sur `index.html`, `revizator-server.js` et `sw.js`.
 - CORS : seulement pour `REVIZATOR_ALLOWED_ORIGINS`, sur `/learn`, `/tts`, `/t/…`, `/api/health` et
-  `/api/login`, `/api/logout`, `/api/me` (pour ces trois-là, `OPTIONS` annonce `GET, POST` et les en-têtes
+  `/api/login`, `/api/logout`, `/api/me`, `/api/pair` (pour ces quatre-là, `OPTIONS` annonce `GET, POST` et les en-têtes
   `Content-Type, Authorization`).
-- Contrôle d'origine de la connexion : les formulaires (`POST /login`, `POST /logout`) n'acceptent que ce
+- Contrôle d'origine de la connexion : les formulaires (`POST /login`, `POST /logout`, `POST /pair`) n'acceptent que ce
   serveur (`REVIZATOR_PUBLIC_URL`, ou schéma et `Host` de la requête) ou l'absence d'`Origin` ; l'API
-  (`/api/login`, `/api/logout`) accepte aussi une origine de `REVIZATOR_ALLOWED_ORIGINS`.
+  (`/api/login`, `/api/logout`, `/api/pair`) accepte aussi une origine de `REVIZATOR_ALLOWED_ORIGINS`.
+- Codes d'appairage (`PairingCodes.cs`) : 8 caractères tirés de 31 (sans `0 O 1 I L`, ~39 bits), à usage
+  unique, valables 10 minutes, 5 au plus en vie par compte, gardés en mémoire seulement (un redémarrage
+  les oublie). Un code faux compte dans la limite de 10 échecs par minute et par adresse.
 - En-têtes de sécurité : sur toute réponse `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`
   (une page ou un média sous `/t/<jeton>/` ne transmet jamais son adresse) et `X-Frame-Options: DENY`, sauf
   sur `/` et `/login`, qui n'ont aucun secret dans leur adresse : `Referrer-Policy: same-origin` (avec
@@ -357,6 +363,18 @@ l'onglet Révizator puis l'onglet Dictée (sans « Transcrire les enregistrement
   d'écran, masqués dans les vues plein écran (séance, série d'exercices, révision des cartes, bilan en
   cours, conversation du tuteur), traductions des mots dans une bulle en bas d'écran, Réglages plein
   écran. Les icônes se régénèrent par `node tools/make-pwa-icons.mjs` (Chromium headless).
+- Installation : sur l'accueil de Révizator (et dans Réglages › Révizator › Compte), une carte « Installer
+  Révizator » tant que la page n'est pas ouverte en appli installée (`display-mode: standalone`,
+  `navigator.standalone`). Chrome et Edge : `beforeinstallprompt` est retenu, le bouton « Installer
+  l'application » ouvre la fenêtre du système ; iPhone et iPad : les deux gestes de Safari (Partager ›
+  Sur l'écran d'accueil) ; Android sans l'événement : le menu ⋮. « Plus tard » la cache une semaine
+  (`localStorage`, clé `revizator.installLater`) ; elle reste dans les Réglages.
+- Appairage : Organizator (Réglages › Révizator › Serveur Révizator, connecté) a un bouton « Ajouter un
+  téléphone » = `bridge.pairRemote({ url, token })` (`POST /api/pair`) : le QR code, le code à taper et
+  l'adresse de `/pair`, valables 10 minutes. Le téléphone scanne, touche « Connecter cet appareil »
+  (`POST /pair`) et arrive connecté sur la page, qui lui propose l'installation. La page `/login` a un
+  lien « J'ai un code d'appairage » (utile dans l'appli installée sur iPhone, qui n'a pas les cookies de
+  Safari).
 - Micro : `getUserMedia` exige HTTPS (assuré par NPM) ; le PCM et les WAV partent par le WebSocket comme
   dans WebView2.
 

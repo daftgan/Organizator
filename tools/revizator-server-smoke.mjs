@@ -146,7 +146,9 @@ async function main() {
   check((await fetch(BASE + '/t/mauvais-jeton/learn/news.json')).status === 401, 'GET /t/<mauvais jeton>/learn/… : 401');
   check(await upgrades('/api/ws', {}) === 401, 'WebSocket sans jeton : 401');
   check(await upgrades('/api/ws?token=mauvais', {}) === 401, 'WebSocket avec un mauvais jeton : 401');
-  check((await fetch(BASE + '/pair?token=x', { redirect: 'manual' })).status === 404, '/pair n’existe plus : 404');
+  const oldPair = await fetch(BASE + '/pair?token=x', { redirect: 'manual' });
+  check(oldPair.status === 200 && !oldPair.headers.get('set-cookie'), 'GET /pair?token=… : simple formulaire, aucune session', oldPair.status);
+  check((await fetch(BASE + '/api/pair', { method: 'POST' })).status === 401, 'POST /api/pair sans jeton : 401');
   const wrongName = 'smoke-inconnu-' + Date.now().toString(36);
   const badApi = await fetch(BASE + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: wrongName, password: 'mauvais-mot-de-passe' }) });
   const badApiBody = await badApi.json().catch(() => ({}));
@@ -179,6 +181,24 @@ async function main() {
   const cfg = await (await fetch(BASE + '/revizator-server.js')).text();
   check(/window\.REVIZATOR_SERVER\s*=\s*\{\s*mode:\s*'revizator'/.test(cfg) && cfg.includes("wsUrl: '/api/ws'"), 'revizator-server.js généré', cfg.trim());
   check((await fetch(BASE + '/bridge.js')).status === 200, 'fichier statique de la page sans authentification (/bridge.js)');
+
+  section('Appairage d’un téléphone');
+  const pairApi = await fetch(BASE + '/api/pair', { method: 'POST', headers: { Authorization: 'Bearer ' + token, Origin: 'https://app.organizator' } });
+  const pairBody = await pairApi.json().catch(() => ({}));
+  check(pairApi.status === 200 && /^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(pairBody.code || '') && /^<svg/.test(pairBody.svg || '') && /\/pair\?c=/.test(pairBody.link || '')
+    && pairApi.headers.get('access-control-allow-origin') === 'https://app.organizator', 'POST /api/pair (Organizator) : code, lien, QR code, CORS', pairApi.status + ' ' + JSON.stringify(pairBody).slice(0, 120));
+  const pairCode = String(pairBody.code || 'ABCD-EFGH');
+  const pairPage = await fetch(BASE + '/pair?c=' + pairCode.replace('-', ''));
+  const pairHtml = await pairPage.text();
+  check(pairPage.status === 200 && pairHtml.includes(pairCode) && !/<script/i.test(pairHtml) && !pairPage.headers.get('set-cookie'), 'GET /pair?c=… : bouton sans script, code non consommé', pairPage.status);
+  const paired = await fetch(BASE + '/pair', { method: 'POST', redirect: 'manual', headers: { Origin: BASE }, body: new URLSearchParams({ code: pairCode.toLowerCase() }) });
+  const pairedCookie = ((paired.headers.get('set-cookie') || '').match(/rz_token=[^;]+/) || [''])[0];
+  check(paired.status === 302 && paired.headers.get('location') === '/' && pairedCookie.length > 20, 'POST /pair : session ouverte par le code', paired.status + ' ' + paired.headers.get('location'));
+  check((await fetch(BASE + '/', { headers: { Cookie: pairedCookie } })).status === 200, 'GET / avec le cookie de l’appairage');
+  const reused = await fetch(BASE + '/pair', { method: 'POST', redirect: 'manual', headers: { Origin: BASE }, body: new URLSearchParams({ code: pairCode }) });
+  check(reused.status === 302 && reused.headers.get('location') === '/pair?e=bad' && !reused.headers.get('set-cookie'), 'code déjà servi : refusé', reused.status + ' ' + reused.headers.get('location'));
+  await fetch(BASE + '/logout', { method: 'POST', redirect: 'manual', headers: { Cookie: pairedCookie, Origin: BASE } });
+  check((await fetch(BASE + '/api/me', { headers: { Cookie: pairedCookie } })).status === 401, 'session de l’appairage fermée');
 
   section('WebSocket');
   const a = await connect(WS_BASE + '/api/ws?token=' + encodeURIComponent(token));

@@ -6,7 +6,8 @@ using Organizator.Services;
 namespace Revizator.Server;
 
 /// <summary>
-/// Routes HTTP du serveur (§ 3 du contrat) : sante, connexion (identifiant et mot de passe), page avec ses
+/// Routes HTTP du serveur (§ 3 du contrat) : sante, connexion (identifiant et mot de passe, ou code
+/// d'appairage donne par Organizator), page avec ses
 /// deux injections, fichiers statiques de la page, dossiers <c>learning/</c> et cache TTS (cookie ou jeton
 /// de session dans le chemin), WebSocket.
 /// Aucun chemin ne sort de son dossier racine.
@@ -24,16 +25,18 @@ public sealed class HttpRoutes
     private readonly UserStore _users;
     private readonly LoginLockout _lockout = new();
     private readonly FailureLimiter _limiter;
+    private readonly PairingCodes _pairing;
     private readonly ServerBridge _bridge;
     private readonly WsHub _hub;
     private readonly HostLog _log;
 
-    public HttpRoutes(ServerConfig config, TokenStore tokens, UserStore users, FailureLimiter limiter, ServerBridge bridge, WsHub hub, HostLog log)
+    public HttpRoutes(ServerConfig config, TokenStore tokens, UserStore users, FailureLimiter limiter, PairingCodes pairing, ServerBridge bridge, WsHub hub, HostLog log)
     {
         _config = config;
         _tokens = tokens;
         _users = users;
         _limiter = limiter;
+        _pairing = pairing;
         _bridge = bridge;
         _hub = hub;
         _log = log;
@@ -63,7 +66,7 @@ public sealed class HttpRoutes
         response.Headers["X-Frame-Options"] = "DENY";
 
         // CORS : seulement pour les origines autorisees, et seulement la ou la page d'Organizator lit.
-        var apiAuth = path is "/api/login" or "/api/logout" or "/api/me";
+        var apiAuth = path is "/api/login" or "/api/logout" or "/api/me" or "/api/pair";
         var corsPath = path == "/api/health" || apiAuth || path.StartsWith("/learn/", StringComparison.Ordinal)
             || path.StartsWith("/tts/", StringComparison.Ordinal) || path.StartsWith("/t/", StringComparison.Ordinal);
         if (corsPath)
@@ -108,6 +111,12 @@ public sealed class HttpRoutes
                 case "/api/logout":
                     await LogoutApiAsync(context).ConfigureAwait(false);
                     return;
+                case "/pair":
+                    await PairFormAsync(context).ConfigureAwait(false);
+                    return;
+                case "/api/pair":
+                    await PairApiAsync(context).ConfigureAwait(false);
+                    return;
             }
         }
 
@@ -126,6 +135,12 @@ public sealed class HttpRoutes
         if (path == "/login")
         {
             await LoginPageAsync(context).ConfigureAwait(false);
+            return;
+        }
+
+        if (path == "/pair")
+        {
+            await PairPageAsync(context).ConfigureAwait(false);
             return;
         }
 
@@ -388,23 +403,30 @@ public sealed class HttpRoutes
         await response.WriteAsync(LoginHtml(message, noAccount)).ConfigureAwait(false);
     }
 
+    /// <summary>Styles des pages de connexion et d'appairage (sans script : le CSP n'en permet aucun en ligne).</summary>
+    private const string FormStyle = "*{box-sizing:border-box}body{margin:0;min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;"
+        + "background:#f5ead8;color:#2b2118;font-family:system-ui,-apple-system,sans-serif;padding:24px max(24px,env(safe-area-inset-right)) 24px max(24px,env(safe-area-inset-left))}"
+        + "main{width:100%;max-width:360px}h1{font-size:1.6rem;margin:0 0 4px}p.lead{margin:0 0 24px;color:#6b5a48}"
+        + "label{display:block;font-weight:600;margin:16px 0 6px}input{width:100%;font-size:16px;padding:12px 14px;border:1px solid #cdb99c;border-radius:10px;background:#fffaf2;color:inherit}"
+        + "input:focus{outline:2px solid #b5651d;outline-offset:1px}button{margin-top:24px;width:100%;min-height:48px;font-size:16px;font-weight:600;border:0;border-radius:10px;background:#b5651d;color:#fff}"
+        + ".msg{margin:0 0 8px;padding:10px 12px;border-radius:8px;background:#fde2d2;color:#7a2e0b}.note{color:#6b5a48;font-size:.9rem}"
+        + "code{background:#fff6;padding:2px 4px;border-radius:4px}"
+        + "p.alt{margin:20px 0 0;text-align:center}p.alt a{color:#b5651d;font-weight:600}"
+        + ".code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:1.6rem;letter-spacing:.12em;text-align:center;margin:8px 0 0}"
+        + "input.code-in{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:20px;letter-spacing:.12em;text-transform:uppercase;text-align:center}";
+
     private static string LoginHtml(string message, string extra)
         => "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             + "<title>Révizator — connexion</title><link rel=\"manifest\" href=\"manifest.webmanifest\"><meta name=\"theme-color\" content=\"#f5ead8\">"
             + "<link rel=\"apple-touch-icon\" href=\"icons/icon-192.png\"><link rel=\"icon\" type=\"image/png\" href=\"icons/icon-192.png\">"
-            + "<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;"
-            + "background:#f5ead8;color:#2b2118;font-family:system-ui,-apple-system,sans-serif;padding:24px max(24px,env(safe-area-inset-right)) 24px max(24px,env(safe-area-inset-left))}"
-            + "main{width:100%;max-width:360px}h1{font-size:1.6rem;margin:0 0 4px}p.lead{margin:0 0 24px;color:#6b5a48}"
-            + "label{display:block;font-weight:600;margin:16px 0 6px}input{width:100%;font-size:16px;padding:12px 14px;border:1px solid #cdb99c;border-radius:10px;background:#fffaf2;color:inherit}"
-            + "input:focus{outline:2px solid #b5651d;outline-offset:1px}button{margin-top:24px;width:100%;min-height:48px;font-size:16px;font-weight:600;border:0;border-radius:10px;background:#b5651d;color:#fff}"
-            + ".msg{margin:0 0 8px;padding:10px 12px;border-radius:8px;background:#fde2d2;color:#7a2e0b}.note{color:#6b5a48;font-size:.9rem}"
-            + "code{background:#fff6;padding:2px 4px;border-radius:4px}</style></head><body><main>"
+            + "<style>" + FormStyle + "</style></head><body><main>"
             + "<h1>Révizator</h1><p class=\"lead\">Connectez-vous pour retrouver vos cours, vos cartes et vos progrès.</p>"
             + (message.Length > 0 ? "<p class=\"msg\" role=\"alert\">" + message + "</p>" : "")
             + "<form method=\"post\" action=\"/login\">"
             + "<label for=\"login\">Identifiant</label><input id=\"login\" name=\"login\" autocomplete=\"username\" autocapitalize=\"none\" spellcheck=\"false\" required maxlength=\"40\">"
             + "<label for=\"password\">Mot de passe</label><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required maxlength=\"200\">"
-            + "<button type=\"submit\">Se connecter</button></form>" + extra + "</main></body></html>";
+            + "<button type=\"submit\">Se connecter</button></form>"
+            + "<p class=\"alt\"><a href=\"/pair\">J'ai un code d'appairage</a></p>" + extra + "</main></body></html>";
 
     /// <summary>Lit un formulaire court (4 Ko au plus) ; null s'il est trop gros ou illisible.</summary>
     private static async Task<IFormCollection?> SmallFormAsync(HttpContext context)
@@ -557,6 +579,140 @@ public sealed class HttpRoutes
     {
         var header = request.Headers.Authorization.ToString();
         return header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? header[7..].Trim() : null;
+    }
+
+    // ------------------------------------------------------------------ appairage d'un telephone
+
+    /// <summary>
+    /// <c>POST /api/pair</c> avec <c>Authorization: Bearer &lt;jeton&gt;</c> (Organizator sur le PC) : un code
+    /// d'appairage pour le compte de cette session → <c>{ code, link, svg, expiresIn }</c>. <c>svg</c> est le QR
+    /// code de <c>link</c> ; le telephone qui l'ouvre est connecte au meme compte (voir PairingCodes).
+    /// </summary>
+    private async Task PairApiAsync(HttpContext context)
+    {
+        NoCache(context.Response);
+        if (!OriginAllowed(context, api: true))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsJsonAsync(new { error = "Origine refusée." }).ConfigureAwait(false);
+            return;
+        }
+
+        var token = BearerToken(context.Request);
+        if (string.IsNullOrEmpty(token) || !Authorize(context, token, out _) || _tokens.UserOf(token) is not { } user)
+        {
+            await DenyAsync(context, "Session refusée : reconnectez Organizator au serveur.").ConfigureAwait(false);
+            return;
+        }
+
+        var code = _pairing.Create(user);
+        var link = PairBaseUrl(context) + "/pair?c=" + code;
+        string svg;
+        using (var data = QRCoder.QRCodeGenerator.GenerateQrCode(link, QRCoder.QRCodeGenerator.ECCLevel.M))
+        {
+            svg = new QRCoder.SvgQRCode(data).GetGraphic(8, "#000000", "#ffffff", true, QRCoder.SvgQRCode.SizingMode.ViewBoxAttribute);
+        }
+
+        _log.Info($"Code d'appairage cree pour {user} ({_limiter.ClientIp(context)})");
+        await context.Response.WriteAsJsonAsync(new
+        {
+            code = PairingCodes.Display(code),
+            link,
+            svg,
+            expiresIn = (int)PairingCodes.Lifetime.TotalSeconds,
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Adresse a mettre dans le QR code : <c>REVIZATOR_PUBLIC_URL</c> quand il est regle, sinon celle par
+    /// laquelle Organizator a joint le serveur (schema et <c>Host</c> de la requete).
+    /// </summary>
+    private string PairBaseUrl(HttpContext context)
+    {
+        if (!_config.PublicUrl.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return _config.PublicUrl;
+        }
+
+        var host = context.Request.Host.Value ?? "";
+        return host.Length > 0 ? (IsHttps(context) ? "https://" : "http://") + host : _config.PublicUrl;
+    }
+
+    /// <summary>
+    /// <c>GET /pair</c> : avec <c>?c=</c> (QR code), un bouton qui connecte cet appareil ; sans, un champ pour
+    /// taper le code. Rien n'est consomme ici : un apercu de lien (messagerie, lecteur de QR code) qui ouvre
+    /// l'adresse ne grille pas le code, seul le bouton (POST) le fait.
+    /// </summary>
+    private async Task PairPageAsync(HttpContext context)
+    {
+        var response = context.Response;
+        NoCache(response);
+        SameOriginReferrer(response);
+        response.ContentType = "text/html; charset=utf-8";
+        response.Headers.ContentSecurityPolicy = PagePolicy(context.Request);
+        var message = context.Request.Query["e"].ToString() switch
+        {
+            "bad" => "Ce code n'est pas valable : il a déjà servi, a expiré (10 minutes) ou est mal recopié. Affichez-en un nouveau dans Organizator.",
+            "blocked" => "Trop d'essais : réessayez dans une minute.",
+            "origin" => "Requête refusée : rouvrez cette page et réessayez.",
+            _ => "",
+        };
+        var code = PairingCodes.Normalize(context.Request.Query["c"].ToString());
+        await response.WriteAsync(PairHtml(message, code)).ConfigureAwait(false);
+    }
+
+    private static string PairHtml(string message, string? code)
+        => "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            + "<title>Révizator — appairage</title><link rel=\"manifest\" href=\"manifest.webmanifest\"><meta name=\"theme-color\" content=\"#f5ead8\">"
+            + "<link rel=\"apple-touch-icon\" href=\"icons/icon-192.png\"><link rel=\"icon\" type=\"image/png\" href=\"icons/icon-192.png\">"
+            + "<style>" + FormStyle + "</style></head><body><main>"
+            + "<h1>Révizator</h1>"
+            + (code is not null
+                ? "<p class=\"lead\">Connecter cet appareil au compte qui a affiché ce code dans Organizator :</p>"
+                : "<p class=\"lead\">Dans Organizator sur le PC : Réglages › Révizator › <strong>Ajouter un téléphone</strong>, puis tapez ici le code affiché sous le QR code.</p>")
+            + (message.Length > 0 ? "<p class=\"msg\" role=\"alert\">" + message + "</p>" : "")
+            + "<form method=\"post\" action=\"/pair\">"
+            + (code is not null
+                ? "<p class=\"code\">" + PairingCodes.Display(code) + "</p><input type=\"hidden\" name=\"code\" value=\"" + code + "\">"
+                : "<label for=\"code\">Code d'appairage</label><input id=\"code\" name=\"code\" class=\"code-in\" autocomplete=\"one-time-code\" autocapitalize=\"characters\" spellcheck=\"false\" required maxlength=\"12\" placeholder=\"XXXX-XXXX\">")
+            + "<button type=\"submit\">Connecter cet appareil</button></form>"
+            + "<p class=\"alt\"><a href=\"/login\">Se connecter avec un mot de passe</a></p></main></body></html>";
+
+    /// <summary>
+    /// <c>POST /pair</c> (formulaire de la page) : le code contre un cookie de session du compte, puis la page.
+    /// Un code faux compte comme un echec pour l'adresse (10 par minute, comme les mots de passe).
+    /// </summary>
+    private async Task PairFormAsync(HttpContext context)
+    {
+        NoCache(context.Response);
+        if (!OriginAllowed(context, api: false))
+        {
+            context.Response.Redirect("/pair?e=origin", permanent: false);
+            return;
+        }
+
+        var ip = _limiter.ClientIp(context);
+        if (_limiter.Blocked(ip))
+        {
+            context.Response.Redirect("/pair?e=blocked", permanent: false);
+            return;
+        }
+
+        var form = await SmallFormAsync(context).ConfigureAwait(false);
+        var user = _pairing.Consume(form?["code"].ToString());
+        if (user is null || !_users.List().Any(u => u.Login == user))
+        {
+            _limiter.Fail(ip);
+            _log.Warn($"Code d'appairage refuse ({ip})");
+            await Task.Delay(400).ConfigureAwait(false);
+            context.Response.Redirect("/pair?e=bad", permanent: false);
+            return;
+        }
+
+        var label = DeviceLabel(context.Request);
+        SetSessionCookie(context, _tokens.CreateSession(user, label));
+        _log.Info($"Connexion par code d'appairage : {user} ({label}, {ip})");
+        context.Response.Redirect("/", permanent: false);
     }
 
     /// <summary>La page, avec ses deux injections ; sans session valide, renvoi vers la page de connexion.</summary>

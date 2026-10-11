@@ -285,3 +285,19 @@
 .rz-server-test { margin-top: 6px; }
 .rz-server-test.is-online strong { color: var(--rz-good); }
 .rz-server-test.is-unreachable strong, .rz-server-test.is-refused strong, .rz-server-test.is-invalid strong { color: var(--rz-bad); }
+.rz-install { display: flex; flex-direction: column; gap: 10px; }
+.rz-install-lead { font-size: 14px; line-height: 1.45; color: var(--rz-ink-soft); }
+.rz-install-steps { margin: 0; padding-left: 22px; font-size: 14px; line-height: 1.6; }
+.rz-install-glyph { vertical-align: -3px; }
+.rz-pair-hint { display: block; margin: 6px 0 0; }
+.rz-pair { display: flex; gap: 18px; align-items: flex-start; margin: 8px 0 4px; padding: 14px; border-radius: 12px; border: 1px solid var(--rz-line); background: var(--color-neutral-100); }
+/* Le QR code reste noir sur blanc dans les deux thèmes : les lecteurs lisent mal un code inversé. */
+.rz-pair-qr { flex: none; width: 176px; height: 176px; padding: 6px; border-radius: 8px; background: #fff; image-rendering: pixelated; }
+.rz-pair.is-expired .rz-pair-qr { opacity: .25; }
+.rz-pair-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: 13.5px; line-height: 1.45; }
+.rz-pair-title { font-weight: 600; }
+.rz-pair-steps { margin: 0; padding-left: 20px; }
+.rz-pair-code strong { font-family: var(--font-mono, monospace); letter-spacing: .08em; }
+.rz-pair-url { font-family: var(--font-mono, monospace); word-break: break-all; }
+.rz-pair-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 560px) { .rz-pair { flex-direction: column; align-items: center; } }
