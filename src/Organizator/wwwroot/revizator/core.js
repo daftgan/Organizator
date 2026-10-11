@@ -14,6 +14,8 @@
      R.key(fn(e, el, role) → bool)            raccourcis (aucun dialogue ouvert)
      R.settingsSection(def)   def = { id, order, html() } — une section de l'onglet Révizator des Réglages
      R.setField(label, html)  une ligne de réglage (libellé, contrôle), pour ces sections
+     R.models                 listes de modèles et d'efforts de Claude Code (fields, select, effort, known, custom)
+     R.policy                 modèles fixés par l'administrateur du serveur ({ models, imposed, admin }), admin.js
      R.badge(fn)              pastille de l'onglet de page (ex. cartes à réviser)
      R.shim(type, fn(p, emit)), R.fixture(kind, fn(params) | doc | 'revizator/fixtures/x.json')   simulation hors WebView2
      R.on(name, fn) → off, R.emit(name, payload)
@@ -151,6 +153,7 @@
     spark: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path d="M19 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"></path></svg>',
     cards: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6.5" width="13" height="14" rx="2.5"></rect><path d="M8 3.5h10.5a2.5 2.5 0 0 1 2.5 2.5v11"></path></svg>',
     chart: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5h16"></path><path d="M6.5 15l4-4.5 3.5 3 5-6.5"></path></svg>',
+    shield: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5 5 6.2v5.3c0 4.3 2.9 7.6 7 9 4.1-1.4 7-4.7 7-9V6.2z"></path><path d="m9 12 2.2 2.2L15.5 10"></path></svg>',
     trophy: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4.5h8v5a4 4 0 0 1-8 0z"></path><path d="M8 6.5H5.5a2.5 2.5 0 0 0 2.6 3.6M16 6.5h2.5a2.5 2.5 0 0 1-2.6 3.6"></path><path d="M12 13.5v3.5M8.5 19.5h7"></path></svg>',
     target: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><circle cx="12" cy="12" r="4.5"></circle><circle cx="12" cy="12" r="1" fill="currentColor"></circle></svg>',
     chat: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.5a2 2 0 0 1-2 2H8l-4.5 4v-14a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"></path><path d="M8 9.5h8M8 13h4.5"></path></svg>',
@@ -309,6 +312,16 @@
   R.homeCard = function (def) { if (def && def.id && typeof def.html === 'function') { HOME_CARDS = HOME_CARDS.filter(function (c) { return c.id !== def.id; }); HOME_CARDS.push(def); } };
   R.settingsSection = function (def) { if (def && def.id && typeof def.html === 'function') SECTIONS.push(def); };
   R.setField = function (label, control) { return A ? A.setFieldHtml(label, control) : control; };
+  /* Choix d'un modèle et d'un effort de Claude Code (listes d'Organizator), pour l'administration. */
+  R.models = {
+    fields: function () { return MODEL_FIELDS; },
+    select: function (value, custom, role, key) { return A.modelSelectHtml('claude', value, custom, role, key, false); },
+    effort: function (value, role, key) { return A.effortSelectHtml('claude', value, role, key, false); },
+    known: function (value) { return A.catalogHas(A.catalogFor('claude'), value); },
+    custom: function () { return A.customModel; }
+  };
+  /* Réglages de l'administrateur du serveur (learnPolicy, admin.js) : { models, imposed, admin } ou null. */
+  R.policy = null;
   R.badge = function (fn) { BADGE = typeof fn === 'function' ? fn : null; };
   R.act = function (name, fn) { if (A) A.addAction(name, fn); else PENDING.act.push([name, fn]); };
   R.input = function (role, fn) { if (A) A.addInput(role, fn); else PENDING.input.push([role, fn]); };
@@ -2016,7 +2029,12 @@
     h.push('</div>');
 
     h.push('<div class="set-card"><div class="set-card-head"><span class="set-card-title">Agents (Claude Code)</span></div>');
+    var imposed = R.policy && R.policy.imposed ? R.policy.models || {} : null;
     MODEL_FIELDS.forEach(function (f) {
+      if (imposed) {
+        h.push(A.setFieldHtml(f.label, '<span class="rz-set-fixed">' + esc(String(imposed[f.key] || '') + (f.effort && imposed[f.effort] ? ' · effort ' + imposed[f.effort] : '')) + '</span>'));
+        return;
+      }
       var v = String(p[f.key] || '');
       var custom = R.ui.setCustom[f.key] || (v && !A.catalogHas(A.catalogFor('claude'), v));
       var ctl = A.modelSelectHtml('claude', v, R.ui.setCustom[f.key], 'rz-set-model', 'rz-set-model-' + f.key, false).replace('data-role="rz-set-model"', 'data-role="rz-set-model" data-field="' + f.key + '"');
@@ -2025,7 +2043,8 @@
       if (custom) h.push(A.setFieldHtml('', '<input class="input set-cwd" type="text" data-role="rz-set-model-text" data-field="' + f.key + '" data-focus-key="rz-set-model-text-' + f.key + '" spellcheck="false" placeholder="Identifiant de modèle, ex. sonnet" value="' + esc(v) + '">'));
       h.push('<div class="rz-set-help">' + esc(f.help) + '</div>');
     });
-    h.push('<div class="set-card-foot">Chaque préparation et chaque correction comptent dans votre quota Claude Code. Le tuteur n’a pas d’autre outil que la conversation.</div></div>');
+    h.push('<div class="set-card-foot">' + (imposed ? 'Modèles fixés par l’administrateur du serveur Révizator, pour tous les comptes. ' : '')
+      + 'Chaque préparation et chaque correction comptent dans le quota Claude Code du serveur. Le tuteur n’a pas d’autre outil que la conversation.</div></div>');
 
     h.push('<div class="set-card"><div class="set-card-head"><span class="set-card-title">Apprentissage</span></div>');
     h.push(A.setFieldHtml('Séances par semaine', R.h.chips('weeklyGoal', [2, 3, 4, 5, 6, 7], pr.weeklyGoal, null, 'rz-profile-pick')));

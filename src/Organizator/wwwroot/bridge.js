@@ -18,7 +18,7 @@
      2. page servie par le serveur Révizator (window.REVIZATOR_SERVER) : tout passe par son WebSocket ;
      3. Organizator avec un serveur Révizator réglé (configureRemote) : les messages de Révizator
         (REMOTE_TYPES) partent au serveur, le reste reste sur l'hôte ; les événements learn, tts, asr,
-        voice, whisper et learnChanged viennent du serveur, ceux de l'hôte du même nom sont ignorés.
+        voice, whisper, learnChanged et learnPolicy viennent du serveur, ceux de l'hôte du même nom sont ignorés.
         Sans serveur réglé, ces messages ne partent nulle part : Révizator n'a plus de mode local
         (erreur `needsServer`), seuls restent sur l'hôte les exceptions de routeRemote (fichiers joints,
         `local: true`).
@@ -126,12 +126,13 @@
   /* Messages de Révizator que traite le serveur (§ 4) ; getState, saveSettings, notify, log et perf
      restent sur l'hôte local d'Organizator. */
   var REMOTE_TYPES = {};
-  ('learnLoad learnSave learnDoc learnDocSave learnDocDelete learnNews learnGenerate learnCancel learnJobs learnWait learnBoard '
+  ('learnLoad learnSave learnDoc learnDocSave learnDocDelete learnNews learnGenerate learnCancel learnJobs learnWait learnBoard learnPolicy '
+    + 'adminUsers adminUserSet adminUserRemove adminUserAdmin adminPolicySave '
     + 'ttsStatus ttsDownload ttsRemove ttsWarm speak speakScript cancelSpeak ttsClearCache '
     + 'whisperStatus whisperDownload whisperRemove whisperWarm transcribe cancelTranscribe '
     + 'asrStatus asrDownload asrRemove asrWarm asrStart asrFeed asrEnd asrReset asrStop '
     + 'voiceStart voiceSay voiceInterrupt voiceStop voiceVoices voiceSpeak').split(' ').forEach(function (t) { REMOTE_TYPES[t] = 1; });
-  var REMOTE_EVENTS = { learn: 1, tts: 1, asr: 1, voice: 1, whisper: 1, learnChanged: 1 };
+  var REMOTE_EVENTS = { learn: 1, tts: 1, asr: 1, voice: 1, whisper: 1, learnChanged: 1, learnPolicy: 1 };
   var RETRY_MS = [1000, 2000, 5000, 10000];
   var QUEUE_MS = 10000;               /* un appel attend la reconnexion 10 s au plus */
   var SILENCE_MS = 50000;             /* le serveur envoie un ping toutes les 20 s : au-delà, la liaison est morte */

@@ -28,7 +28,9 @@ public sealed class ServerBridge : IDisposable
     {
         // Revizator
         "learnLoad", "learnSave", "learnDoc", "learnDocSave", "learnDocDelete", "learnNews",
-        "learnGenerate", "learnCancel", "learnJobs", "learnWait", "learnBoard",
+        "learnGenerate", "learnCancel", "learnJobs", "learnWait", "learnBoard", "learnPolicy",
+        // administration (refusee a qui n'administre pas le serveur)
+        "adminUsers", "adminUserSet", "adminUserRemove", "adminUserAdmin", "adminPolicySave",
         // voix anglaises
         "ttsStatus", "ttsDownload", "ttsRemove", "ttsWarm", "speak", "speakScript", "cancelSpeak", "ttsClearCache",
         // reconnaissance
@@ -51,6 +53,9 @@ public sealed class ServerBridge : IDisposable
     private readonly AgentLauncher _launcher;
     private readonly UserSpaces _spaces;
     private readonly Leaderboard _board;
+    private readonly UserStore _users;
+    private readonly TokenStore _tokens;
+    private readonly AdminPolicy _policy;
     private readonly TextToSpeech _tts;
     private readonly LiveAsr _asr;
     private readonly WhisperTranscriber _whisper;
@@ -66,8 +71,12 @@ public sealed class ServerBridge : IDisposable
     /// </summary>
     public Action<JsonObject, object?, string?>? Broadcast { get; set; }
 
-    public ServerBridge(ServerConfig config, HostLog log, Func<IReadOnlyList<UserAccount>> accounts)
+    public ServerBridge(ServerConfig config, HostLog log, UserStore users, TokenStore tokens)
     {
+        _users = users;
+        _tokens = tokens;
+        _policy = new AdminPolicy(config.DataDir, log);
+        Func<IReadOnlyList<UserAccount>> accounts = users.List;
         _config = config;
         _log = log;
         _store = new DataStore(config.DataDir, log);
@@ -280,11 +289,17 @@ public sealed class ServerBridge : IDisposable
         "learnDocSave" => await LearnDocSaveAsync(_spaces.Get(login), payload).ConfigureAwait(false),
         "learnDocDelete" => await LearnDocDeleteAsync(_spaces.Get(login), payload).ConfigureAwait(false),
         "learnNews" => await LearnNewsAsync(_spaces.Get(login), payload).ConfigureAwait(false),
-        "learnGenerate" => await _spaces.Get(login).Agent.GenerateAsync(payload).ConfigureAwait(false),
+        "learnGenerate" => await GenerateAsync(payload, login).ConfigureAwait(false),
         "learnCancel" => new JsonObject { ["cancelled"] = _spaces.Get(login).Agent.Cancel(Str(payload, "job")) },
         "learnJobs" => _spaces.Get(login).Agent.Jobs(),
         "learnWait" => await _spaces.Get(login).Agent.WaitAsync(Str(payload, "job")).ConfigureAwait(false),
         "learnBoard" => await LearnBoardAsync(payload, login).ConfigureAwait(false),
+        "learnPolicy" => LearnPolicy(login),
+        "adminUsers" => AdminUsers(login),
+        "adminUserSet" => await AdminUserSetAsync(payload, login).ConfigureAwait(false),
+        "adminUserRemove" => AdminUserRemove(payload, login),
+        "adminUserAdmin" => AdminUserAdmin(payload, login),
+        "adminPolicySave" => AdminPolicySave(payload, login),
         "ttsStatus" => await Task.Run(_tts.Status).ConfigureAwait(false),
         "ttsDownload" => await DownloadTtsAsync().ConfigureAwait(false),
         "ttsRemove" => new JsonObject { ["removed"] = await _tts.RemoveAsync().ConfigureAwait(false) },
@@ -507,6 +522,173 @@ public sealed class ServerBridge : IDisposable
         return await Task.Run(() => _board.Build(login, weeks)).ConfigureAwait(false);
     }
 
+    /// <summary><c>learnGenerate</c> : les modeles imposes par l'administrateur remplacent ceux de la page.</summary>
+    private async Task<JsonNode> GenerateAsync(JsonObject payload, string login)
+    {
+        _policy.Apply(payload);
+        return await _spaces.Get(login).Agent.GenerateAsync(payload).ConfigureAwait(false);
+    }
+
+    // ------------------------------------------------------------- administration
+
+    /// <summary><c>learnPolicy</c> (tout compte) : les modeles de l'administrateur et si l'on administre soi-meme.</summary>
+    private JsonNode LearnPolicy(string login)
+    {
+        var policy = _policy.ToJson();
+        policy["admin"] = _users.IsAdmin(login);
+        return policy;
+    }
+
+    private void RequireAdmin(string login)
+    {
+        if (!_users.IsAdmin(login))
+        {
+            _log.Warn($"Administration refusee a « {login} »");
+            throw new InvalidOperationException("Réservé à l’administrateur du serveur Révizator.");
+        }
+    }
+
+    /// <summary>
+    /// <c>adminUsers</c> : <c>{ users: [{ login, created, changed, admin, flagged, sessions, devices, name,
+    /// lastActivity, hasData, me }], policy }</c>. Rien du contenu des comptes : la date de leur derniere
+    /// sauvegarde et leur pseudo de classement.
+    /// </summary>
+    private JsonNode AdminUsers(string login)
+    {
+        RequireAdmin(login);
+        var accounts = _users.List();
+        var admins = UserStore.Admins(accounts);
+        var tokens = _tokens.List();
+        var list = new JsonArray();
+        foreach (var account in accounts.OrderBy(a => a.Created, StringComparer.Ordinal).ThenBy(a => a.Login, StringComparer.Ordinal))
+        {
+            var state = new FileInfo(Path.Combine(UserSpaces.DirOf(_config.DataDir, account.Login), "learning.json"));
+            var devices = tokens.Where(t => t.User == account.Login).Select(t => (JsonNode?)JsonValue.Create(t.Device)).ToArray();
+            list.Add(new JsonObject
+            {
+                ["login"] = account.Login,
+                ["created"] = account.Created,
+                ["changed"] = account.Changed,
+                ["admin"] = admins.Contains(account.Login),
+                ["flagged"] = account.Admin,
+                ["sessions"] = devices.Length,
+                ["devices"] = new JsonArray(devices),
+                ["name"] = BoardName(state),
+                ["lastActivity"] = state.Exists ? new DateTimeOffset(state.LastWriteTimeUtc).ToUnixTimeMilliseconds() : null,
+                ["hasData"] = state.Exists,
+                ["me"] = account.Login == login,
+            });
+        }
+
+        return new JsonObject { ["users"] = list, ["policy"] = _policy.ToJson() };
+    }
+
+    /// <summary>Pseudo du classement (<c>profile.boardName</c>), lu sans garder le reste du fichier.</summary>
+    private static string BoardName(FileInfo state)
+    {
+        if (!state.Exists || state.Length > 20L * 1024 * 1024)
+        {
+            return "";
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllBytes(state.FullName));
+            return doc.RootElement.TryGetProperty("subjects", out var subjects) && subjects.TryGetProperty("en", out var en)
+                && en.TryGetProperty("profile", out var profile) && profile.TryGetProperty("boardName", out var name)
+                && name.ValueKind == JsonValueKind.String ? Leaderboard.Clean(name.GetString()) : "";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+        {
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// <c>adminUserSet { login, password }</c> : cree le compte ou change son mot de passe (ses sessions sont
+    /// alors fermees, comme <c>revizator-server user set</c>) -> <c>{ created, closed, users }</c>.
+    /// </summary>
+    private async Task<JsonNode> AdminUserSetAsync(JsonObject payload, string login)
+    {
+        RequireAdmin(login);
+        var target = UserStore.CleanLogin(Str(payload, "login"));
+        var password = Str(payload, "password") ?? "";
+        var existed = await Task.Run(() => _users.Set(target, password)).ConfigureAwait(false);
+        var closed = existed ? _tokens.RevokeUser(target) : 0;
+        _log.Info(existed
+            ? $"Administration : mot de passe de « {target} » change par « {login} » ({closed} session(s) fermee(s))"
+            : $"Administration : compte « {target} » cree par « {login} »");
+        var result = (JsonObject)AdminUsers(login);
+        result["created"] = !existed;
+        result["closed"] = closed;
+        return result;
+    }
+
+    /// <summary>
+    /// <c>adminUserRemove { login }</c> : supprime le compte et ferme ses sessions ; ses donnees restent dans
+    /// <c>users/&lt;compte&gt;/</c>. Ni soi-meme, ni le dernier administrateur.
+    /// </summary>
+    private JsonNode AdminUserRemove(JsonObject payload, string login)
+    {
+        RequireAdmin(login);
+        var target = (Str(payload, "login") ?? "").Trim().ToLowerInvariant();
+        if (target == login)
+        {
+            throw new InvalidOperationException("Vous ne pouvez pas supprimer votre propre compte.");
+        }
+
+        if (!_users.Remove(target))
+        {
+            throw new InvalidOperationException($"Aucun compte « {target} ».");
+        }
+
+        var closed = _tokens.RevokeUser(target);
+        _log.Info($"Administration : compte « {target} » supprime par « {login} » ({closed} session(s) fermee(s), donnees gardees)");
+        var result = (JsonObject)AdminUsers(login);
+        result["closed"] = closed;
+        return result;
+    }
+
+    /// <summary><c>adminUserAdmin { login, admin }</c> : donne ou retire le droit d'administrer (pas a soi-meme).</summary>
+    private JsonNode AdminUserAdmin(JsonObject payload, string login)
+    {
+        RequireAdmin(login);
+        var target = (Str(payload, "login") ?? "").Trim().ToLowerInvariant();
+        var admin = payload["admin"] is JsonValue a && a.TryGetValue<bool>(out var flag) && flag;
+        if (target == login && !admin)
+        {
+            throw new InvalidOperationException("Vous ne pouvez pas vous retirer le droit d’administrer : demandez-le à un autre administrateur.");
+        }
+
+        var accounts = _users.List();
+        if (admin && !accounts.Any(u => u.Admin))
+        {
+            // Premier administrateur designe : l'administrateur implicite (le proprietaire) le reste.
+            foreach (var current in UserStore.Admins(accounts))
+            {
+                _users.SetAdmin(current, true);
+            }
+        }
+
+        if (!_users.SetAdmin(target, admin))
+        {
+            throw new InvalidOperationException($"Aucun compte « {target} ».");
+        }
+
+        _log.Info($"Administration : « {target} » {(admin ? "administre" : "n'administre plus")} le serveur (par « {login} »)");
+        return AdminUsers(login);
+    }
+
+    /// <summary><c>adminPolicySave { models, imposed }</c> -> les reglages enregistres.</summary>
+    private JsonNode AdminPolicySave(JsonObject payload, string login)
+    {
+        RequireAdmin(login);
+        var saved = _policy.Save(payload, login);
+        saved["admin"] = true;
+        PostEvent("learnPolicy", saved.DeepClone() as JsonObject);
+        return saved;
+    }
+
     // ------------------------------------------------------- dictee et transcription
 
     private async Task<JsonNode> DownloadWhisperAsync(JsonObject payload)
@@ -675,6 +857,11 @@ public sealed class ServerBridge : IDisposable
     {
         var settings = _store.LoadSettings();
         var mode = VoiceChat.SanitizeMode(Str(payload, "mode"));
+        if (mode == VoiceChat.TutorMode && _policy.TutorModel() is { } imposed)
+        {
+            payload["model"] = imposed;
+        }
+
         var tutor = mode == VoiceChat.TutorMode ? (payload["tutor"] as JsonObject)?.DeepClone() as JsonObject ?? new JsonObject() : null;
         var options = new VoiceOptions(
             Model: AgentProvider.RequireModel(Str(payload, "model") ?? settings.VoiceModel),

@@ -316,8 +316,12 @@ Le reste (`data.json`, `settings.json`, sessions, modèles de voix…) **ne part
 
 ### Créer le compte
 
-Le premier compte créé est le vôtre : il reprend les données importées (étape 7). D'autres comptes, un par
-personne, ont chacun leurs propres données et se retrouvent dans l'onglet **Classement** de Révizator.
+Le premier compte créé est le vôtre : il reprend les données importées (étape 7) et **administre** le
+serveur. Les autres comptes — un par personne, chacun avec ses données, tous dans l'onglet **Classement** —
+se créent ensuite plus simplement depuis l'onglet **Admin** de Révizator (liste des personnes, mots de
+passe, droits, modèles de Claude Code) ; la commande ci-dessous reste utile pour le premier compte ou en
+dépannage. `docker exec -it revizator revizator-server user admin <identifiant> on` donne le droit
+d'administrer à un autre compte.
 
 Un compte = un identifiant et un mot de passe. Sur le LXC (`<conteneur>` = `revizator`) :
 
@@ -431,7 +435,7 @@ Tout est dans `/opt/revizator/data` :
 | Élément | Rôle | À sauvegarder |
 |---|---|---|
 | `users/<compte>/` (`learning.json`, `learning/`) | profil, progrès, cartes, cours, exercices de chaque compte | **oui** |
-| `users.json`, `tokens.json`, `settings.json` | comptes (mots de passe hachés), sessions ouvertes, réglages du téléphone | oui |
+| `users.json`, `tokens.json`, `settings.json`, `admin.json` | comptes (mots de passe hachés, administrateurs), sessions ouvertes, réglages du téléphone, modèles fixés par l'administrateur | oui |
 | `tts/`, `asr/`, `whisper/` | modèles et cache des phrases lues | non (re-téléchargeables) |
 | `host.log`, `launch/`, `import-backup-*` | journal, fichiers temporaires, anciens imports | non |
 
