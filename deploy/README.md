@@ -127,9 +127,23 @@ API). Il faut un jeton longue durée (un an), créé une fois :
 - ou plus tard dans le conteneur : `docker exec -it revizator claude setup-token` (ouvrir l'URL affichée
   sur le PC, coller le code rendu).
 
-Ce jeton donne accès à ton abonnement : il ne va **que** dans l'environnement de la stack (jamais dans
-git). Les générations faites depuis le serveur comptent dans les mêmes limites d'utilisation que ton
-usage de Claude sur le PC.
+**Copier le jeton sur une seule ligne.** Dans un terminal étroit, il s'affiche coupé en deux : recolle
+les deux morceaux, sans espace, sans « # » ni guillemets devant. Un jeton mal copié donne « 401 Invalid
+bearer token » à chaque génération ; le serveur le signale au démarrage (`docker logs revizator` :
+« CLAUDE_CODE_OAUTH_TOKEN ne commence pas par sk-ant- »), et retire de lui-même les blancs d'un jeton
+coupé.
+
+Ce jeton donne accès à ton abonnement : il va dans **`/opt/revizator/secrets.env`**, hors du dépôt et
+hors de ce que Komodo réécrit (Komodo écrit l'onglet « Environment » dans `deploy/.env`, lisible par
+tous, à chaque Deploy) :
+
+```bash
+install -m 600 /dev/null /opt/revizator/secrets.env
+nano /opt/revizator/secrets.env      # une ligne : CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-…
+```
+
+Le `docker-compose.yml` le lit par `env_file` ; il n'est jamais dans git ni dans Komodo. Les générations
+faites depuis le serveur comptent dans les mêmes limites d'utilisation que ton usage de Claude sur le PC.
 
 ## 5. Stack Komodo
 
@@ -141,15 +155,17 @@ usage de Claude sur le PC.
 | Mode | Files on Server |
 | Run Directory | `/opt/revizator/src/deploy` |
 | File Paths | `docker-compose.yml` |
-| Environment | contenu ci-dessous (Komodo l'écrit dans `deploy/.env`) |
+| Environment | contenu ci-dessous (Komodo l'écrit dans `deploy/.env` : rien de secret) |
 
 ```env
 REVIZATOR_PUBLIC_URL=https://revizator.daft-lab.fr
 REVIZATOR_ALLOWED_ORIGINS=https://app.organizator
-CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+REVIZATOR_TRUSTED_PROXIES=192.168.1.11
 REVIZATOR_CLAUDE_VERSION=stable
 TZ=Europe/Paris
 ```
+
+Le jeton de Claude Code n'est **pas** ici : il est dans `/opt/revizator/secrets.env` (§ 4).
 
 Puis **Deploy**. Le premier déploiement construit l'image (5 à 10 min : SDK .NET, paquets NuGet,
 `ffmpeg`, Claude Code). Les suivants réutilisent le cache.
@@ -175,8 +191,10 @@ services:
     environment:
       REVIZATOR_PUBLIC_URL: ${REVIZATOR_PUBLIC_URL:-https://revizator.daft-lab.fr}
       REVIZATOR_ALLOWED_ORIGINS: ${REVIZATOR_ALLOWED_ORIGINS:-https://app.organizator}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       TZ: ${TZ:-Europe/Paris}
+    env_file:                                  # le jeton de Claude Code, hors de .env
+      - path: /opt/revizator/secrets.env
+        required: false
     volumes:
       - /opt/revizator/data:/data
 ```
@@ -185,7 +203,8 @@ Sans Komodo, la même chose à la main :
 
 ```bash
 cd /opt/revizator/src/deploy
-cp .env.example .env && nano .env           # coller CLAUDE_CODE_OAUTH_TOKEN
+cp .env.example .env                        # réglages (rien de secret)
+install -m 600 /dev/null /opt/revizator/secrets.env && nano /opt/revizator/secrets.env   # le jeton (§ 4)
 docker compose up -d --build
 ```
 
@@ -219,6 +238,14 @@ privé). Pour durcir : `REVIZATOR_TRUSTED_PROXIES=192.168.1.11` (NPM seul), puis
 `docker logs revizator` qu'une connexion depuis la 4G affiche l'adresse publique du téléphone
 (`Connexion : <identifiant> (iPhone Safari, <IP publique>)`) ; s'il affiche `192.168.1.11` ou `172.x`,
 revenir à `private` (Docker ne voit pas NPM sous sa propre adresse).
+
+**Depuis la maison, tous les appareils ont la même adresse.** Un téléphone ou le PC sur le Wi-Fi qui
+ouvre `https://revizator.daft-lab.fr` sort par la Freebox et revient par la redirection de port (NAT en
+boucle) : le serveur les voit tous sous `192.168.1.254`. Sans gravité (le verrou par compte reste par
+compte), mais la limite de 10 échecs par minute est alors commune à toute la maison. Pour que chacun
+garde son adresse, ajouter dans Pi-hole un enregistrement local **Local DNS › DNS Records** :
+`revizator.daft-lab.fr` → `192.168.1.11` (NPM). Les appareils de la maison parlent alors directement à NPM,
+avec le même certificat ; dehors, rien ne change.
 
 Le mot de passe ne passe jamais dans une adresse (formulaire POST, ou JSON pour le PC). Le **jeton de
 session** d'Organizator sur le PC, lui, y passe (`/api/ws?token=`, médias `/t/<jeton>/`) : le journal
@@ -364,7 +391,7 @@ docker exec revizator claude --version
 ```
 
 Le jeton `CLAUDE_CODE_OAUTH_TOKEN` expire au bout d'un an : refaire `claude setup-token`, mettre le
-nouveau dans l'environnement de la stack, Deploy.
+nouveau dans `/opt/revizator/secrets.env` (une seule ligne), Deploy.
 
 ## 11. Sauvegarde
 
@@ -429,7 +456,7 @@ L'essai ouvre deux sessions et les ferme à la fin ; il ne laisse rien derrière
 | Organizator : « Serveur Révizator injoignable » | serveur arrêté, DNS, NPM | `curl https://revizator.daft-lab.fr/api/health` ; `docker ps` |
 | Organizator : « Refusé » | mauvais mot de passe, ou session fermée sur le serveur | « Se déconnecter » si besoin, puis se reconnecter |
 | Générations en échec, journal « Claude Code introuvable » | image sans `claude` | `docker exec revizator claude --version` ; reconstruire |
-| Générations en échec, « Not logged in » / 401 | `CLAUDE_CODE_OAUTH_TOKEN` absent ou expiré | `claude setup-token`, mettre le jeton dans la stack, Deploy |
+| Générations en échec, « Not logged in » / 401 | `CLAUDE_CODE_OAUTH_TOKEN` absent, mal copié (coupé, « # » devant) ou expiré | `docker logs revizator` (avertissement au démarrage) ; `claude setup-token`, jeton sur une seule ligne dans `/opt/revizator/secrets.env`, Deploy |
 | Générations en échec, « usage limit » / limite atteinte | quota de l'abonnement Claude (partagé avec le PC) | attendre la remise à zéro indiquée ; `docker logs revizator` donne l'heure |
 | Pas de micro sur le téléphone | page en HTTP, ou permission refusée | passer par `https://revizator.daft-lab.fr` ; autoriser le micro pour le site |
 | Conteneur `unhealthy` ou redémarre | crash, manque de RAM | `docker logs revizator` ; `dmesg \| grep -i oom` ; augmenter la RAM du CT 110 |

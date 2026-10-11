@@ -122,7 +122,7 @@ git check-ignore deploy/.env                 # doit afficher deploy/.env
 
 ```bash
 cd /opt/revizator/src/deploy
-cp -n .env.example .env                       # CLAUDE_CODE_OAUTH_TOKEN encore vide : normal ici
+cp -n .env.example .env                       # reglages seulement : le jeton ira dans /opt/revizator/secrets.env (étape 6)
 docker compose build 2>&1 | tee /tmp/revizator-build.log
 ```
 
@@ -160,16 +160,19 @@ ls -la /opt/revizator/data                                              # fichie
 **Vérifier** : tout ce qui précède. Ensuite, demande à l'utilisateur s'il gère la stack par Komodo
 (README § 5, mode « Files on Server », run directory `/opt/revizator/src/deploy`) : dans ce cas, fais
 `docker compose down` et laisse-le créer la stack et cliquer Deploy, puis revérifie les mêmes points.
-Le `.env` écrit par Komodo remplace le tien : vérifie qu'il contient les bonnes valeurs
-(`grep -c CLAUDE_CODE_OAUTH_TOKEN deploy/.env`, sans afficher la valeur).
+Le `.env` écrit par Komodo remplace le tien (lisible par tous) : vérifie qu'il ne contient **aucun**
+jeton (`grep -c CLAUDE_CODE_OAUTH_TOKEN deploy/.env` doit rendre 0).
 
 ## 6. Jeton Claude Code, compte Révizator et vraie génération (non testé dans le cloud)
 
 1. Demande à l'utilisateur de lancer `claude setup-token`, sur le PC ou dans le conteneur
    (`docker exec -it revizator claude setup-token` : il ouvre l'URL dans son navigateur et colle le code).
    Il obtient un jeton `sk-ant-oat01-…`.
-2. Il le met dans l'environnement de la stack Komodo (ou toi dans `deploy/.env`, `chmod 600`), puis
-   Deploy (ou `docker compose up -d`).
+2. Il le met dans `/opt/revizator/secrets.env` (`install -m 600 /dev/null /opt/revizator/secrets.env`,
+   puis une ligne `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-…`, **sur une seule ligne**, sans « # » ni
+   guillemets : un terminal étroit coupe le jeton en deux), jamais dans l'« Environment » de Komodo ni
+   dans `deploy/.env` ; puis Deploy (ou `docker compose up -d`). Le journal du serveur signale au
+   démarrage un jeton absent ou mal copié (`docker logs revizator | grep OAUTH`).
 3. **Vérifier** :
 
    ```bash

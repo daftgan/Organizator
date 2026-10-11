@@ -146,6 +146,37 @@ static int Command(ServerConfig config, string[] args)
     }
 }
 
+/// <summary>
+/// Jeton de Claude Code (<c>claude setup-token</c>) : un jeton copie depuis un terminal etroit arrive souvent
+/// coupe en deux lignes, avec des espaces, ou precede d'un « # » ; Claude Code repond alors « 401 Invalid
+/// bearer token » a chaque generation. Les blancs sont retires (le jeton n'en contient jamais) ; le reste
+/// est signale dans le journal, sans jamais ecrire le jeton.
+/// </summary>
+static void CheckClaudeToken(HostLog log)
+{
+    var raw = Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN");
+    if (string.IsNullOrWhiteSpace(raw))
+    {
+        log.Warn("CLAUDE_CODE_OAUTH_TOKEN absent : les generations de Revizator echoueront. Mettre le jeton de "
+            + "« claude setup-token » dans /opt/revizator/secrets.env (voir deploy/README.md, § 4), puis redeployer.");
+        return;
+    }
+
+    var token = new string(raw.Where(c => !char.IsWhiteSpace(c)).ToArray()).Trim('"', '\'');
+    if (token != raw)
+    {
+        Environment.SetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN", token);
+        log.Warn("CLAUDE_CODE_OAUTH_TOKEN contenait des blancs ou des guillemets (copie sur plusieurs lignes ?) : retires.");
+    }
+
+    if (!token.StartsWith("sk-ant-", StringComparison.Ordinal))
+    {
+        log.Warn($"CLAUDE_CODE_OAUTH_TOKEN ne commence pas par « sk-ant- » ({token.Length} caracteres, commence par « "
+            + (token.Length > 0 && !char.IsAsciiLetterOrDigit(token[0]) ? token[0].ToString() : "?") + " ») : "
+            + "probablement mal copie, Claude Code repondra 401. Recopier le jeton sur une seule ligne.");
+    }
+}
+
 /// <summary>Saisie masquee au terminal (docker exec -it) : les caracteres ne s'affichent pas.</summary>
 static string ReadSecret(string prompt)
 {
@@ -187,6 +218,8 @@ static async Task<int> ServeAsync(ServerConfig config)
     log.Info($"Revizator serveur {ServerConfig.Version} : donnees {config.DataDir}, page {config.WwwRoot}, port {config.Port}");
     log.Info("Proxys de confiance (X-Forwarded-*) : "
         + (config.TrustedProxies.Count == 0 ? "aucun" : string.Join(", ", config.TrustedProxies)));
+
+    CheckClaudeToken(log);
 
     // Lance depuis une session Claude Code, le serveur transmettrait ses marqueurs a chaque claude -p.
     var scrubbed = InheritedEnvironment.Scrub();

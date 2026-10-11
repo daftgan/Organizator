@@ -1,6 +1,8 @@
 # Revizator serveur : stack Komodo (ou « docker compose up -d --build » depuis ce dossier).
-# Voir deploy/README.md. Les variables viennent de .env (modele : .env.example) ou de l'onglet
-# « Environment » de la stack Komodo, que Komodo ecrit dans .env a cote de ce fichier.
+# Voir deploy/README.md. Les reglages viennent de .env (modele : .env.example) ou de l'onglet
+# « Environment » de la stack Komodo, que Komodo ecrit dans .env a cote de ce fichier (lisible par tous :
+# rien de secret). Le jeton de Claude Code, lui, est dans /opt/revizator/secrets.env (0600, hors du depot
+# et hors de ce que Komodo reecrit), lu par env_file ci-dessous.
 name: revizator
 
 services:
@@ -25,8 +27,12 @@ services:
       REVIZATOR_PUBLIC_URL: ${REVIZATOR_PUBLIC_URL:-https://revizator.daft-lab.fr}
       REVIZATOR_ALLOWED_ORIGINS: ${REVIZATOR_ALLOWED_ORIGINS:-https://app.organizator}
       REVIZATOR_TRUSTED_PROXIES: ${REVIZATOR_TRUSTED_PROXIES:-private}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       TZ: ${TZ:-Europe/Paris}
+    # CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-… sur une seule ligne, sans guillemets ni « # » (chmod 600).
+    # Absent : le serveur demarre quand meme, et le dit dans ses journaux (les generations echoueront).
+    env_file:
+      - path: /opt/revizator/secrets.env
+        required: false
     volumes:
       # Proprietaire 1654:1654 (utilisateur « app » de l'image) : chown -R 1654:1654 /opt/revizator/data
       - /opt/revizator/data:/data

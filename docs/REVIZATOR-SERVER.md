@@ -413,8 +413,10 @@ l'écriture reste inconditionnelle, comme avant.
   - compose : `pull_policy: build` (image locale `revizator-server:local`, jamais tirée d'un registre :
     Deploy dans Komodo reconstruit), `init: true` (tini récolte les processus de `claude`), port
     `8080:8080`, journaux `json-file` limités ; `REVIZATOR_PUBLIC_URL`, `REVIZATOR_ALLOWED_ORIGINS`,
-    `REVIZATOR_TRUSTED_PROXIES`, `CLAUDE_CODE_OAUTH_TOKEN` et `TZ` interpolés depuis `.env` (écrit par Komodo à partir de
-    l'« Environment » de la stack) ; `deploy/.env` est ignoré par git ;
+    `REVIZATOR_TRUSTED_PROXIES` et `TZ` interpolés depuis `.env` (écrit par Komodo à partir de
+    l'« Environment » de la stack, lisible par tous : rien de secret) ; `CLAUDE_CODE_OAUTH_TOKEN` lu par
+    `env_file` dans `/opt/revizator/secrets.env` (0600, hors du dépôt, jamais réécrit par Komodo ;
+    facultatif : sans lui le serveur démarre et le signale) ; `deploy/.env` est ignoré par git ;
   - `.dockerignore` à la racine : seul `src/` entre dans le contexte ;
   - import : `docker compose stop`, `docker compose run --rm --no-deps revizator import /data/import-pc`,
     `docker compose start`.
