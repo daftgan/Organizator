@@ -26,17 +26,19 @@ public sealed class HttpRoutes
     private readonly LoginLockout _lockout = new();
     private readonly FailureLimiter _limiter;
     private readonly PairingCodes _pairing;
+    private readonly OrganizatorReleases _releases;
     private readonly ServerBridge _bridge;
     private readonly WsHub _hub;
     private readonly HostLog _log;
 
-    public HttpRoutes(ServerConfig config, TokenStore tokens, UserStore users, FailureLimiter limiter, PairingCodes pairing, ServerBridge bridge, WsHub hub, HostLog log)
+    public HttpRoutes(ServerConfig config, TokenStore tokens, UserStore users, FailureLimiter limiter, PairingCodes pairing, OrganizatorReleases releases, ServerBridge bridge, WsHub hub, HostLog log)
     {
         _config = config;
         _tokens = tokens;
         _users = users;
         _limiter = limiter;
         _pairing = pairing;
+        _releases = releases;
         _bridge = bridge;
         _hub = hub;
         _log = log;
@@ -135,6 +137,19 @@ public sealed class HttpRoutes
         if (path == "/login")
         {
             await LoginPageAsync(context).ConfigureAwait(false);
+            return;
+        }
+
+        // Installateur d'Organizator : sans authentification (page de connexion, mises a jour des PC).
+        if (path == "/api/organizator")
+        {
+            await OrganizatorInfoAsync(context).ConfigureAwait(false);
+            return;
+        }
+
+        if (path == "/download/organizator")
+        {
+            await OrganizatorDownloadAsync(context).ConfigureAwait(false);
             return;
         }
 
@@ -400,7 +415,7 @@ public sealed class HttpRoutes
         var noAccount = _users.List().Count == 0
             ? "<p class=\"note\">Aucun compte n'existe encore : créez-le sur le serveur avec <code>revizator-server user set &lt;identifiant&gt;</code>.</p>"
             : "";
-        await response.WriteAsync(LoginHtml(message, noAccount)).ConfigureAwait(false);
+        await response.WriteAsync(LoginHtml(message, noAccount + DownloadHtml())).ConfigureAwait(false);
     }
 
     /// <summary>Styles des pages de connexion et d'appairage (sans script : le CSP n'en permet aucun en ligne).</summary>
@@ -413,6 +428,7 @@ public sealed class HttpRoutes
         + "code{background:#fff6;padding:2px 4px;border-radius:4px}"
         + "p.alt{margin:20px 0 0;text-align:center}p.alt a{color:#b5651d;font-weight:600}"
         + ".code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:1.6rem;letter-spacing:.12em;text-align:center;margin:8px 0 0}"
+        + "p.dl{margin:28px 0 0;padding-top:16px;border-top:1px solid #e3d3bb;text-align:center;font-size:.9rem;color:#6b5a48}p.dl a{color:#b5651d;font-weight:600}"
         + "input.code-in{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:20px;letter-spacing:.12em;text-transform:uppercase;text-align:center}";
 
     private static string LoginHtml(string message, string extra)
@@ -579,6 +595,62 @@ public sealed class HttpRoutes
     {
         var header = request.Headers.Authorization.ToString();
         return header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? header[7..].Trim() : null;
+    }
+
+    // ------------------------------------------------------------------ installateur d'Organizator
+
+    /// <summary>Lien de telechargement de la page de connexion, ou rien si le serveur n'a pas d'installateur.</summary>
+    private string DownloadHtml()
+    {
+        var release = _releases.Current;
+        return release is null
+            ? ""
+            : "<p class=\"dl\">Sur un PC Windows : <a href=\"/download/organizator\">installer Organizator</a> (version "
+                + System.Net.WebUtility.HtmlEncode(release.Version) + ", " + Math.Max(1, (int)Math.Round(release.Size / 1_048_576.0)) + " Mo)</p>";
+    }
+
+    /// <summary>
+    /// <c>GET /api/organizator</c> : <c>{ version, size, sha256, url, published }</c> de l'installateur servi,
+    /// sinon 404. Organizator le lit pour se mettre a jour ; la page, pour proposer le telechargement.
+    /// </summary>
+    private async Task OrganizatorInfoAsync(HttpContext context)
+    {
+        NoCache(context.Response);
+        var release = _releases.Current;
+        if (release is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            await context.Response.WriteAsJsonAsync(new { error = "Aucun installateur d'Organizator sur ce serveur." }).ConfigureAwait(false);
+            return;
+        }
+
+        await context.Response.WriteAsJsonAsync(new
+        {
+            version = release.Version,
+            size = release.Size,
+            sha256 = release.Sha256,
+            url = "/download/organizator",
+            published = release.Published,
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary><c>GET /download/organizator</c> : l'installateur, en piece jointe sous son nom versionne.</summary>
+    private async Task OrganizatorDownloadAsync(HttpContext context)
+    {
+        var release = _releases.Current;
+        var file = release is null ? null : _releases.FilePath(release);
+        if (file is null || !File.Exists(file))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            await context.Response.WriteAsync("Aucun installateur d'Organizator sur ce serveur.").ConfigureAwait(false);
+            return;
+        }
+
+        NoCache(context.Response);
+        var info = new FileInfo(file);
+        await Results.File(file, "application/vnd.microsoft.portable-executable", fileDownloadName: release!.File,
+                lastModified: info.LastWriteTimeUtc, enableRangeProcessing: true)
+            .ExecuteAsync(context).ConfigureAwait(false);
     }
 
     // ------------------------------------------------------------------ appairage d'un telephone

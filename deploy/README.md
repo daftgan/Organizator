@@ -145,6 +145,21 @@ nano /opt/revizator/secrets.env      # une ligne : CLAUDE_CODE_OAUTH_TOKEN=sk-an
 Le `docker-compose.yml` le lit par `env_file` ; il n'est jamais dans git ni dans Komodo. Les générations
 faites depuis le serveur comptent dans les mêmes limites d'utilisation que ton usage de Claude sur le PC.
 
+### Jeton GitHub (installateur et mises à jour d'Organizator)
+
+Le serveur sert aussi l'installateur Windows d'Organizator : lien sur la page de connexion, carte
+« Organizator pour Windows » sur un PC, et c'est là que chaque Organizator vérifie ses mises à jour. Il
+le prend dans la dernière Release GitHub du dépôt, relue toutes les heures. Le dépôt étant privé, il lui
+faut un jeton en lecture seule :
+
+1. GitHub › Settings › Developer settings › **Fine-grained tokens** › Generate new token : dépôt
+   `daftgan/Organizator` seulement, permission **Contents : Read-only**, expiration au choix.
+2. Une ligne de plus dans `/opt/revizator/secrets.env` : `REVIZATOR_GITHUB_TOKEN=github_pat_…`
+3. Deploy. `docker logs revizator` dit ensuite « Installateur d'Organizator 1.0.0 disponible (62 Mo) ».
+
+Sans jeton, le serveur sert le plus récent des `Organizator-Setup-<version>.exe` déposés à la main dans
+`/opt/revizator/data/releases/`. `REVIZATOR_RELEASES_REPO` change le dépôt lu (`none` : dossier seul).
+
 ## 5. Stack Komodo
 
 **Stacks › New Stack** `revizator` :
@@ -398,6 +413,10 @@ docker exec revizator claude --version
 
 Le jeton `CLAUDE_CODE_OAUTH_TOKEN` expire au bout d'un an : refaire `claude setup-token`, mettre le
 nouveau dans `/opt/revizator/secrets.env` (une seule ligne), Deploy.
+
+**Organizator**, lui, n'a rien à redéployer : une nouvelle Release GitHub arrive sur le serveur dans
+l'heure, puis sur chaque PC (vérification au démarrage et toutes les six heures, installation à la
+fermeture d'Organizator).
 
 ## 11. Sauvegarde
 

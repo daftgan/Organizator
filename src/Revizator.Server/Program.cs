@@ -247,7 +247,9 @@ static async Task<int> ServeAsync(ServerConfig config)
     using var bridge = new ServerBridge(config, log);
     var hub = new WsHub(bridge, log, app.Lifetime.ApplicationStopping);
     var users = new UserStore(config.DataDir);
-    var routes = new HttpRoutes(config, new TokenStore(config.DataDir), users, new FailureLimiter(config.TrustedProxies), new PairingCodes(), bridge, hub, log);
+    using var releases = new OrganizatorReleases(config.DataDir, config.ReleasesRepo, config.GitHubToken, log);
+    releases.Start();
+    var routes = new HttpRoutes(config, new TokenStore(config.DataDir), users, new FailureLimiter(config.TrustedProxies), new PairingCodes(), releases, bridge, hub, log);
     if (users.List().Count == 0)
     {
         log.Warn("Aucun compte : creez-le avec « revizator-server user set <identifiant> » (docker exec -it revizator revizator-server user set ...)");

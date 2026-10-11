@@ -33,6 +33,7 @@
     <!-- Services de Revizator, partages avec l'hote WPF (src/Organizator/Services). AgentDraft et
          BitbucketPullRequests, qui tireraient Copilot et les quotas, ont leur copie reduite dans Platform/. -->
     <Compile Include="..\Organizator\Services\HostLog.cs" Link="Shared\HostLog.cs" />
+    <Compile Include="..\Organizator\Services\ReleaseVersion.cs" Link="Shared\ReleaseVersion.cs" />
     <Compile Include="..\Organizator\Services\AgentProvider.cs" Link="Shared\AgentProvider.cs" />
     <Compile Include="..\Organizator\Services\AgentLauncher.cs" Link="Shared\AgentLauncher.cs" />
     <Compile Include="..\Organizator\Services\AppSettings.cs" Link="Shared\AppSettings.cs" />

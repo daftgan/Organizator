@@ -74,6 +74,8 @@ Configuration par variables d'environnement :
 | `REVIZATOR_PORT` | `8080` | port HTTP (TLS assuré par le reverse proxy) |
 | `REVIZATOR_PUBLIC_URL` | `http://localhost:8080` | adresse publique : origine reconnue comme « ce serveur » (formulaires de connexion, WebSocket), adresse de `/login` affichée par `user set` |
 | `REVIZATOR_ALLOWED_ORIGINS` | `https://app.organizator` | origines autorisées en CORS et pour `/api/login` (la page d'Organizator dans WebView2) |
+| `REVIZATOR_RELEASES_REPO` | `daftgan/Organizator` | dépôt GitHub dont la dernière Release fournit l'installateur d'Organizator (relue toutes les heures, copiée dans `releases/` du dossier de données) ; `none` : seulement les installateurs déposés dans `releases/` |
+| `REVIZATOR_GITHUB_TOKEN` | — | jeton GitHub en lecture seule du dépôt (dépôt privé), dans `secrets.env` |
 | `REVIZATOR_TRUSTED_PROXIES` | `private` | adresses ou réseaux (`192.168.1.11`, `172.16.0.0/12`, séparés par des virgules ; `private` = réseaux privés et locaux, `none` = aucun) dont `X-Forwarded-For` et `X-Forwarded-Proto` font foi ; une valeur illisible empêche le démarrage |
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | jeton de `claude setup-token`, lu par Claude Code |
 | `REVIZATOR_CLAUDE` | `claude` (dans le `PATH`) | chemin de l'exécutable Claude Code |
@@ -90,6 +92,8 @@ Routes :
 | `POST /api/login` | identifiant + mot de passe | JSON `{ login, password, device? }` → `{ token, login, session }` (Organizator sur le PC, scripts) ; échec : 401 `{ error }`, ou 429 avec `Retry-After` (adresse ou compte bloqués) ; origine refusée : 403 |
 | `POST /api/logout` | `Authorization: Bearer <jeton>` | ferme cette session → `{ ok }` |
 | `GET /api/me` | cookie ou `Authorization: Bearer` | `{ login, version }` ; sinon 401 (ou 429) |
+| `GET /api/organizator` | non | l'installateur d'Organizator servi : `{ version, size, sha256, url, published }` ; aucun : 404. Organizator le lit pour se mettre à jour, la page pour proposer le téléchargement |
+| `GET /download/organizator` | non | l'installateur, en pièce jointe (`Organizator-Setup-<version>.exe`), avec `Range` ; aucun : 404. La page de connexion y renvoie (« Sur un PC Windows : installer Organizator ») |
 | `POST /api/pair` | `Authorization: Bearer <jeton>` | un code d'appairage pour le compte de cette session → `{ code, link, svg, expiresIn }` : `code` affichable (`K7QF-2MXP`), `link` = `<REVIZATOR_PUBLIC_URL>/pair?c=<code>` (adresse de la requête si `REVIZATOR_PUBLIC_URL` n'est pas réglé), `svg` = son QR code, `expiresIn` = 600 ; sans session : 401 ; origine refusée : 403 |
 | `GET /pair` | non | page **sans script** : avec `?c=<code>`, le code et un bouton « Connecter cet appareil » (rien n'est consommé : un aperçu de lien ne grille pas le code) ; sans, un champ pour le taper ; message selon `?e=` (`bad`, `blocked`, `origin`) |
 | `POST /pair` | code d'appairage | formulaire (`code`, tirets et minuscules tolérés) : le code est consommé, session ouverte pour son compte, cookie `rz_token` et 302 vers `/` ; échec (code inconnu, déjà servi, expiré) : 302 vers `/pair?e=bad`, compté comme un échec de connexion pour l'adresse |
