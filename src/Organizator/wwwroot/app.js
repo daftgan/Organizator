@@ -9612,7 +9612,7 @@
     document.title = 'Révizator';
     if (bridge.mode === 'server' && navigator.serviceWorker && window.isSecureContext) {
       /* La version dans l'adresse : un nouveau serveur installe un nouveau service worker (sw.js). */
-      navigator.serviceWorker.register('sw.js?v=' + encodeURIComponent(String(window.REVIZATOR_SERVER.version || '0')))['catch'](function (e) { console.warn('[organizator] service worker', e); });
+      navigator.serviceWorker.register('sw.js?v=' + encodeURIComponent(String(window.REVIZATOR_SERVER.build || window.REVIZATOR_SERVER.version || '0')))['catch'](function (e) { console.warn('[organizator] service worker', e); });
     }
   }
 

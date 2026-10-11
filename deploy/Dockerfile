@@ -70,4 +70,9 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${REVIZATOR_PORT:-8080}/api/health" > /dev/null || exit 1
 
+# Commit des sources (deploy/auto-update.sh le passe ; vide sinon), rendu par /api/health. En dernier : il
+# change a chaque mise a jour sans invalider les couches au-dessus.
+ARG REVIZATOR_COMMIT=
+ENV REVIZATOR_COMMIT=$REVIZATOR_COMMIT
+
 ENTRYPOINT ["dotnet", "/app/revizator-server.dll"]

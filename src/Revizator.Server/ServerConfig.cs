@@ -9,6 +9,43 @@ public sealed class ServerConfig
     public static readonly string Version =
         typeof(ServerConfig).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
 
+    /// <summary>
+    /// Commit des sources de l'image (<c>REVIZATOR_COMMIT</c>, pose par deploy/auto-update.sh a la
+    /// construction) ; vide pour une image construite autrement (Deploy a la main dans Komodo).
+    /// </summary>
+    public static readonly string Commit =
+        new string((Environment.GetEnvironmentVariable("REVIZATOR_COMMIT") ?? "").Where(char.IsAsciiLetterOrDigit).Take(40).ToArray());
+
+    /// <summary>
+    /// Empreinte des fichiers de la page (<see cref="ComputeBuild"/>) : change a chaque mise a jour de la page,
+    /// meme sans changement de <see cref="Version"/>. Le service worker du telephone s'enregistre sous ce
+    /// numero : une page modifiee installe un nouveau cache, l'ancien est supprime.
+    /// </summary>
+    public static string Build { get; private set; } = "";
+
+    /// <summary>Calcule <see cref="Build"/> : SHA-256 des chemins et contenus de <paramref name="wwwRoot"/>, 12 caracteres.</summary>
+    public static void ComputeBuild(string wwwRoot)
+    {
+        try
+        {
+            using var sha = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+            foreach (var file in Directory.EnumerateFiles(wwwRoot, "*", SearchOption.AllDirectories)
+                .Select(f => Path.GetRelativePath(wwwRoot, f).Replace('\\', '/'))
+                .Where(f => !f.StartsWith("revizator/fixtures/", StringComparison.Ordinal))
+                .OrderBy(f => f, StringComparer.Ordinal))
+            {
+                sha.AppendData(System.Text.Encoding.UTF8.GetBytes(file + "\n"));
+                sha.AppendData(File.ReadAllBytes(Path.Combine(wwwRoot, file)));
+            }
+
+            Build = Convert.ToHexString(sha.GetHashAndReset())[..12].ToLowerInvariant();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Build = "";
+        }
+    }
+
     /// <summary>Dossier de donnees : meme disposition que <c>%LOCALAPPDATA%\Organizator\</c> pour Revizator.</summary>
     public required string DataDir { get; init; }
 

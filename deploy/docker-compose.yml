@@ -13,6 +13,8 @@ services:
       args:
         # stable, latest ou un numero (2.1.30) : change-le pour forcer une nouvelle version de Claude Code.
         CLAUDE_CODE_VERSION: ${REVIZATOR_CLAUDE_VERSION:-stable}
+        # Commit des sources, pose par auto-update.sh (vide pour un Deploy a la main) : /api/health le rend.
+        REVIZATOR_COMMIT: ${REVIZATOR_COMMIT:-}
     image: revizator-server:local
     # Image construite ici, jamais tiree d'un registre : « up » (Deploy dans Komodo) la reconstruit depuis
     # les sources (couches en cache : quelques secondes quand rien n'a change).

@@ -1,0 +1,11 @@
+# Lance revizator-auto-update.service une minute apres la fin du passage precedent.
+[Unit]
+Description=Revizator : verifie GitHub toutes les minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

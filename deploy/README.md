@@ -402,6 +402,47 @@ tous les appareils. Le tuteur à voix haute utilise Kokoro (voix) et Parakeet (�
 
 ## 10. Mise à jour
 
+### Automatique (conseillé)
+
+Une fois installé, le serveur se met à jour **tout seul** quelques minutes après chaque fusion sur `main`
+qui le concerne : toutes les minutes, `deploy/auto-update.sh` regarde GitHub ; s'il y a du nouveau pour
+le serveur, il **sauvegarde les données**, met la copie à jour, reconstruit l'image et relance le
+conteneur (la même stack que Komodo), puis vérifie que `/api/health` répond avec le nouveau commit. Si la
+construction échoue ou si le serveur ne répond pas en 4 minutes, il **revient à la version précédente**
+et n'essaie plus ce commit tant qu'une nouvelle fusion n'arrive pas. Un changement qui ne touche pas le
+serveur (documentation, application PC seule) avance juste la copie, sans reconstruire. Rien n'est ouvert
+sur Internet : c'est le serveur qui va voir GitHub.
+
+Installation, une fois, en root sur le LXC (la copie `/opt/revizator/src` doit déjà être à jour avec ces
+fichiers : faire d'abord un `git pull` à la main) :
+
+```bash
+cd /opt/revizator/src && git pull
+systemctl link /opt/revizator/src/deploy/revizator-auto-update.service /opt/revizator/src/deploy/revizator-auto-update.timer
+systemctl enable --now revizator-auto-update.timer
+systemctl start revizator-auto-update.service      # premier passage tout de suite (facultatif)
+```
+
+Suivre ce qu'il fait :
+
+```bash
+journalctl -u revizator-auto-update -f             # chaque mise à jour, sauvegarde, échec éventuel
+systemctl list-timers revizator-auto-update        # prochain passage
+curl -s http://localhost:8080/api/health           # {"ok":true,"version":"1.0.0","build":"…","commit":"…"}
+```
+
+`commit` est le commit en service (12 caractères, comme sur GitHub) ; il est vide après un Deploy à la
+main dans Komodo, qui ne le connaît pas. Les sauvegardes vont dans `/root/revizator-backups/` (les 10
+dernières, sans les modèles de voix et de transcription ni les installateurs, re-téléchargeables).
+Arrêter : `systemctl disable --now revizator-auto-update.timer`. Réglages (branche suivie, nombre de
+sauvegardes, dossier) : lignes `Environment=` de `deploy/revizator-auto-update.service`, puis
+`systemctl daemon-reload`.
+
+À éviter : modifier à la main des fichiers suivis dans `/opt/revizator/src` (le script le voit, ne fait
+plus rien et le dit dans le journal) ; `deploy/.env`, écrit par Komodo, n'est pas suivi et ne gêne pas.
+
+### À la main
+
 ```bash
 cd /opt/revizator/src && git pull
 ```
@@ -409,8 +450,9 @@ cd /opt/revizator/src && git pull
 Puis Komodo › stack `revizator` › **Deploy** (reconstruit l'image et recrée le conteneur ; les données
 restent). Sans Komodo : `cd deploy && docker compose up -d --build`.
 
-Après une mise à jour, le téléphone prend la nouvelle version au prochain lancement (le service worker
-porte le numéro de version) ; au besoin, fermer et rouvrir l'application.
+Après une mise à jour, le téléphone prend la nouvelle version au prochain lancement : le service worker
+porte l'empreinte des fichiers de la page (`build` de `/api/health`), qui change dès que la page change ;
+au besoin, fermer et rouvrir l'application.
 
 **Claude Code** ne se met pas à jour tout seul dans le conteneur : il est figé dans l'image. Pour en
 changer, mettre un numéro précis dans `REVIZATOR_CLAUDE_VERSION` (ex. `2.1.42`) puis Deploy, ou
