@@ -5,6 +5,8 @@
 # - Sur un tag v* (git tag v1.2.0 && git push origin v1.2.0) : en plus, une Release GitHub avec
 #   Organizator-Setup-<version>.exe (a telecharger et lancer, sans droits d'administrateur) et
 #   l'exe portable.
+# - Sans git : Actions › Organizator › Run workflow, avec une version (1.2.0) : le runner cree le tag
+#   v1.2.0 sur le commit construit, puis la meme Release.
 name: Organizator
 
 on:
@@ -21,6 +23,11 @@ on:
       - 'installer/**'
       - '.github/workflows/organizator.yml'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version a publier (ex. 1.2.0) : cree le tag v<version> et la Release. Vide : simple construction.'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -44,15 +51,24 @@ jobs:
         id: version
         shell: pwsh
         run: |
+          $release = ''
+          $wanted = '${{ inputs.version }}'.Trim() -replace '^v', ''
           if ('${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -match '^v(\d+\.\d+\.\d+)(-.+)?$') {
             $numeric = $Matches[1]
             $version = '${{ github.ref_name }}'.Substring(1)
+            $release = '${{ github.ref_name }}'
+          } elseif ($wanted) {
+            if ($wanted -notmatch '^(\d+\.\d+\.\d+)(-[0-9A-Za-z.-]+)?$') { throw "Version illisible : $wanted (attendu : 1.2.0)" }
+            $numeric = $Matches[1]
+            $version = $wanted
+            $release = "v$wanted"
           } else {
             $numeric = '1.0.0'
             $version = "1.0.0-ci.${{ github.run_number }}"
           }
           "version=$version" >> $env:GITHUB_OUTPUT
           "numeric=$numeric" >> $env:GITHUB_OUTPUT
+          "release=$release" >> $env:GITHUB_OUTPUT
 
       # Meme publication que publish.ps1 -SelfContained, par la CLI dotnet (MSBuild 18 n'est pas sur les runners).
       - name: Publier l'exe autonome
@@ -86,11 +102,21 @@ jobs:
           path: publish/installer/*.exe
           if-no-files-found: error
 
+      # Tag pousse : la Release se cree sur ce tag. Lancement a la main avec une version : gh cree aussi le
+      # tag, sur le commit construit. Release deja la (creee a la main) : les fichiers y sont ajoutes.
       - name: Release
-        if: github.ref_type == 'tag'
+        if: steps.version.outputs.release != ''
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create '${{ github.ref_name }}' (Get-ChildItem publish\installer\*.exe).FullName `
-            --title 'Organizator ${{ steps.version.outputs.version }}' --generate-notes
+          $tag = '${{ steps.version.outputs.release }}'
+          $files = (Get-ChildItem publish\installer\*.exe).FullName
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $files --clobber
+          } else {
+            gh release create $tag $files --target '${{ github.sha }}' `
+              --title 'Organizator ${{ steps.version.outputs.version }}' --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -20,7 +20,7 @@ Téléchargez **`Organizator-Setup-<version>.exe`** depuis la page **Releases** 
 
 Pour Révizator, il reste à brancher le serveur : **Réglages › Révizator › Serveur Révizator** (adresse, identifiant, mot de passe). Le téléphone, ensuite, s'ajoute par un QR code (voir « Révizator sur le téléphone »).
 
-Publier une version : `git tag v1.2.0 && git push origin v1.2.0`. Le workflow `.github/workflows/organizator.yml` construit l'exécutable et l'installateur sur un runner Windows et crée la Release ; à chaque push qui touche l'application, les mêmes fichiers sont aussi disponibles en artefact du run (onglet Actions).
+Publier une version : onglet **Actions › Organizator › Run workflow**, en tapant la version (`1.2.0`) — le tag `v1.2.0` et la Release sont créés sur GitHub —, ou `git tag v1.2.0 && git push origin v1.2.0`. Le workflow `.github/workflows/organizator.yml` construit l'exécutable et l'installateur sur un runner Windows et crée la Release ; à chaque push qui touche l'application, les mêmes fichiers sont aussi disponibles en artefact du run (onglet Actions).
 
 ## Lancer
 
