@@ -521,9 +521,17 @@
      lecture ne se remplace jamais par des données vides, que la prochaine sauvegarde y écrirait. */
   var loadError = '', loadSeq = 0, loading = null;
   function onServer() { return !!(bridge.remote && bridge.remote()); }
+  /* Dans Organizator, Révizator n'a plus de mode local : sans serveur réglé, il ne lit rien et montre
+     le formulaire de connexion (docs/REVIZATOR-SERVER.md § 5.1). */
+  function needServer() { return !!(bridge.needsServer && bridge.needsServer()); }
 
   function load() {
     var seq = ++loadSeq;
+    if (needServer()) {
+      loading = null; loaded = false; loadError = '';
+      R.render();
+      return Promise.resolve();
+    }
     return (loading = bridge.call('learnLoad', {}, 20000).then(function (r) {
       loading = null;
       if (seq !== loadSeq) return;
@@ -535,8 +543,8 @@
     }, function (e) {
       loading = null;
       if (seq !== loadSeq) return;
-      if (onServer()) {
-        loadError = (e && e.message) || 'Serveur Révizator injoignable.';
+      if (onServer() || (e && e.needsServer)) {
+        loadError = e && e.needsServer ? '' : (e && e.message) || 'Serveur Révizator injoignable.';
         R.render();
         return;
       }
@@ -695,6 +703,10 @@
   function renderPage(host, enter) {
     if (!loaded) {
       host.removeAttribute('data-rz-view');
+      if (needServer()) {
+        A.setHtml(host, '<div class="rz"><div class="rz-connect">' + (serverSettable() ? serverCardHtml() : '') + '</div></div>');
+        return;
+      }
       A.setHtml(host, loadError
         ? '<div class="rz"><div class="rz-error">' + esc(loadError) + '<br>Révizator relit vos données dès que le serveur répond.</div>'
           + '<div class="rz-load-actions"><button type="button" class="btn btn-secondary" data-act="rz-reload">Réessayer</button>'
@@ -1810,7 +1822,7 @@
   function serverCardHtml() {
     var u = serverDraft(), cur = serverSettings(), live = bridge.remote ? bridge.remote() : null;
     var h = ['<div class="set-card"><div class="set-card-head"><span class="set-card-title">Serveur Révizator</span></div>'];
-    h.push('<div class="rz-set-help">Vos cartes, cours et progrès sont alors lus et écrits sur le serveur ; vos tâches restent sur ce PC. Sans serveur, Révizator garde tout sur ce PC.</div>');
+    h.push('<div class="rz-set-help">Vos cartes, cours et progrès sont lus et écrits sur le serveur ; vos tâches restent sur ce PC. Sans serveur, Révizator ne s’ouvre pas : il n’a plus de données sur ce PC.</div>');
     if (cur.url && cur.token) {
       h.push(A.setFieldHtml('Serveur', '<span>' + esc(cur.url) + (cur.login ? ' — connecté en tant que <strong>' + esc(cur.login) + '</strong>' : '') + '</span>'));
       h.push(A.setFieldHtml('', '<button type="button" class="btn btn-secondary" data-act="rz-server-test"' + (u.testing ? ' disabled' : '') + '>' + (u.testing ? 'Test…' : 'Tester la connexion') + '</button>'
@@ -1828,7 +1840,7 @@
     }
     var foot = live
       ? 'En service : ' + esc(live.url) + ' — <strong>' + esc(SERVER_STATES[live.state] || live.state) + '</strong>.'
-      : 'Aucun serveur : Révizator lit et écrit learning.json sur ce PC.';
+      : 'Aucun serveur : Révizator attend la connexion.';
     h.push('<div class="set-card-foot">' + foot + ' Le compte se crée sur le serveur : <code>revizator-server user set &lt;identifiant&gt;</code>.</div></div>');
     return h.join('');
   }
@@ -1851,7 +1863,7 @@
     var p = R.prefs, pr = R.profile;
     var h = [];
     var srv = serverSettable() ? serverCardHtml() : (bridge.mode === 'server' ? accountCardHtml() : '');
-    if (!loaded) return srv + '<div class="set-note">' + esc(loadError || 'Chargement…') + '</div>';
+    if (!loaded) return srv + '<div class="set-note">' + esc(loadError || (needServer() ? 'Connectez-vous au serveur Révizator pour régler le reste.' : 'Chargement…')) + '</div>';
     h.push(srv);
     h.push('<div class="set-card"><div class="set-card-head"><span class="set-card-title">Voix</span></div>');
     h.push('<div class="rz-set-voice">' + voiceStatusHtml(false) + '</div>');
@@ -2019,7 +2031,7 @@
         u.draft = { url: cur.url, login: cur.login, password: '' };
         window.organizatorApp.setSettings({ revizatorServerToken: '' });
         bridge.configureRemote({ url: '', token: '' });
-        R.toast('Déconnecté : Révizator garde de nouveau ses données sur ce PC.');
+        R.toast('Déconnecté : Révizator attend une nouvelle connexion au serveur.');
         R.render();
       });
     });

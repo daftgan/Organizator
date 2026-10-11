@@ -6,7 +6,8 @@
      on(event, handler)  -> off()     événements poussés par l'hôte
      isShim                           vrai hors WebView2 et hors serveur Révizator
      mode                             'webview' | 'server' | 'shim'
-     configureRemote({ url, token })  serveur Révizator d'Organizator (cas 3 ci-dessous) ; url vide : tout local
+     configureRemote({ url, token })  serveur Révizator d'Organizator (cas 3 ci-dessous) ; url vide : Révizator coupé
+     needsServer() -> bool             vrai dans Organizator tant qu'aucun serveur Révizator n'est réglé
      remote() -> { url, state } | null ; connection() -> état de la liaison ou null
      testRemote({ url, token }) -> Promise<{ state: 'online'|'unreachable'|'refused'|'invalid', version, error }>
      loginRemote({ url, login, password }) -> Promise<{ state: 'online'|'refused'|'unreachable'|'invalid', token, login, error }>
@@ -17,6 +18,9 @@
      3. Organizator avec un serveur Révizator réglé (configureRemote) : les messages de Révizator
         (REMOTE_TYPES) partent au serveur, le reste reste sur l'hôte ; les événements learn, tts, asr,
         voice, whisper et learnChanged viennent du serveur, ceux de l'hôte du même nom sont ignorés.
+        Sans serveur réglé, ces messages ne partent nulle part : Révizator n'a plus de mode local
+        (erreur `needsServer`), seuls restent sur l'hôte les exceptions de routeRemote (fichiers joints,
+        `local: true`).
    Cas 2 et 3 : reconnexion (1 s, 2 s, 5 s puis toutes les 10 s), événement 'connection'
    ({ state: 'online'|'offline'|'connecting', ou 'local' quand le serveur est retiré }), URL des
    hôtes virtuels traduites dans les deux sens.
@@ -1368,12 +1372,26 @@
     }
   }
 
+  /* Révizator n'a plus de mode local dans Organizator : sans serveur réglé, ses messages échouent au
+     lieu de lire ou d'écrire les données du PC. Le shim garde son mode local (essais), sauf avec
+     window.__shimServerOnly. */
+  function needsServer() { return !SERVER && !remote && (!!wv || !!window.__shimServerOnly); }
+  function needsServerError() {
+    var e = new Error('Révizator passe par son serveur : connectez-vous dans Réglages › Révizator.');
+    e.needsServer = true;
+    return e;
+  }
+
   var localCall = wv ? hostCall : shimCall;
   window.bridge = {
     call: SERVER ? serverCall : function (type, payload, timeoutMs, files) {
-      if (remote && routeRemote(type, payload, files)) return remote.call(type, payload, timeoutMs);
+      if (REMOTE_TYPES[type] && routeRemote(type, payload, files)) {
+        if (remote) return remote.call(type, payload, timeoutMs);
+        if (needsServer()) return Promise.reject(needsServerError());
+      }
       return localCall(type, payload, timeoutMs, files);
     },
+    needsServer: needsServer,
     on: on,
     isShim: !wv && !SERVER,
     mode: SERVER ? 'server' : (wv ? 'webview' : 'shim'),
