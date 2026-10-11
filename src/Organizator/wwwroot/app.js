@@ -1365,8 +1365,8 @@
      Sur le téléphone (page du serveur Révizator), ce ne sont pas les Paramètres de Windows. */
   function micDeniedHelp() {
     var ua = navigator.userAgent || '';
-    if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'Réglages › Apps › Safari › Micro : Autoriser, puis rouvrez Révizator';
-    if (/Android/.test(ua)) return 's’il ne demande plus la permission : Chrome › ⋮ › Paramètres › Paramètres des sites › Micro';
+    if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'à rouvrir dans Réglages › Apps › Safari › Micro';
+    if (/Android/.test(ua)) return 'à rouvrir dans Chrome › ⋮ › Paramètres › Paramètres des sites › Micro';
     return 'Paramètres Windows › Confidentialité › Microphone';
   }
 
