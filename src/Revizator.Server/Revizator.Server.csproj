@@ -23,6 +23,9 @@
     <NoWarn>$(NoWarn);CA1416;CS0649</NoWarn>
     <!-- wwwroot n'est pas celui du projet : c'est celui de l'hote WPF, copie plus bas. -->
     <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <!-- Serveur Linux seulement : publish.ps1 publie toute la solution en win-x64 dans publish\, ou ce
+         projet deposait ~35 Mo inutiles a cote d'Organizator.exe. Le Dockerfile, lui, publie en linux-x64. -->
+    <IsPublishable Condition="$(RuntimeIdentifier.StartsWith('win'))">false</IsPublishable>
     <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
   </PropertyGroup>
 
