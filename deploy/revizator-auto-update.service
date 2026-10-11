@@ -1,0 +1,19 @@
+# Revizator serveur : mise a jour automatique depuis GitHub (deploy/auto-update.sh, deploy/README.md § 10).
+# Installation, en root sur le LXC :
+#   systemctl link /opt/revizator/src/deploy/revizator-auto-update.service /opt/revizator/src/deploy/revizator-auto-update.timer
+#   systemctl enable --now revizator-auto-update.timer
+[Unit]
+Description=Revizator : mise a jour automatique depuis GitHub
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/revizator/src/deploy/auto-update.sh
+# Une premiere construction sans cache peut durer une dizaine de minutes.
+TimeoutStartSec=30min
+# Reglages facultatifs (valeurs par defaut ci-dessous) :
+# Environment=REVIZATOR_BRANCH=main
+# Environment=REVIZATOR_KEEP_BACKUPS=10
+# Environment=REVIZATOR_BACKUPS=/root/revizator-backups

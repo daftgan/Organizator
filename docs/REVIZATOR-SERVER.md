@@ -86,7 +86,7 @@ Routes :
 
 | Route | Auth | Rôle |
 |---|---|---|
-| `GET /api/health` | non | `{ ok, version }` |
+| `GET /api/health` | non | `{ ok, version, page, commit, builtAt, startedAt }` — `page` : empreinte des fichiers de la page (12 caractères, `ServerConfig.ComputePageHash`), `commit` / `builtAt` : `build-info.json` de l'image, `startedAt` : démarrage du serveur |
 | `GET /login` | non | formulaire de connexion (identifiant, mot de passe), **sans script** ; liens vers le manifeste et les icônes (la page s'installe depuis là) ; message selon `?e=` (`bad`, `blocked`, `locked`, `origin`, `out`) ; avec un cookie valide : 302 vers `/` ; sans aucun compte : rappel de `revizator-server user set` |
 | `POST /login` | identifiant + mot de passe | formulaire (`login`, `password`, 4 Ko au plus) : session ouverte, cookie `rz_token` (HttpOnly, SameSite=Lax, Secure derrière HTTPS, 400 jours) et 302 vers `/` ; échec : 302 vers `/login?e=bad`, `blocked` (adresse), `locked` (compte) ou `origin` (contrôle d'origine) |
 | `POST /logout` | cookie | ferme la session du cookie, retire le cookie, 302 vers `/login?e=out` ; origine refusée : 403 |
@@ -99,7 +99,7 @@ Routes :
 | `GET /pair` | non | page **sans script** : avec `?c=<code>`, le code et un bouton « Connecter cet appareil » (rien n'est consommé : un aperçu de lien ne grille pas le code) ; sans, un champ pour le taper ; message selon `?e=` (`bad`, `blocked`, `origin`) |
 | `POST /pair` | code d'appairage | formulaire (`code`, tirets et minuscules tolérés) : le code est consommé, session ouverte pour son compte, cookie `rz_token` et 302 vers `/` ; échec (code inconnu, déjà servi, expiré) : 302 vers `/pair?e=bad`, compté comme un échec de connexion pour l'adresse |
 | `GET /` , `/index.html` | cookie | `wwwroot/index.html` avec deux injections (ci-dessous) ; sans session valide : 302 vers `/login` (un cookie périmé est retiré au passage ; 429 au-delà de la limite d'essais) |
-| `GET /revizator-server.js` | non | généré : `window.REVIZATOR_SERVER = { mode: 'revizator', version, wsUrl: '/api/ws' }` |
+| `GET /revizator-server.js` | non | généré : `window.REVIZATOR_SERVER = { mode: 'revizator', version, page, wsUrl: '/api/ws' }` |
 | `GET /<fichier de wwwroot>` | non | fichiers statiques de la page (aucune donnée personnelle) |
 | `GET /api/ws` | cookie ou `?token=` | WebSocket du pont (§ 4) |
 | `GET /learn/…`, `GET /t/<jeton>/learn/…` | cookie / jeton dans le chemin | dossier `learning/` (ce que sert `learn.organizator`) |
@@ -368,8 +368,9 @@ l'onglet Révizator puis l'onglet Dictée (sans « Transcrire les enregistrement
   worker à la racine : met en cache l'enveloppe de la page — HTML, CSS, JS, polices, icônes — pour un
   démarrage rapide ; **jamais** `/api`, `/learn`, `/tts`, `/t/`). Enregistré par `app.js` en
   mode serveur seulement (`bridge.mode === 'server'`, contexte sécurisé), sous l'adresse
-  `sw.js?v=<REVIZATOR_SERVER.version>` : une nouvelle version du serveur installe un nouveau service
-  worker, dont le cache (`revizator-shell-<version>`) remplace l'ancien. Page et `revizator-server.js` :
+  `sw.js?v=<REVIZATOR_SERVER.page>` (empreinte des fichiers de la page ; `version` à défaut) : toute
+  page modifiée installe un nouveau service worker, dont le cache (`revizator-shell-<page>`) remplace
+  l'ancien. Page et `revizator-server.js` :
   réseau d'abord (copie hors ligne) ; autres fichiers : copie d'abord, relue en arrière-plan.
 - `mobile.css` n'agit que sous `@media (max-width: 600px)` (et `(hover: none)` / `(pointer: coarse)` pour
   les aides au survol et les raccourcis clavier) : en-tête d'une ligne collé en haut, onglets en bas

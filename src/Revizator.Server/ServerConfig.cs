@@ -12,6 +12,36 @@ public sealed class ServerConfig
     /// <summary>Le deploiement en cours : commit et heure de construction de l'image, heure de demarrage.</summary>
     public static readonly BuildInfo Build = BuildInfo.Load(Path.Combine(AppContext.BaseDirectory, "build-info.json"));
 
+    /// <summary>
+    /// Empreinte des fichiers de la page (<see cref="ComputePageHash"/>) : change a chaque mise a jour de la page,
+    /// meme sans changement de <see cref="Version"/>. Le service worker du telephone s'enregistre sous ce
+    /// numero : une page modifiee installe un nouveau cache, l'ancien est supprime.
+    /// </summary>
+    public static string PageHash { get; private set; } = "";
+
+    /// <summary>Calcule <see cref="PageHash"/> : SHA-256 des chemins et contenus de <paramref name="wwwRoot"/>, 12 caracteres.</summary>
+    public static void ComputePageHash(string wwwRoot)
+    {
+        try
+        {
+            using var sha = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+            foreach (var file in Directory.EnumerateFiles(wwwRoot, "*", SearchOption.AllDirectories)
+                .Select(f => Path.GetRelativePath(wwwRoot, f).Replace('\\', '/'))
+                .Where(f => !f.StartsWith("revizator/fixtures/", StringComparison.Ordinal))
+                .OrderBy(f => f, StringComparer.Ordinal))
+            {
+                sha.AppendData(System.Text.Encoding.UTF8.GetBytes(file + "\n"));
+                sha.AppendData(File.ReadAllBytes(Path.Combine(wwwRoot, file)));
+            }
+
+            PageHash = Convert.ToHexString(sha.GetHashAndReset())[..12].ToLowerInvariant();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            PageHash = "";
+        }
+    }
+
     /// <summary>Dossier de donnees : meme disposition que <c>%LOCALAPPDATA%\Organizator\</c> pour Revizator.</summary>
     public required string DataDir { get; init; }
 
