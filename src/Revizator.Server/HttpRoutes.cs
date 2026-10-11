@@ -187,7 +187,7 @@ public sealed class HttpRoutes
                 return;
             }
 
-            await PrivateFileAsync(context, path).ConfigureAwait(false);
+            await PrivateFileAsync(context, path, context.Request.Cookies[CookieName]).ConfigureAwait(false);
             return;
         }
 
@@ -203,7 +203,7 @@ public sealed class HttpRoutes
                 return;
             }
 
-            await PrivateFileAsync(context, slash < 0 ? "/" : rest[slash..]).ConfigureAwait(false);
+            await PrivateFileAsync(context, slash < 0 ? "/" : rest[slash..], token).ConfigureAwait(false);
             return;
         }
 
@@ -925,8 +925,15 @@ public sealed class HttpRoutes
 
         // Jeton revoque (ou remplace) pendant que la connexion est ouverte : elle est fermee (voir WsHub).
         var token = query.Length > 0 ? query : context.Request.Cookies[CookieName];
+        var login = _tokens.UserOf(token);
+        if (string.IsNullOrEmpty(login))
+        {
+            await DenyAsync(context).ConfigureAwait(false);
+            return;
+        }
+
         using var socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-        await _hub.RunAsync(socket, device!, () => _tokens.Validate(token) is not null, context.RequestAborted).ConfigureAwait(false);
+        await _hub.RunAsync(socket, device!, login, () => _tokens.Validate(token) is not null, context.RequestAborted).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -948,13 +955,17 @@ public sealed class HttpRoutes
 
     // ------------------------------------------------------------------ fichiers
 
-    /// <summary><c>/learn/…</c> sous <c>learning/</c>, <c>/tts/…</c> sous le cache des phrases.</summary>
-    private async Task PrivateFileAsync(HttpContext context, string path)
+    /// <summary>
+    /// <c>/learn/…</c> sous le dossier <c>learning/</c> du compte de la session (jamais celui d'un autre),
+    /// <c>/tts/…</c> sous le cache des phrases, commun.
+    /// </summary>
+    private async Task PrivateFileAsync(HttpContext context, string path, string? token)
     {
         string? file = null;
         if (path.StartsWith("/learn/", StringComparison.Ordinal))
         {
-            file = SafeFile(_bridge.LearningRoot, path["/learn".Length..]);
+            var login = _tokens.UserOf(token);
+            file = string.IsNullOrEmpty(login) ? null : SafeFile(_bridge.LearningRootOf(login), path["/learn".Length..]);
         }
         else if (path.StartsWith("/tts/", StringComparison.Ordinal))
         {

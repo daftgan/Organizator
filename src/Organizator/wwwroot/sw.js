@@ -20,10 +20,10 @@ var PREFIX = 'revizator-shell-';
 var SHELL = [
   'index.html', 'organic.css', 'fonts.css', 'app.css', 'voice.css', 'mobile.css',
   'revizator/revizator.css', 'revizator/exercise.css', 'revizator/lesson.css', 'revizator/test.css',
-  'revizator/progress.css', 'revizator/tutor.css',
+  'revizator/progress.css', 'revizator/tutor.css', 'revizator/board.css', 'revizator/admin.css',
   'bridge.js', 'app.js', 'voice-engine.js', 'voice.js',
   'revizator/core.js', 'revizator/srs.js', 'revizator/items.js', 'revizator/exercise.js', 'revizator/lesson.js',
-  'revizator/test.js', 'revizator/progress.js', 'revizator/tutor.js',
+  'revizator/test.js', 'revizator/progress.js', 'revizator/tutor.js', 'revizator/board.js', 'revizator/admin.js',
   'fonts/figtree-400-latin.woff2', 'fonts/figtree-600-latin.woff2', 'fonts/figtree-700-latin.woff2',
   'fonts/caprasimo-400-latin.woff2', 'manifest.webmanifest', 'icons/icon-192.png'
 ];

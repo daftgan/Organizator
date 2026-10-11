@@ -306,12 +306,22 @@ Le reste (`data.json`, `settings.json`, sessions, modèles de voix…) **ne part
    ```
 
    La commande affiche « Import termine : N fichier(s) » ; l'ancien contenu éventuel du serveur est
-   rangé sous `/opt/revizator/data/import-backup-<date>/`.
+   rangé sous `/opt/revizator/data/import-backup-<date>/`. Sans compte encore, les données attendent à
+   la racine de `/opt/revizator/data` et vont au **premier compte créé** (étape 8), dans
+   `users/<identifiant>/`, à sa première connexion. Une fois des comptes créés, nommer celui qui reçoit
+   l'import : `… revizator import /data/import-pc <identifiant>` (facultatif s'il n'y en a qu'un).
 4. Quand tout est vérifié (étape 8) : `rm -rf /opt/revizator/data/import-pc`.
 
 ## 8. Créer le compte et connecter les appareils
 
 ### Créer le compte
+
+Le premier compte créé est le vôtre : il reprend les données importées (étape 7) et **administre** le
+serveur. Les autres comptes — un par personne, chacun avec ses données, tous dans l'onglet **Classement** —
+se créent ensuite plus simplement depuis l'onglet **Admin** de Révizator (liste des personnes, mots de
+passe, droits, modèles de Claude Code) ; la commande ci-dessous reste utile pour le premier compte ou en
+dépannage. `docker exec -it revizator revizator-server user admin <identifiant> on` donne le droit
+d'administrer à un autre compte.
 
 Un compte = un identifiant et un mot de passe. Sur le LXC (`<conteneur>` = `revizator`) :
 
@@ -424,8 +434,8 @@ Tout est dans `/opt/revizator/data` :
 
 | Élément | Rôle | À sauvegarder |
 |---|---|---|
-| `learning.json`, `learning/` | profil, progrès, cartes, cours, exercices | **oui** |
-| `users.json`, `tokens.json`, `settings.json` | comptes (mots de passe hachés), sessions ouvertes, réglages du téléphone | oui |
+| `users/<compte>/` (`learning.json`, `learning/`) | profil, progrès, cartes, cours, exercices de chaque compte | **oui** |
+| `users.json`, `tokens.json`, `settings.json`, `admin.json` | comptes (mots de passe hachés, administrateurs), sessions ouvertes, réglages du téléphone, modèles fixés par l'administrateur | oui |
 | `tts/`, `asr/`, `whisper/` | modèles et cache des phrases lues | non (re-téléchargeables) |
 | `host.log`, `launch/`, `import-backup-*` | journal, fichiers temporaires, anciens imports | non |
 

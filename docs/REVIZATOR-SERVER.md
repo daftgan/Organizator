@@ -18,11 +18,12 @@ PC : Organizator ─┘   identifiant + mot de passe → jeton de session dans l
    tout le reste → hôte WPF local                       ├─ services Révizator partagés avec l'hôte WPF
                                                         ├─ claude -p (Claude Code, abonnement, CLAUDE_CODE_OAUTH_TOKEN)
                                                         ├─ sherpa-onnx (Kokoro, Parakeet), Whisper.net, ffmpeg
-                                                        └─ /data (volume) : learning.json, learning/, tts/, modèles…
+                                                        └─ /data (volume) : users/<compte>/{learning.json, learning/}, tts/, modèles…
 ```
 
 Une seule source de vérité : le dossier de données du serveur. Le PC et le téléphone y lisent et y
-écrivent ; il n'y a pas de synchronisation de fichiers.
+écrivent ; il n'y a pas de synchronisation de fichiers. Chaque compte a son espace (§ 6 bis) : ses données
+ne sont lues et écrites que par ses propres sessions.
 
 ## 2. Code partagé
 
@@ -178,7 +179,9 @@ Routes :
     redirigée) le lit sur une ligne de l'entrée standard. Un changement ferme toutes les sessions du
     compte, WebSocket ouverts compris ;
   - `revizator-server user list` : comptes, dates, nombre de sessions ;
-  - `revizator-server user remove <identifiant>` : supprime le compte et ferme ses sessions ;
+  - `revizator-server user admin <identifiant> on|off` : donne ou retire le droit d'administrer (§ 6 ter) ;
+  - `revizator-server user remove <identifiant>` : supprime le compte et ferme ses sessions (son espace
+    `users/<identifiant>/` est gardé : recréer le compte le retrouve) ;
   - `revizator-server session list` : sessions ouvertes (nom et date) ;
   - `revizator-server session revoke <nom ou début du nom>` : ferme une session (le début doit n'en
     désigner qu'une) ; `session revoke --all` : toutes ;
@@ -195,14 +198,20 @@ Même protocole que WebView2, en JSON texte :
 - page → serveur : `{ id, type, payload }` ;
 - serveur → page : `{ id, ok: true, payload }` ou `{ id, ok: false, error }` (message en français) ;
 - serveur → page, événements : `{ event, payload }` — `learn`, `tts`, `asr`, `voice`, `whisper`, et
-  `learnChanged` (§ 6). Les événements sont envoyés à toutes les connexions authentifiées.
+  `learnChanged` (§ 6). Chaque connexion est attachée au compte de sa session : `learn` et `learnChanged`
+  ne vont qu'aux connexions de ce compte ; `tts`, `asr`, `whisper` et `voice` vont au compte qui a lancé le
+  travail (son `job`, sa `session` de reconnaissance ou sa conversation), à toutes les connexions quand il
+  n'a pas de propriétaire connu (téléchargement d'un modèle).
 - Le serveur envoie `{ event: 'ping' }` toutes les 20 s (les proxys coupent un WebSocket muet) ;
   messages de 32 Mo au plus (un `learnSave` ou un WAV en base64 peuvent être gros).
 
 Types acceptés (tout autre type : erreur « Type de message non disponible sur le serveur Révizator ») :
 
 - Révizator : `learnLoad`, `learnSave`, `learnDoc`, `learnDocSave`, `learnDocDelete`, `learnNews`,
-  `learnGenerate`, `learnCancel`, `learnJobs`, `learnWait` ;
+  `learnGenerate`, `learnCancel`, `learnJobs`, `learnWait`, `learnBoard` (classement, § 6 bis),
+  `learnPolicy` (modèles de l'administrateur, § 6 ter) ;
+- administration (§ 6 ter, refusée à qui n'administre pas) : `adminUsers`, `adminUserSet`, `adminUserRemove`,
+  `adminUserAdmin`, `adminPolicySave` ;
 - voix anglaises : `ttsStatus`, `ttsDownload`, `ttsRemove`, `ttsWarm`, `speak`, `speakScript`,
   `cancelSpeak`, `ttsClearCache` ;
 - reconnaissance : `whisperStatus`, `whisperDownload`, `whisperRemove`, `whisperWarm`, `transcribe`,
@@ -410,6 +419,73 @@ Limite restante : deux appareils qui changent **la même valeur** (la même cart
 au même moment) : la dernière écriture gagne pour cette valeur. Hors serveur (WebView2 seul, shim),
 l'écriture reste inconditionnelle, comme avant.
 
+## 6 bis. Un espace par compte, et le classement
+
+**Espaces** (`UserSpaces.cs`). Les données de Révizator d'un compte sont sous `users/<identifiant>/` du
+dossier de données, avec la disposition d'avant (`learning.json`, `learning.json.bak`, `learning/` : cours,
+séries, bilans, enregistrements, menu RSS) ; chaque espace a son `LearningStore`, son `NewsMenu`, son
+`LearningAgent` (dossier de travail de `claude -p` : l'espace) et son compteur `rev`. Les messages
+`learn*` et `transcribe` avec `keep` agissent sur l'espace du compte de la connexion ; `/learn/…` (cookie)
+et `/t/<jeton>/learn/…` servent le dossier `learning/` du compte du jeton, jamais celui d'un autre (404).
+Les voix, la reconnaissance, Whisper, la conversation vocale et `settings.json` (réglages du téléphone)
+restent communs.
+
+**Reprise des données d'avant.** `learning.json`, son `.bak` et `learning/` à la racine du dossier de
+données (serveur d'avant les comptes séparés, ou `import` sans compte) reviennent au **premier compte
+créé** (`created` le plus ancien dans `users.json`) : ils sont **déplacés** dans son espace la première fois
+qu'il s'ouvre (`learnLoad`, `learnBoard`…), s'il n'a pas encore de `learning.json`. Journal :
+« donnees d'avant les comptes separes rattachees a « … » ». `import <dossier> [<identifiant>]` écrit dans
+l'espace du compte nommé ; sans identifiant, dans celui du seul compte, ou à la racine s'il n'y en a aucun
+(repris ensuite par le premier compte) ; refus s'il y en a plusieurs.
+
+**Classement** (`Leaderboard.cs`, type `learnBoard { weeks? }`, 12 semaines par défaut, 26 au plus).
+Le serveur lit le `learning.json` de chaque compte de `users.json` (relu seulement quand il change :
+date et taille) et n'en rend que des agrégats : par semaine (lundi 0 h, heure du serveur `TZ`, de la plus
+ancienne à la courante) `points`, `minutes`, `days` (jours de 5 minutes ou plus), `sessions` (séances de
+5 minutes ou plus), `goal` (objectif hebdomadaire actuel), `cards` (révisions du `reviewLog`), `theta`
+(niveau global estimé à la fin de la semaine, même moyenne que `R.globalTheta`, langue pour moitié) ; par
+joueur `name` (`profile.boardName`, 24 caractères, sinon l'identifiant), `me`, `since`, `theta` actuel,
+`totalMinutes` et `toeic` (bilans express de l'année : tendance `trend.T.mean`, sinon le score). Jamais
+une carte, un texte, une erreur ni un enregistrement. Points : 1 par minute (90 au plus par jour) + 10 par
+jour actif + 5 × objectif quand l'objectif de séances est atteint. Un compte avec `profile.boardHidden`
+n'apparaît qu'à lui-même (`hidden: true`) ; un compte sans `learning.json` n'apparaît pas.
+
+**Page** (`revizator/board.js`, `board.css`) : vue `board` (onglet **Classement**, seulement avec un
+serveur : `bridge.mode === 'server'` ou `bridge.remote()`, et dans le shim avec des données simulées),
+carte d'accueil `board`, section de réglages (pseudo, retrait). Le classement est relu à l'ouverture de la
+vue, puis au plus une fois par minute ; une sauvegarde (`saved`) le rend périmé. `learnBoard` part au
+serveur dans le cas 3 (liste `REMOTE_TYPES` de `bridge.js`).
+
+## 6 ter. Administration
+
+**Qui administre.** Un compte marqué `admin: true` dans `users.json` ; tant qu'aucun ne l'est, le premier
+compte créé (`UserStore.IsAdmin`, `Admins`). Désigner un premier administrateur (page ou
+`user admin <identifiant> on`) marque d'abord l'administrateur implicite : le propriétaire le reste. Le
+droit est vérifié à **chaque** message `admin*` (« Réservé à l'administrateur du serveur Révizator », refus
+journalisé) ; l'onglet caché n'est qu'une commodité.
+
+**Messages** (`ServerBridge`) :
+
+| Type | Charge | Réponse |
+|---|---|---|
+| `learnPolicy` | `{}` | tout compte : `{ models: { lessonModel, lessonEffort, genModel, genEffort, gradeModel, tutorModel, cardModel }, imposed, changed, changedBy, defaults, admin }` |
+| `adminUsers` | `{}` | `{ users: [{ login, created, changed, admin, flagged, sessions, devices, name, lastActivity, hasData, me }], policy }` — `name` : pseudo du classement, `lastActivity` : date de la dernière écriture de son `learning.json` ; rien de son contenu |
+| `adminUserSet` | `{ login, password }` | crée le compte ou change son mot de passe (ses sessions sont fermées, WebSocket compris) ; comme `adminUsers`, plus `created`, `closed` |
+| `adminUserRemove` | `{ login }` | supprime le compte, ferme ses sessions, garde `users/<login>/` ; ni soi-même |
+| `adminUserAdmin` | `{ login, admin }` | donne ou retire le droit ; jamais à soi-même |
+| `adminPolicySave` | `{ models, imposed }` | enregistre `admin.json` (modèles vérifiés par `AgentProvider.RequireModel`, efforts de Claude Code ; modèle vide = valeur d'origine) ; événement `learnPolicy` à toutes les connexions (sans `admin`) |
+
+**Modèles** (`AdminPolicy.cs`, `admin.json` du dossier de données). `imposed: false` : réglages de départ
+d'un compte neuf (la page les recopie dans ses `prefs` avant le premier lancement, `prefs.policySeeded`).
+`imposed: true` : le serveur remplace `model` et `effort` de chaque `learnGenerate` selon son genre (mêmes
+paires que `GEN_MODEL` de la page) et le `model` de `voiceStart` en mode tuteur ; Réglages › Révizator ›
+Agents les affiche sans pouvoir les changer.
+
+**Page** (`revizator/admin.js`, `admin.css`) : vue `admin` (onglet **Admin**, `R.policy.admin`), cartes
+Personnes, Ajouter une personne (générateur de mot de passe, affiché une fois à la création), Modèles de
+Révizator. `learnPolicy` est relu à chaque `loaded` ; `R.policy` est exposé aux autres modules. `bridge.js`
+envoie `learnPolicy` et `admin*` au serveur et en reçoit l'événement `learnPolicy` (cas 3).
+
 ## 7. Déploiement (`deploy/`)
 
 - `deploy/Dockerfile` : construction multi-étapes (SDK .NET 8 → `mcr.microsoft.com/dotnet/aspnet:8.0-noble`),
@@ -467,6 +543,14 @@ Construit et vérifié dans le cloud (Linux, sans réseau vers les sites des mod
 - image Docker construite et lancée (`healthy`, UID 1654, script de fumée dans le conteneur, gestion
   des appareils par `docker exec`, import), avec un faux `claude` (étape d'avant les comptes : à refaire
   avec `user set` et la connexion, voir `deploy/FINALISER.md`) ;
+- comptes séparés et classement (§ 6 bis) : deux comptes réels sur le serveur, données d'avant reprises
+  par le premier, `learnLoad` de l'autre vide, `learnChanged` et `/t/<jeton>/learn/…` limités au compte,
+  `learnBoard` (pseudos, points, retrait du classement, aucun contenu privé), `import` avec et sans compte ;
+  page Classement dans Chromium (390 et 1300 px de large), par le shim et contre le vrai serveur ;
+- administration (§ 6 ter) : droits refusés à un membre, création, mot de passe changé (connexion fermée,
+  ancien mot de passe refusé), rôle, suppression, garde-fous (soi-même), modèles invalides refusés, modèles
+  imposés appliqués à `learnGenerate` (faux `claude` qui note ses arguments) ; page Admin dans Chromium
+  (shim, 390 et 1300 px) ;
 - revue de sécurité adverse (authentification, traversées, WebSocket, révocation, limiteur, en-têtes) :
   défauts trouvés corrigés et inscrits aux § 3 et 4.
 

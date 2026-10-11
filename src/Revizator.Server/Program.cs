@@ -57,12 +57,38 @@ static int Command(ServerConfig config, string[] args)
                 return 0;
             }
 
+            var admins = UserStore.Admins(list);
             foreach (var u in list)
             {
                 var sessions = tokens.List().Count(t => t.User == u.Login);
-                Console.WriteLine($"{u.Login,-24} cree le {u.Created}, mot de passe change le {u.Changed}, {sessions} session(s)");
+                Console.WriteLine($"{u.Login,-24} cree le {u.Created}, mot de passe change le {u.Changed}, {sessions} session(s)"
+                    + (admins.Contains(u.Login) ? ", administrateur" : ""));
             }
 
+            return 0;
+        }
+
+        case "user" when args.Length == 4 && args[1] == "admin" && args[3] is "on" or "off":
+        {
+            var login = args[2].Trim().ToLowerInvariant();
+            var admin = args[3] == "on";
+            var list = users.List();
+            if (admin && !list.Any(u => u.Admin))
+            {
+                // Premier administrateur designe : le proprietaire, administrateur implicite, le reste.
+                foreach (var current in UserStore.Admins(list))
+                {
+                    users.SetAdmin(current, true);
+                }
+            }
+
+            if (!users.SetAdmin(login, admin))
+            {
+                Console.Error.WriteLine($"Aucun compte « {login} ».");
+                return 1;
+            }
+
+            Console.WriteLine($"Administrateurs : {string.Join(", ", UserStore.Admins(users.List()))}");
             return 0;
         }
 
@@ -121,9 +147,41 @@ static int Command(ServerConfig config, string[] args)
             return 0;
         }
 
-        case "import" when args.Length == 2:
-            Importer.Run(args[1], config.DataDir, Console.Out);
+        case "import" when args.Length is 2 or 3:
+        {
+            // Sans compte nomme : le seul compte du serveur, s'il n'y en a qu'un (aucun : le premier qui sera cree).
+            var accounts = users.List();
+            string login;
+            if (args.Length == 3)
+            {
+                login = UserStore.CleanLogin(args[2]);
+                if (!accounts.Any(u => u.Login == login))
+                {
+                    Console.Error.WriteLine($"Aucun compte « {login} » : creez-le d'abord (revizator-server user set {login}).");
+                    return 1;
+                }
+            }
+            else if (accounts.Count == 0)
+            {
+                // Pas encore de compte : a la racine, comme avant ; le premier compte cree les reprendra.
+                Importer.Run(args[1], config.DataDir, Console.Out);
+                Console.WriteLine("Aucun compte encore : ces donnees iront au premier compte cree (revizator-server user set <identifiant>).");
+                return 0;
+            }
+            else if (accounts.Count == 1)
+            {
+                login = accounts[0].Login;
+            }
+            else
+            {
+                Console.Error.WriteLine("Plusieurs comptes : precisez lequel recoit les donnees (revizator-server import <dossier> <identifiant>).");
+                return 1;
+            }
+
+            Importer.Run(args[1], UserSpaces.DirOf(config.DataDir, login), Console.Out);
+            Console.WriteLine($"Donnees importees dans l'espace de « {login} ».");
             return 0;
+        }
 
         default:
             Console.Error.WriteLine("""
@@ -134,10 +192,16 @@ static int Command(ServerConfig config, string[] args)
                                                             un changement ferme les sessions de ce compte
                   revizator-server user list                liste les comptes
                   revizator-server user remove <identif.>   supprime un compte et ferme ses sessions
+                  revizator-server user admin <identif.> on|off
+                                                            donne ou retire l'onglet Admin de Revizator (par
+                                                            defaut : le premier compte cree)
                   revizator-server session list             liste les sessions ouvertes (compte, appareil, date)
                   revizator-server session revoke <nom>     ferme une session (son nom, ou son debut) ; --all : toutes
-                  revizator-server import <dossier>         importe learning.json et learning/ depuis une copie
-                                                            du dossier %LOCALAPPDATA%\Organizator\ du PC
+                  revizator-server import <dossier> [<identifiant>]
+                                                            importe learning.json et learning/ depuis une copie
+                                                            du dossier %LOCALAPPDATA%\Organizator\ du PC, dans
+                                                            l'espace du compte (facultatif s'il n'y en a qu'un ;
+                                                            sans compte, pour le premier qui sera cree)
                 Variables : REVIZATOR_DATA, REVIZATOR_PORT, REVIZATOR_PUBLIC_URL, REVIZATOR_ALLOWED_ORIGINS,
                             REVIZATOR_TRUSTED_PROXIES, REVIZATOR_CLAUDE, CLAUDE_CODE_OAUTH_TOKEN
                             (voir docs/REVIZATOR-SERVER.md).
@@ -244,12 +308,13 @@ static async Task<int> ServeAsync(ServerConfig config)
     });
 
     var app = builder.Build();
-    using var bridge = new ServerBridge(config, log);
-    var hub = new WsHub(bridge, log, app.Lifetime.ApplicationStopping);
     var users = new UserStore(config.DataDir);
+    var tokens = new TokenStore(config.DataDir);
+    using var bridge = new ServerBridge(config, log, users, tokens);
+    var hub = new WsHub(bridge, log, app.Lifetime.ApplicationStopping);
     using var releases = new OrganizatorReleases(config.DataDir, config.ReleasesRepo, config.GitHubToken, log);
     releases.Start();
-    var routes = new HttpRoutes(config, new TokenStore(config.DataDir), users, new FailureLimiter(config.TrustedProxies), new PairingCodes(), releases, bridge, hub, log);
+    var routes = new HttpRoutes(config, tokens, users, new FailureLimiter(config.TrustedProxies), new PairingCodes(), releases, bridge, hub, log);
     if (users.List().Count == 0)
     {
         log.Warn("Aucun compte : creez-le avec « revizator-server user set <identifiant> » (docker exec -it revizator revizator-server user set ...)");

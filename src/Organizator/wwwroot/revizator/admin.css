@@ -1,0 +1,50 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Révizator — administration du serveur (admin.js, préfixe .rza-)
+   Reprend le tableau du classement (.rzb-table) et les cartes de réglages.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.rza-card { gap: 12px; }
+.rza-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.rza-table td, .rza-table th { vertical-align: middle; }
+.rza-who b { font-weight: 700; }
+.rza-pseudo { display: block; font-size: 12px; font-weight: 400; color: var(--rz-ink-soft); }
+.rza-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700;
+  background: var(--color-accent-100); color: var(--color-accent-700); }
+.rza-role { font-size: 12.5px; color: var(--rz-ink-soft); }
+.rza-actions { text-align: right; white-space: nowrap; }
+.rza-btn { padding: 4px 10px; font-size: 12.5px; }
+.rza-del { color: var(--rz-bad); }
+.rza-danger { padding: 4px 10px; font-size: 12.5px; background: var(--rz-bad); color: #fffaf1; border-color: var(--rz-bad); }
+.rza-sub td { background: color-mix(in srgb, var(--color-accent) 5%, transparent); white-space: normal; }
+.rza-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rza-inline .input { width: 220px; font-family: var(--font-mono, monospace); }
+.rza-lbl { font-size: 12.5px; font-weight: 600; }
+
+.rza-form { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.rza-field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 600; flex: 1 1 200px; }
+.rza-field small { font-weight: 400; color: var(--rz-ink-soft); }
+.rza-field .input { width: 100%; }
+.rza-form-btns { display: flex; gap: 8px; }
+.rza-created { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.rza-created > div { flex: 1 1 260px; }
+.rza-code { font-family: var(--font-mono, monospace); padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, var(--color-text) 8%, transparent); user-select: all; }
+.rza-save { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rza-save > span { flex: 1 1 240px; }
+
+.rz-set-fixed { font-family: var(--font-mono, monospace); font-size: 13px; padding: 4px 10px; border-radius: 8px; background: var(--color-neutral-100); }
+
+@media (max-width: 600px) {
+  /* Une personne par bloc : compte et rôle sur une ligne, activité dessous, boutons en bas. */
+  .rza-table thead { display: none; }
+  .rza-table, .rza-table tbody { display: block; }
+  .rza-table tr { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 10px 4px; border-top: 1px solid var(--rz-line); }
+  .rza-table th, .rza-table td { display: block; border: 0; padding: 0; }
+  .rza-table td:nth-child(4) { grid-column: 1 / -1; font-size: 12.5px; color: var(--rz-ink-soft); }
+  .rza-table .rza-actions { grid-column: 1 / -1; }
+  .rza-table tr.rza-sub { display: block; }
+  .rza-inline .input { width: 100%; }
+  .rza-actions { white-space: normal; text-align: left; }
+  .rza-actions .btn { margin: 2px 0; }
+  .rza-form-btns { width: 100%; }
+  .rza-form-btns .btn-primary { flex: 1; }
+}

@@ -5,8 +5,11 @@ using System.Text.Json.Nodes;
 
 namespace Revizator.Server;
 
-/// <summary>Un compte : identifiant, mot de passe hache (<c>pbkdf2-sha256$iterations$sel$empreinte</c>), dates.</summary>
-public sealed record UserAccount(string Login, string Hash, string Created, string Changed);
+/// <summary>
+/// Un compte : identifiant, mot de passe hache (<c>pbkdf2-sha256$iterations$sel$empreinte</c>), dates, et s'il
+/// administre le serveur (voir <see cref="UserStore.IsAdmin"/>).
+/// </summary>
+public sealed record UserAccount(string Login, string Hash, string Created, string Changed, bool Admin = false);
 
 /// <summary>
 /// Comptes du serveur, dans <c>users.json</c> du dossier de donnees (fichier en 0600). Les mots de passe
@@ -71,10 +74,48 @@ public sealed class UserStore
             Refresh();
             var old = _users.FirstOrDefault(u => u.Login == name);
             var kept = _users.Where(u => u.Login != name).ToList();
-            kept.Add(new UserAccount(name, HashPassword(password), old?.Created ?? now, now));
+            kept.Add(new UserAccount(name, HashPassword(password), old?.Created ?? now, now, old?.Admin ?? false));
             Write(kept);
             return old is not null;
         }
+    }
+
+    /// <summary>Donne ou retire le droit d'administrer ; faux si le compte n'existe pas.</summary>
+    public bool SetAdmin(string login, bool admin)
+    {
+        var name = (login ?? "").Trim().ToLowerInvariant();
+        lock (_gate)
+        {
+            Refresh();
+            var old = _users.FirstOrDefault(u => u.Login == name);
+            if (old is null)
+            {
+                return false;
+            }
+
+            // Retirer le dernier administrateur designe rendrait la main au premier compte : c'est voulu,
+            // le serveur n'est jamais sans administrateur.
+            Write(_users.Select(u => u.Login == name ? u with { Admin = admin } : u).ToList());
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Vrai si le compte administre le serveur : marque comme tel (<c>admin: true</c>), ou, tant qu'aucun ne
+    /// l'est, le premier compte cree (le proprietaire du serveur).
+    /// </summary>
+    public bool IsAdmin(string? login) => Admins(List()).Contains(login ?? "");
+
+    /// <summary>Les administrateurs effectifs (voir <see cref="IsAdmin"/>).</summary>
+    public static IReadOnlySet<string> Admins(IReadOnlyList<UserAccount> accounts)
+    {
+        var flagged = accounts.Where(a => a.Admin).Select(a => a.Login).ToHashSet(StringComparer.Ordinal);
+        if (flagged.Count == 0 && UserSpaces.Owner(accounts) is { } owner)
+        {
+            flagged.Add(owner);
+        }
+
+        return flagged;
     }
 
     /// <summary>Supprime un compte ; faux s'il n'existait pas.</summary>
@@ -170,7 +211,8 @@ public sealed class UserStore
                     var hash = item["hash"]?.GetValue<string>() ?? "";
                     if (login.Length > 0 && hash.StartsWith("pbkdf2-sha256$", StringComparison.Ordinal))
                     {
-                        list.Add(new UserAccount(login, hash, item["created"]?.GetValue<string>() ?? "", item["changed"]?.GetValue<string>() ?? ""));
+                        list.Add(new UserAccount(login, hash, item["created"]?.GetValue<string>() ?? "", item["changed"]?.GetValue<string>() ?? "",
+                            item["admin"] is JsonValue admin && admin.TryGetValue<bool>(out var isAdmin) && isAdmin));
                     }
                 }
             }
@@ -191,7 +233,13 @@ public sealed class UserStore
         var array = new JsonArray();
         foreach (var u in users)
         {
-            array.Add(new JsonObject { ["login"] = u.Login, ["hash"] = u.Hash, ["created"] = u.Created, ["changed"] = u.Changed });
+            var entry = new JsonObject { ["login"] = u.Login, ["hash"] = u.Hash, ["created"] = u.Created, ["changed"] = u.Changed };
+            if (u.Admin)
+            {
+                entry["admin"] = true;
+            }
+
+            array.Add(entry);
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
