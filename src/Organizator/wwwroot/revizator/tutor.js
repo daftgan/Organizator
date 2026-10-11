@@ -279,6 +279,12 @@
     return L.join('\n').slice(0, 8000);
   }
 
+  /* Mesures de fluence d'une réplique dite (Whisper) : gardées pour le niveau de la conversation. */
+  function fluencyOf(stt) {
+    if (!stt || !(num(stt.articulationWpm, 0) > 0 || num(stt.meanRun, 0) > 0)) return null;
+    var m = R.speechMetrics(stt, 0);
+    return { articulationWpm: m.articulationWpm || 0, meanRun: m.meanRun || 0, midPauses: m.midPauses || 0, pauseRatio: m.pauseRatio || 0, speech: round1(num(stt.speechSeconds, 0)) };
+  }
   function unsureWords(list) {
     var out = [];
     arr(list).forEach(function (w) {
@@ -431,7 +437,7 @@
     var s = chat.scenario || {};
     return {
       scenario: { id: String(s.id || ''), title: String(s.title || ''), tutorRole: String(s.tutorRole || ''), learnerGoal: String(s.learnerGoal || ''), setting: String(s.setting || '') },
-      history: historyOf(chat, HISTORY_TURNS),
+      history: historyOf(chat, end ? BILAN_TURNS : HISTORY_TURNS),
       level: speakLevel(),
       lesson: chat.lesson ? { title: chat.lesson.title, summaryFr: chat.lesson.summaryFr || '' } : null,
       end: !!end,
@@ -450,19 +456,6 @@
       .filter(function (h) { return h.text; });
   }
 
-  /* Le bilan ne reçoit que les douze dernières répliques en historique (limite de l'hôte) : le début de
-     la conversation, jusqu'à BILAN_TURNS répliques en tout, part dans le contexte, en tête. */
-  function endContext(chat) {
-    var all = arr(chat.turns);
-    var older = all.slice(Math.max(0, all.length - BILAN_TURNS), Math.max(0, all.length - HISTORY_TURNS));
-    if (!older.length) return tutorContext(chat);
-    var lines = older.map(function (t) { return (t.role === 'tutor' ? 'Tutor: ' : 'Learner: ') + clean(spokenText(t), 360); });
-    var head = 'Début de cette conversation (' + plural(older.length, 'réplique') + ' avant la partie « Conversation jusqu’ici » ; le bilan porte sur toute la conversation) :';
-    var body = lines.join('\n');
-    if (body.length > 4800) body = '…\n' + body.slice(body.length - 4800).replace(/^[^\n]*\n/, '');
-    return (head + '\n' + body + '\n\n' + tutorContext(chat)).slice(0, 7900);
-  }
-
   function ask(chat, end) {
     var job = R.uid('rzvt');
     var t0 = Date.now();
@@ -472,7 +465,7 @@
     T.error = null;
     T.toEnd = true;
     startTicker();
-    R.gen('tutor', params, { job: job, context: end ? endContext(chat) : tutorContext(chat) }).then(function (r) {
+    R.gen('tutor', params, { job: job, context: tutorContext(chat) }).then(function (r) {
       if (!T.pending || T.pending.job !== job) return;
       T.pending = null;
       receive(chat.id, (r && r.doc) || {}, Date.now() - t0, !!end);
@@ -550,12 +543,65 @@
         return { type: 'error', category: e.category, original: e.said, correction: e.better, explanationFr: e.explanationFr };
       }), { mode: 'speak', ref: chat.id });
     }
-    if (s.levelEstimate) {
-      var spoken = userTurns(chat).filter(function (t) { return !t.typed; }).length;
-      if (spoken) R.observeLevel('speak', s.levelEstimate, R.clamp(spoken / 6, 0.3, 1.2));
-      else R.observeLevel('write', s.levelEstimate, 0.4);
-    }
+    blindLevel(chat);
     logChat(chat);
+  }
+
+  /* Le niveau de la conversation, à l'aveugle. Le tuteur connaît le niveau supposé de l'apprenant (il en a
+     besoin pour lui parler) et son estimation s'en rapproche : c'est le correcteur (genre grade, sans ce
+     niveau) qui lit toutes les répliques de l'apprenant, avec les mesures de l'oral, et nourrit le niveau à
+     l'oral ; ses notes donnent le niveau affiché. S'il échoue, l'estimation du tuteur sert, à poids réduit. */
+  function blindLevel(chat) {
+    var s = chat.summary, turns = userTurns(chat);
+    var said = turns.filter(function (t) { return !t.typed; });
+    var mode = said.length ? 'speak' : 'write';
+    var weight = said.length ? R.clamp(said.length / 6, 0.3, 1.2) : 0.4;
+    function fallback() {
+      if (s.levelEstimate) R.observeLevel(mode, s.levelEstimate, weight / 2);
+    }
+    var text = turns.map(function (t) { return clean(t.text, 1500); }).filter(Boolean).join('\n');
+    if (R.text.count(text) < 15) { fallback(); return; }
+    var secs = 0, wsum = 0, art = 0, runs = [], mid = 0, ratio = 0, rsecs = 0, unsure = [];
+    said.forEach(function (t) {
+      var sec = num(t.seconds, 0);
+      if (sec > 0 && num(t.wpm, 0) > 0) { secs += sec; wsum += t.wpm * sec; }
+      var f = t.flu;
+      if (f) {
+        var w = Math.max(num(f.speech, 0), sec, 1);
+        if (f.articulationWpm) art += f.articulationWpm * w;
+        if (f.meanRun) runs.push(f.meanRun);
+        mid += num(f.midPauses, 0); ratio += num(f.pauseRatio, 0) * w; rsecs += w;
+      }
+      arr(t.unsure).forEach(function (u) { if (unsure.length < 20 && unsure.indexOf(u) < 0) unsure.push(u); });
+    });
+    var metrics = null;
+    if (mode === 'speak') {
+      metrics = { seconds: Math.round(secs), wpm: secs > 0 ? Math.round(wsum / secs) : 0, uncertain: unsure };
+      if (rsecs > 0) {
+        if (art > 0) metrics.articulationWpm = Math.round(art / rsecs);
+        if (runs.length) metrics.meanRun = Math.round(runs.reduce(function (a, b) { return a + b; }, 0) / runs.length * 10) / 10;
+        metrics.midPauses = mid;
+        metrics.pauseRatio = Math.round(ratio / rsecs * 100) / 100;
+      }
+    }
+    var sc = chat.scenario || {};
+    var task = {
+      id: chat.id + ':level', kind: 'conversation',
+      promptFr: 'Conversation ' + (mode === 'speak' ? 'orale' : 'écrite') + ' avec un tuteur' + (sc.title ? ' (« ' + clean(sc.title, 120) + ' »)' : '') + ' ; la réponse ci-dessous réunit les répliques de l’apprenant, l’une après l’autre.',
+      prompt: clean(sc.learnerGoal, 400), criteria: [], scale: 0, words: [0, 0], seconds: 0
+    };
+    chat.levelPending = true;
+    R.gen('grade', { mode: mode, rubric: 'lesson', task: task, response: text.slice(0, 6000), metrics: metrics, level: speakLevel(), targets: [] }, { job: R.uid('rztlv') }).then(function (r) {
+      var g = r && r.doc;
+      delete chat.levelPending;
+      if (!g || !g.levelEstimate) { fallback(); R.save(); return; }
+      chat.levelGrade = { level: g.levelEstimate, scores: g.scores, rationale: g.rationale || null, tutor: s.levelEstimate || '', at: Date.now() };
+      s.levelEstimate = g.levelEstimate;
+      R.observeLevel(mode, g.levelEstimate, weight);
+      R.addGoodUses(g.goodUses, { mode: mode, ref: chat.id });
+      R.save();
+      if (R.viewId() === 'tutor') R.render();
+    }, function () { delete chat.levelPending; fallback(); R.save(); });
   }
 
   function logChat(chat) {
@@ -606,7 +652,8 @@
     var audio = (r && r.audio) || {};
     var turn = {
       role: 'user', text: text, at: Date.now(), recast: null, url: String(stt.url || ''),
-      unsure: unsureWords(stt.words), seconds: round1(audio.seconds), wpm: Math.round(num(stt.wpm, 0)), sttMs: Math.round(num(stt.ms, 0))
+      unsure: unsureWords(stt.words), seconds: round1(audio.seconds), wpm: Math.round(num(stt.wpm, 0)), sttMs: Math.round(num(stt.ms, 0)),
+      flu: fluencyOf(stt)
     };
     chat.turns.push(turn);
     chat.closed = false;
@@ -983,6 +1030,8 @@
     if (num(stt.wpm, 0) > 0) turn.wpm = Math.round(stt.wpm);
     else if (!turn.wpm && turn.seconds > 0) turn.wpm = Math.round(R.text.count(turn.text) / turn.seconds * 60);
     if (num(stt.ms, 0) > 0) turn.sttMs = Math.round(stt.ms);
+    var flu = fluencyOf(stt);
+    if (flu) turn.flu = flu;
     R.save();
     if (R.viewId() === 'tutor') R.render();
   }

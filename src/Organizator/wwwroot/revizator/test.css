@@ -331,6 +331,9 @@
 .rzt-rv-why { font-size: 11px; font-weight: 600; text-decoration: none; display: inline-block; padding: 1px 6px; border-radius: 999px; background: var(--color-surface); }
 .rzt-rv-exp { font-size: 13.5px; line-height: 1.5; }
 .rzt-rv-ev { font-size: 13px; font-style: italic; color: var(--rz-ink-soft); }
+.rzt-rv-q.is-neutral .rzt-rv-mark { color: var(--rz-ink-soft); }
+.rzt-rv-neutral { display: flex; align-items: flex-start; gap: 6px; font-size: 13px; line-height: 1.45; color: var(--rz-ink-soft); padding: 6px 8px; border-radius: 8px; background: var(--color-surface); }
+.rzt-rv-neutral svg { flex: none; margin-top: 2px; }
 
 /* ── Bilan oral et écrit ── */
 .rzt-sw-fr { font-size: 14px; line-height: 1.5; color: var(--color-neutral-800); }

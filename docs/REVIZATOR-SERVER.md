@@ -46,7 +46,9 @@ ne sont lues et écrites que par ses propres sessions.
   - fichiers liés : `HostLog`, `AgentProvider`, `AgentLauncher`, `AppSettings`, `DataStore`,
     `InheritedEnvironment`, `ModelCatalog`, `TranscriptAccumulator`, `LearningAgent`, `LearningStore`,
     `NewsMenu`, `TextToSpeech`, `SherpaRuntime`, `LiveAsr`, `WhisperTranscriber`, `SpeechAssessment`,
-    `AudioDecoder`, `VoiceChat`, `VoiceSentences`. `SpeechVoice` (SAPI) n'est pas lié.
+    `AudioDecoder`, `VoiceChat`, `VoiceSentences`, `LearningAnchors`, `LexicalProfile` (et sa liste
+    `Services/Data/cefrj.tsv`, ressource embarquée `data/cefrj.tsv` des deux projets). `SpeechVoice` (SAPI)
+    n'est pas lié.
   - `Platform/AgentDraft.cs` et `Platform/BitbucketPullRequests.cs` : copies réduites des seules
     fonctions statiques utilisées (`Clean`/`Explain`, `NormalizeUrl`) ; les classes d'origine tireraient
     les sessions Copilot (SQLite) et les quotas. À garder alignées.
@@ -189,6 +191,10 @@ Routes :
     dossier `%LOCALAPPDATA%\Organizator\` du PC (sauvegarde de l'existant avant d'écraser : l'ancien
     `learning.json` et `learning/` sont déplacés sous `import-backup-<date>/` ; à lancer serveur arrêté,
     ou au moins sans page ouverte, qui réécrirait son ancien état) ;
+  - `revizator-server anchors import <fichier> [--per-level 2] [--replace]` : étalons du correcteur (§ 6
+    quater), tirés d'un jeu noté ; `anchors list`, `anchors clear` ;
+  - `revizator-server eval <fichier> [--runs 2] [--limit 60] [--model sonnet] [--effort medium]
+    [--no-anchors] [--out rapport.json]` : mesure le correcteur sur un jeu noté (§ 6 quater) ;
   - sans argument : lance le serveur.
 
 ## 4. Pont WebSocket
@@ -209,7 +215,7 @@ Types acceptés (tout autre type : erreur « Type de message non disponible sur 
 
 - Révizator : `learnLoad`, `learnSave`, `learnDoc`, `learnDocSave`, `learnDocDelete`, `learnNews`,
   `learnGenerate`, `learnCancel`, `learnJobs`, `learnWait`, `learnBoard` (classement, § 6 bis),
-  `learnPolicy` (modèles de l'administrateur, § 6 ter) ;
+  `learnPolicy` (modèles de l'administrateur, § 6 ter), `learnItemPool` (réponses partagées, § 6 quater) ;
 - administration (§ 6 ter, refusée à qui n'administre pas) : `adminUsers`, `adminUserSet`, `adminUserRemove`,
   `adminUserAdmin`, `adminPolicySave` ;
 - voix anglaises : `ttsStatus`, `ttsDownload`, `ttsRemove`, `ttsWarm`, `speak`, `speakScript`,
@@ -468,7 +474,7 @@ journalisé) ; l'onglet caché n'est qu'une commodité.
 
 | Type | Charge | Réponse |
 |---|---|---|
-| `learnPolicy` | `{}` | tout compte : `{ models: { lessonModel, lessonEffort, genModel, genEffort, gradeModel, tutorModel, cardModel }, imposed, changed, changedBy, defaults, admin }` |
+| `learnPolicy` | `{}` | tout compte : `{ models: { lessonModel, lessonEffort, genModel, genEffort, gradeModel, gradeEffort, tutorModel, cardModel }, imposed, changed, changedBy, defaults, admin }` |
 | `adminUsers` | `{}` | `{ users: [{ login, created, changed, admin, flagged, sessions, devices, name, lastActivity, hasData, me }], policy }` — `name` : pseudo du classement, `lastActivity` : date de la dernière écriture de son `learning.json` ; rien de son contenu |
 | `adminUserSet` | `{ login, password }` | crée le compte ou change son mot de passe (ses sessions sont fermées, WebSocket compris) ; comme `adminUsers`, plus `created`, `closed` |
 | `adminUserRemove` | `{ login }` | supprime le compte, ferme ses sessions, garde `users/<login>/` ; ni soi-même |
@@ -485,6 +491,36 @@ Agents les affiche sans pouvoir les changer.
 Personnes, Ajouter une personne (générateur de mot de passe, affiché une fois à la création), Modèles de
 Révizator. `learnPolicy` est relu à chaque `loaded` ; `R.policy` est exposé aux autres modules. `bridge.js`
 envoie `learnPolicy` et `admin*` au serveur et en reçoit l'événement `learnPolicy` (cas 3).
+
+## 6 quater. Des évaluations mesurées
+
+**Réponses partagées** (`ItemPool.cs`, type `learnItemPool {}`). Pour apprendre la difficulté réelle des
+questions générées (la page : `fitLearned` de `test.js`), le serveur rend les réponses aux bilans express des
+**autres** comptes : par bilan, la liste `toeic.history[].items` de leur `learning.json`, recopiée champ par
+champ et bornée (`s` L|R, `c` A1…C1, `f` caractéristiques en minuscules, `g` −3…3, `u` 0|1, `o` 3|4, `x`
+0|1) — ni compte, ni date, ni texte de question, ni score. 40 bilans par compte au plus (les plus récents),
+60 réponses par bilan ; un compte avec `profile.boardHidden` n'y contribue pas ; fichiers relus seulement
+quand ils changent (date, taille). La page le demande une fois par séance, au début d'un bilan.
+
+**Étalons du correcteur** (`LearningAnchors.cs`, `anchors.json` à la racine du dossier de données, communs
+à tous les comptes, relus quand ils changent) : `{ samples: [{ id, mode: write|speak, kind, level: A1…C2,
+swScore?, scale?, prompt?, text, source }] }`. La consigne de correction (`GradeGenre`) en montre un par
+niveau, ceux de la même tâche s'ils couvrent deux niveaux au moins, sinon ceux du même mode, avant la
+réponse à noter. Ils ne s'écrivent que par `anchors import` : jamais par un modèle (un exemple inventé ne
+serait pas un étalon). `import` lit un objet JSON par ligne au format ci-dessus, un tableau, un
+`anchors.json`, ou le corpus **Write & Improve** (BEA-2019 : `{ id, cefr: "B1.ii", text }` par ligne ; les
+textes natifs LOCNESS, `cefr: "N"`, sont écartés) et garde par tâche et par niveau `--per-level` textes de
+30 à 400 mots (de préférence 80 à 300, les plus proches de 160).
+
+**Évaluation** (`Evaluation.cs`, `eval`). Le correcteur tel qu'il tourne (même `LearningAgent`, mêmes
+consignes, modèle et effort choisis) note un jeu noté — dans un dossier de travail `eval-work/`, trois
+corrections en parallèle — en `--runs` passages ; un échantillon n'est jamais son propre étalon
+(`anchorExclude`), `--no-anchors` les retire (pour mesurer leur effet). Niveau prédit : la moyenne des notes
+de langue (étendue, correction, cohérence, fluence à l'oral), comme `LevelOfScores`. Rapport : kappa pondéré
+quadratique, accord exact et à un niveau près, biais moyen (en niveaux), écart absolu, corrélation, matrice
+de confusion, fidélité d'un passage à l'autre (même niveau, QWK, écart moyen), notes S&W si le jeu en a, coût ;
+`--out` écrit le détail en JSON. `--limit` prend les échantillons à tour de rôle par niveau. Vérifié avec un
+faux `claude` (`REVIZATOR_CLAUDE`) ; aucun jeu noté réel n'est livré (licences).
 
 ## 7. Déploiement (`deploy/`)
 
@@ -553,6 +589,16 @@ Construit et vérifié dans le cloud (Linux, sans réseau vers les sites des mod
   (shim, 390 et 1300 px) ;
 - revue de sécurité adverse (authentification, traversées, WebSocket, révocation, limiteur, en-têtes) :
   défauts trouvés corrigés et inscrits aux § 3 et 4.
+- évaluations mesurées (§ 6 quater, 11 octobre 2026) : `Revizator.Server` construit ; l'hôte WPF n'a pas pu
+  être construit dans cet environnement (paquet `dotnet-sdk-8.0` d'Ubuntu, sans
+  Microsoft.NET.Sdk.WindowsDesktop) : la construction Windows de la CI fait foi ; relecture d'un module
+  (`ToeicCheck`) de bout en bout avec un faux `claude` (questions ambiguës et à clé douteuse neutralisées,
+  question devinable repérée, profil lexical), `anchors import` (Write & Improve et JSONL) et `eval` avec un
+  faux correcteur ; dans Chromium par le shim : bilan express complet avec questions neutralisées (exclues du
+  score, signalées dans la correction), bilan du tuteur sur toute la conversation et niveau à l'aveugle,
+  journal d'erreurs jusqu'à « acquis », contexte du correcteur sans niveau ; en simulation : dérive d'Elo
+  (+1,4 niveau avant, ≈ 0 après) et difficulté apprise (décalages retrouvés à ±10 points sur 100 bilans).
+  Non vérifié : l'effet réel sur les notes de Claude (à mesurer par `eval` sur un jeu noté).
 
 Non vérifié : Claude Code réel, les modèles Kokoro, Parakeet et Whisper (seuls leurs échecs propres
 l'ont été) et les flux RSS, `voiceStart` et le micro, WebView2 réel sous Windows (cas 3), Nginx Proxy

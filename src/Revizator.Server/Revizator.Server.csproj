@@ -43,6 +43,8 @@
     <Compile Include="..\Organizator\Services\TranscriptAccumulator.cs" Link="Shared\TranscriptAccumulator.cs" />
     <Compile Include="..\Organizator\Services\LearningAgent.cs" Link="Shared\LearningAgent.cs" />
     <Compile Include="..\Organizator\Services\LearningStore.cs" Link="Shared\LearningStore.cs" />
+    <Compile Include="..\Organizator\Services\LearningAnchors.cs" Link="Shared\LearningAnchors.cs" />
+    <Compile Include="..\Organizator\Services\LexicalProfile.cs" Link="Shared\LexicalProfile.cs" />
     <Compile Include="..\Organizator\Services\NewsMenu.cs" Link="Shared\NewsMenu.cs" />
     <Compile Include="..\Organizator\Services\TextToSpeech.cs" Link="Shared\TextToSpeech.cs" />
     <Compile Include="..\Organizator\Services\SherpaRuntime.cs" Link="Shared\SherpaRuntime.cs" />
@@ -52,6 +54,11 @@
     <Compile Include="..\Organizator\Services\AudioDecoder.cs" Link="Shared\AudioDecoder.cs" />
     <Compile Include="..\Organizator\Services\VoiceChat.cs" Link="Shared\VoiceChat.cs" />
     <Compile Include="..\Organizator\Services\VoiceSentences.cs" Link="Shared\VoiceSentences.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Liste de vocabulaire CEFR-J, comme l'hote WPF (LexicalProfile). -->
+    <EmbeddedResource Include="..\Organizator\Services\Data\cefrj.tsv" LogicalName="data/cefrj.tsv" WithCulture="false" Type="Non-Resx" />
   </ItemGroup>
 
   <ItemGroup>

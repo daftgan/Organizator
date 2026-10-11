@@ -58,7 +58,7 @@ public sealed class LearningAgent
         ["exercise"] = new("exercise", "Exercices", "sonnet", "low", TimeSpan.FromSeconds(150), true),
         ["toeic"] = new("toeic", "Bilan express", "sonnet", "low", TimeSpan.FromSeconds(240), true),
         ["sw"] = new("sw", "Bilan oral et écrit", "sonnet", "low", TimeSpan.FromSeconds(150), true),
-        ["grade"] = new("grade", "Correction", "sonnet", "low", TimeSpan.FromSeconds(120), false),
+        ["grade"] = new("grade", "Correction", "sonnet", "medium", TimeSpan.FromSeconds(180), false),
         ["tutor"] = new("tutor", "Tuteur", "haiku", "", TimeSpan.FromSeconds(60), false),
         ["cardcheck"] = new("cardcheck", "Correcteur des cartes", "haiku", "", TimeSpan.FromSeconds(50), false),
         ["cardfix"] = new("cardfix", "Cartes clarifiées", "haiku", "", TimeSpan.FromSeconds(120), false),
@@ -299,6 +299,14 @@ public sealed class LearningAgent
             var call = Compose(request, menu);
             var outcome = await CallAsync(entry, request, spec, call).ConfigureAwait(false);
             var content = Sanitize(request, outcome.Output, menu);
+            if (request.Kind == "toeic")
+            {
+                outcome = await VerifyToeicAsync(entry, request, content, outcome).ConfigureAwait(false);
+            }
+            else if (request.Kind == "grade" && LJ.Bool(request.Params, "double"))
+            {
+                outcome = await RegradeAsync(entry, request, spec, content, outcome).ConfigureAwait(false);
+            }
 
             var id = "";
             JsonObject doc;
@@ -363,6 +371,88 @@ public sealed class LearningAgent
                 _recent.Add(entry);
             }
         }
+    }
+
+    /// <summary>Relecture d'un module du bilan express (<see cref="ToeicCheck"/>), effort bas, 150 s par lecture.</summary>
+    private static readonly KindSpec CheckSpec = new("toeiccheck", "Vérification du bilan", "sonnet", "low", TimeSpan.FromSeconds(150), false);
+
+    /// <summary>
+    /// Profil lexical, puis deux lectures du module (avec et sans support) ; leur echec ne perd pas le
+    /// module : il est garde sans verdict (<c>check.status = failed</c>), comme avant la verification.
+    /// </summary>
+    private async Task<Outcome> VerifyToeicAsync(Job entry, LearnRequest request, JsonObject content, Outcome outcome)
+    {
+        ToeicCheck.Profile(content);
+        var check = request with { Effort = "low" };
+        double cost = 0;
+        var turns = 0;
+        JsonObject? solved = null;
+        JsonObject? blind = null;
+        try
+        {
+            Emit(entry, "check", "Vérification des questions");
+            var a = await CallAsync(entry, check, CheckSpec, ToeicCheck.Compose(content, false)).ConfigureAwait(false);
+            solved = a.Output;
+            cost += a.Cost;
+            turns += a.Turns;
+            if (ToeicCheck.Any(content, true))
+            {
+                Emit(entry, "check", "Questions relues sans le texte");
+                var b = await CallAsync(entry, check, CheckSpec, ToeicCheck.Compose(content, true)).ConfigureAwait(false);
+                blind = b.Output;
+                cost += b.Cost;
+                turns += b.Turns;
+            }
+        }
+        catch (InvalidOperationException ex) when (!entry.Cancelled)
+        {
+            entry.TimedOut = false;
+            _log.Warn("Revizator toeic : verification interrompue, module garde " + (solved is null ? "sans verdict" : "sans la lecture sans support") + " : " + Ascii(ex.Message));
+        }
+
+        ToeicCheck.Apply(content, solved, blind, request.Model, _log);
+        return outcome with { Cost = outcome.Cost + cost, Turns = outcome.Turns + turns };
+    }
+
+    /// <summary>
+    /// Double correction d'une tache de bilan (<c>params.double</c>) : une seconde correction independante,
+    /// les notes seules ; une troisieme quand les deux s'ecartent de plus d'un point sur la tache ou sur un
+    /// critere. Le resultat est la mediane (<see cref="GradeGenre.Merge"/>). Un modele note differemment d'un
+    /// passage a l'autre, meme a reglages egaux : la mediane de plusieurs notes est plus stable qu'une seule.
+    /// Un echec garde la premiere correction seule.
+    /// </summary>
+    private async Task<Outcome> RegradeAsync(Job entry, LearnRequest request, KindSpec spec, JsonObject content, Outcome outcome)
+    {
+        var ratings = new List<JsonObject> { GradeGenre.Rating(content) };
+        double cost = 0;
+        var turns = 0;
+        try
+        {
+            for (var round = 0; round < 2; round++)
+            {
+                Emit(entry, "check", round == 0 ? "Seconde correction" : "Troisième correction, les deux premières s'écartent");
+                var o = await CallAsync(entry, request, spec, GradeGenre.ComposeScores(request)).ConfigureAwait(false);
+                cost += o.Cost;
+                turns += o.Turns;
+                ratings.Add(GradeGenre.SanitizeScores(o.Output, request));
+                if (round == 0 && !Apart(ratings[0], ratings[1]))
+                {
+                    break;
+                }
+            }
+        }
+        catch (InvalidOperationException ex) when (!entry.Cancelled)
+        {
+            entry.TimedOut = false;
+            _log.Warn("Revizator grade : seconde correction impossible, la premiere est gardee seule : " + Ascii(ex.Message));
+        }
+
+        GradeGenre.Merge(content, ratings, request);
+        return outcome with { Cost = outcome.Cost + cost, Turns = outcome.Turns + turns };
+
+        static bool Apart(JsonObject a, JsonObject b)
+            => Math.Abs(LJ.Num(a, "swScore") - LJ.Num(b, "swScore")) > 1
+                || new[] { "task", "coherence", "range", "accuracy", "fluency" }.Any(k => Math.Abs(LJ.Num(LJ.Obj(a, "scores"), k) - LJ.Num(LJ.Obj(b, "scores"), k)) > 1);
     }
 
     /// <summary>Champs de l'hote en tete du document : <c>id, kind, createdAt, day, model, ms, cost, turns</c>.</summary>
@@ -3341,6 +3431,286 @@ internal static class ToeicGenre
     }
 }
 
+// ============================================================================ verification du bilan express
+
+/// <summary>
+/// Verification d'un module du bilan express, apres sa generation : l'auteur des questions ecrit aussi leur
+/// cle, leur niveau et ce qui les rend difficiles, et rien ne le contredisait. Deux lectures independantes :
+/// <list type="bullet">
+/// <item><description><b>avec le support</b> (transcription, documents, graphique) : un second lecteur repond
+/// comme un candidat expert et dit quelles options seraient defendables. Une question dont la cle n'est pas
+/// sa reponse, ou qui a plusieurs reponses defendables, est <b>neutralisee</b> : affichee, corrigee, mais
+/// exclue du score (comme ETS ecarte un item defectueux) ;</description></item>
+/// <item><description><b>sans le support</b> (parties 3, 4 et 7) : la question et ses options seules. Une
+/// question trouvee ainsi avec assurance se devine sans comprendre le texte : elle reste comptee, avec un
+/// parametre de hasard plus fort (<c>guessable</c>), donc moins d'information.</description></item>
+/// </list>
+/// S'y ajoute le profil lexical CEFR-J de chaque ensemble (<see cref="LexicalProfile"/>) : le niveau mesure
+/// de son vocabulaire, a cote du niveau annonce de ses questions.
+/// </summary>
+internal static class ToeicCheck
+{
+    private static readonly string[] Letters = { "A", "B", "C", "D" };
+
+    private const string System = """
+        Tu relis un module de test d'anglais à choix multiples au format type TOEIC®, écrit par un autre auteur, avant qu'un apprenant le passe. Réponds à chaque question comme un candidat expert et scrupuleux, puis juge la question elle-même. Tu rends uniquement la fiche demandée.
+
+        Pour chaque question (id) :
+        - choice : la lettre de l'option que tu choisis.
+        - defensible : toutes les lettres qu'un lecteur attentif pourrait défendre comme bonne réponse d'après le support (au moins ta réponse) ; plusieurs lettres seulement si le support ne permet vraiment pas de trancher.
+        - confidence : high si le support tranche sans hésitation, medium si tu hésites un peu, low si tu devines.
+        - issue : en anglais, une phrase courte s'il y a un problème (deux réponses possibles, aucune réponse juste, réponse absente du support, question qui ne correspond pas au texte) ; sinon vide.
+        Partie 2 : la question ou l'affirmation est entendue, les options sont les réponses entendues ; une seule convient. Partie 6 : chaque question correspond à un trou [n] du texte, dans l'ordre.
+        """;
+
+    private const string BlindSystem = """
+        Tu passes un test d'anglais à choix multiples, mais SANS le support : ni l'audio, ni le texte, ni le graphique ; seulement les questions et leurs options. Choisis pour chaque question l'option la plus probable d'après la question et les options seules (bon sens, cohérence entre les questions d'un même ensemble, formulation des options). Tu rends uniquement la fiche demandée.
+
+        Pour chaque question (id) : choice = ta lettre ; defensible = les lettres vraisemblables sans le support ; confidence = high seulement si une seule option est vraisemblable sans le support, medium si deux ou trois le sont encore, low si tu devines ; issue vide.
+        """;
+
+    private static readonly string Schema = ExerciseGenre.Compact("""
+        {"type":"object","additionalProperties":false,"required":["answers"],"properties":{"answers":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","choice","defensible","confidence","issue"],"properties":{
+        "id":{"type":"string"},"choice":{"type":"string","enum":["A","B","C","D"]},"defensible":{"type":"array","items":{"type":"string","enum":["A","B","C","D"]}},
+        "confidence":{"type":"string","enum":["high","medium","low"]},"issue":{"type":"string"}}}}}}
+        """);
+
+    private static IEnumerable<JsonObject> Sets(JsonObject content)
+        => LJ.Objects(content, "listening").Concat(LJ.Objects(content, "reading"));
+
+    /// <summary>Parties dont la reponse doit venir du support : la lecture sans support y a un sens.</summary>
+    private static bool NeedsSupport(JsonObject set) => LJ.Int(set, "part") is 3 or 4 or 7;
+
+    public static bool Any(JsonObject content, bool blind)
+        => Sets(content).Any(s => !blind || NeedsSupport(s));
+
+    public static AgentCall Compose(JsonObject content, bool blind)
+    {
+        var sb = new StringBuilder();
+        sb.Append(blind ? "Questions du module, sans leur support :\n" : "Le module, avec son support :\n");
+        foreach (var set in Sets(content))
+        {
+            if (blind && !NeedsSupport(set))
+            {
+                continue;
+            }
+
+            var part = LJ.Int(set, "part");
+            sb.Append("\n=== Ensemble ").Append(LJ.Str(set, "id", 10)).Append(" — partie ").Append(part).Append(" ===\n");
+            if (!blind)
+            {
+                AppendSupport(sb, set);
+            }
+
+            var gap = 0;
+            foreach (var q in LJ.Objects(set, "questions"))
+            {
+                var stem = LJ.Str(q, "stem", 600);
+                if (part == 2)
+                {
+                    stem = "Choose the best response to what was said.";
+                }
+                else if (part == 6 && stem.Length == 0)
+                {
+                    stem = "Gap [" + (++gap).ToString(CultureInfo.InvariantCulture) + "]";
+                }
+
+                sb.Append(LJ.Str(q, "id", 10)).Append(". ").Append(stem).Append('\n');
+                var options = LJ.Strings(q, "options", 4, 400);
+                for (var i = 0; i < options.Count; i++)
+                {
+                    sb.Append("   ").Append(Letters[i]).Append(". ").Append(options[i]).Append('\n');
+                }
+            }
+        }
+
+        sb.Append("\nRendez la fiche : une réponse par question, avec son id.");
+        return new AgentCall("", (blind ? BlindSystem : System) + Levels.Quotes, Schema, sb.ToString());
+    }
+
+    private static void AppendSupport(StringBuilder sb, JsonObject set)
+    {
+        var lines = LJ.Objects(set, "audio").ToList();
+        if (lines.Count > 0)
+        {
+            sb.Append("Transcript of the audio:\n");
+            foreach (var l in lines)
+            {
+                sb.Append("  ").Append(LJ.Str(l, "speaker", 4)).Append(": ").Append(LJ.Str(l, "text", 2000)).Append('\n');
+            }
+        }
+
+        if (LJ.Obj(set, "graphic") is { } g)
+        {
+            sb.Append("Graphic: ").Append(LJ.Str(g, "title", 120)).Append(" — ").Append(string.Join(" | ", LJ.Strings(g, "columns", 6, 60))).Append('\n');
+            foreach (var row in LJ.Arr(g, "rows") ?? new JsonArray())
+            {
+                sb.Append("  ").Append(string.Join(" | ", LJ.StringsOf(row as JsonArray, 6, 120))).Append('\n');
+            }
+        }
+
+        var n = 0;
+        foreach (var d in LJ.Objects(set, "documents"))
+        {
+            sb.Append("Document ").Append(++n).Append(" (").Append(LJ.Str(d, "kind", 20)).Append(")");
+            var title = LJ.Str(d, "title", 200);
+            sb.Append(title.Length > 0 ? " — " + title : "").Append('\n');
+            foreach (var m in LJ.Strings(d, "meta", 8, 200))
+            {
+                sb.Append("  ").Append(m).Append('\n');
+            }
+
+            foreach (var para in LJ.Strings(d, "paragraphs", 20, 2000))
+            {
+                sb.Append("  ").Append(para).Append('\n');
+            }
+        }
+    }
+
+    /// <summary>
+    /// Inscrit le resultat dans chaque question (<c>check</c>, <c>neutral</c>, <c>neutralWhy</c>,
+    /// <c>guessable</c>) et le bilan dans <c>content.check</c>. Une question sans reponse du relecteur reste
+    /// comptee, sans verdict.
+    /// </summary>
+    public static void Apply(JsonObject content, JsonObject? solved, JsonObject? blind, string model, HostLog log)
+    {
+        var withSupport = Index(solved);
+        var without = Index(blind);
+        int checkedCount = 0, neutral = 0, guessable = 0;
+        foreach (var set in Sets(content))
+        {
+            foreach (var q in LJ.Objects(set, "questions"))
+            {
+                var id = LJ.Str(q, "id", 10);
+                var count = LJ.Strings(q, "options", 4, 400).Count;
+                var key = LJ.Int(q, "answer", -1);
+                if (key < 0 || key >= count)
+                {
+                    continue;
+                }
+
+                var check = new JsonObject();
+                if (withSupport.TryGetValue(id, out var a))
+                {
+                    checkedCount++;
+                    var choice = Array.IndexOf(Letters, LJ.Str(a, "choice", 2));
+                    var defensible = LJ.Strings(a, "defensible", 4, 2).Select(l => Array.IndexOf(Letters, l)).Where(i => i >= 0 && i < count).Distinct().ToList();
+                    if (choice >= 0 && !defensible.Contains(choice))
+                    {
+                        defensible.Insert(0, choice);
+                    }
+
+                    check["choice"] = choice;
+                    check["defensible"] = new JsonArray(defensible.Select(i => (JsonNode)i).ToArray());
+                    check["confidence"] = LJ.Pick(LJ.Str(a, "confidence", 10), new[] { "high", "medium", "low" }, "medium");
+                    check["issue"] = LJ.Str(a, "issue", 300);
+                    var why = choice != key
+                        ? "Relue par un second lecteur, la question a donné une autre réponse que sa clé : la clé est douteuse."
+                        : defensible.Count > 1
+                            ? "Relue par un second lecteur, la question admet plusieurs réponses défendables."
+                            : "";
+                    if (why.Length > 0)
+                    {
+                        q["neutral"] = true;
+                        q["neutralWhy"] = why;
+                        neutral++;
+                    }
+                }
+
+                if (without.TryGetValue(id, out var b))
+                {
+                    var blindChoice = Array.IndexOf(Letters, LJ.Str(b, "choice", 2));
+                    var sure = LJ.Str(b, "confidence", 10) == "high";
+                    check["blindChoice"] = blindChoice;
+                    check["blindConfidence"] = LJ.Pick(LJ.Str(b, "confidence", 10), new[] { "high", "medium", "low" }, "medium");
+                    if (blindChoice == key && sure)
+                    {
+                        q["guessable"] = true;
+                        guessable++;
+                    }
+                }
+
+                if (check.Count > 0)
+                {
+                    q["check"] = check;
+                }
+            }
+        }
+
+        content["check"] = new JsonObject
+        {
+            ["status"] = checkedCount > 0 ? "ok" : "failed",
+            ["checked"] = checkedCount,
+            ["neutral"] = neutral,
+            ["guessable"] = guessable,
+            ["blind"] = blind is not null,
+            ["model"] = model,
+        };
+        var total = Sets(content).Sum(s => (LJ.Arr(s, "questions") ?? new JsonArray()).Count);
+        log.Info($"Revizator toeic : verification {checkedCount}/{total} questions, {neutral} neutralisee(s), {guessable} devinable(s) sans support.");
+    }
+
+    private static Dictionary<string, JsonObject> Index(JsonObject? output)
+    {
+        var map = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        foreach (var a in LJ.Objects(output, "answers"))
+        {
+            var id = LJ.Str(a, "id", 10).Trim();
+            if (id.Length > 0)
+            {
+                map.TryAdd(id, a);
+            }
+        }
+
+        return map;
+    }
+
+    /// <summary>
+    /// Profil lexical de chaque ensemble (support, questions et options) : <c>set.lex</c>, et pour chaque
+    /// question l'ecart entre le niveau mesure et son niveau annonce (<c>lexGap</c>, en niveaux).
+    /// </summary>
+    public static void Profile(JsonObject content)
+    {
+        foreach (var set in Sets(content))
+        {
+            var text = new StringBuilder();
+            foreach (var l in LJ.Objects(set, "audio"))
+            {
+                text.Append(LJ.Str(l, "text", 2000)).Append('\n');
+            }
+
+            foreach (var d in LJ.Objects(set, "documents"))
+            {
+                foreach (var para in LJ.Strings(d, "paragraphs", 20, 2000))
+                {
+                    text.Append(para).Append('\n');
+                }
+            }
+
+            foreach (var q in LJ.Objects(set, "questions"))
+            {
+                text.Append(LJ.Str(q, "stem", 600).Replace("-------", " ")).Append('\n');
+                foreach (var o in LJ.Strings(q, "options", 4, 400))
+                {
+                    text.Append(o).Append(".\n");
+                }
+            }
+
+            var profile = LexicalProfile.Of(text.ToString());
+            if (profile is null)
+            {
+                continue;
+            }
+
+            set["lex"] = LexicalProfile.ToJson(profile);
+            foreach (var q in LJ.Objects(set, "questions"))
+            {
+                q["lexGap"] = LexicalProfile.Gap(profile.Level95, LJ.Str(q, "cefr", 4));
+            }
+        }
+    }
+}
+
 // ============================================================================ bilan oral et ecrit
 
 /// <summary>
@@ -3547,23 +3917,36 @@ internal static class GradeGenre
         4. explanationFr : 25 mots au plus, dans la langue d'explication indiquée ; pour un faux ami ou un calque, dis ce que le mot veut dire en anglais.
         5. corrected : la réponse entière, avec toutes les error corrigées et rien d'autre.
         6. redo : une phrase de la réponse, corrigée, que l'apprenant va redire ou réécrire (la plus utile).
-        7. usefulPhrases : deux ou trois tournures naturelles, au niveau visé ou juste au-dessus, à réemployer pour cette tâche.
+        7. usefulPhrases : deux ou trois tournures naturelles, au niveau que montre la production ou juste au-dessus, à réemployer pour cette tâche.
         8. cards : deux à quatre cartes de révision tirées des erreurs (front : la phrase à trous ou le sens en français ; back : la forme correcte ; example : une phrase complète en anglais).
         9. strengthsFr : deux réussites précises, citées ; priorityFr : LA priorité de travail, en une phrase ; feedbackFr : trois ou quatre phrases encourageantes et concrètes, en vouvoyant.
+        10. goodUses : jusqu'à quatre emplois CORRECTS d'un point de la taxonomie qui pose souvent problème à un francophone (un present perfect bien choisi, since/for juste, un article générique correct, une préposition piège bien employée…) ; quote = l'extrait exact, recopié depuis la réponse ; category dans la taxonomie. Rien d'évident ni de banal : seulement ce qui prouve qu'un point est acquis.
 
-        Notes (scores, entiers de 0 à 5, critères analytiques du CECRL) : task (tâche accomplie : consignes, longueur, pertinence), coherence (organisation, connecteurs), range (étendue du vocabulaire et des structures), accuracy (correction grammaticale et lexicale), fluency (à l'oral seulement : débit, pauses, hésitations, d'après les mesures ; 0 à l'écrit). Repères : 1 ≈ A1, 2 ≈ A2, 3 ≈ B1, 4 ≈ B2, 5 ≈ C1. Note d'abord les critères, puis la tâche. levelEstimate : le niveau que montre cette production.
-        swScore : la note de la tâche sur le barème indiqué, s'il y en a un ; sinon 0.
+        Notes : une grille analytique, à l'aveugle
+        Tu ne connais pas le niveau supposé de l'apprenant, et c'est voulu : juge la production seule, telle qu'elle est. La bienveillance est dans le ton du retour, jamais dans les notes : ne surnote pas pour encourager, ne sous-note pas une production longue pour quelques fautes isolées.
+        Remplis d'abord rationale : pour chaque critère, en une phrase, ce que tu observes dans la réponse (avec un mot ou deux cités) et la bande de la grille qui y correspond ; puis seulement les notes, qui suivent ces constats.
+        Grille (entiers ; 0 = rien d'évaluable ; 1 ≈ A1, 2 ≈ A2, 3 ≈ B1, 4 ≈ B2, 5 ≈ C1) :
+        - range (étendue du vocabulaire et des structures) : 1 = mots et formules isolés, appris par cœur ; 2 = structures élémentaires et expressions toutes faites pour des besoins concrets, vocabulaire limité ; 3 = assez de vocabulaire pour les sujets familiers, avec des périphrases et des répétitions ; 4 = gamme suffisante pour décrire, argumenter et varier la formulation sur des sujets généraux, quelques phrases complexes ; 5 = large gamme, formulation choisie et précise, tournures idiomatiques, peu de recherche de mots.
+        - accuracy (correction grammaticale et lexicale) : 1 = contrôle très limité de quelques structures apprises ; 2 = structures simples justes, mais erreurs élémentaires systématiques (temps, accords, articles) ; le sens reste en général clair ; 3 = assez correct dans les situations familières ; erreurs nettes, souvent de francophone, qui gênent rarement le sens ; 4 = bon contrôle : aucune faute qui gêne la compréhension, erreurs occasionnelles et non systématiques ; 5 = haut niveau de correction constant, fautes rares et difficiles à repérer.
+        - coherence (organisation, connecteurs) : 1 = mots ou groupes reliés par and, then ; 2 = phrases simples reliées par and, but, because ; 3 = suite linéaire de points reliés par des connecteurs courants ; 4 = connecteurs variés qui marquent clairement les relations entre les idées ; 5 = texte clair, fluide et bien structuré, articulation maîtrisée.
+        - fluency (à l'oral seulement, d'après les mesures ; 0 à l'écrit) : 1 = énoncés très courts et isolés, longues pauses pour chercher ; 2 = énoncés courts, pauses, faux départs et reformulations très visibles ; 3 = discours suivi, pauses pour chercher la grammaire et les mots surtout dans les passages longs ; 4 = rythme assez régulier, peu de pauses longues, rarement au milieu d'une proposition ; 5 = aisance et spontanéité, presque sans effort.
+        - task (tâche accomplie : consignes, longueur, pertinence) : 0 = rien, hors sujet ou autre langue ; 1 = tâche à peine abordée ; 2 = partiellement accomplie (consignes manquées, longueur très insuffisante) ; 3 = accomplie pour l'essentiel ; 4 = accomplie entièrement, de façon adaptée ; 5 = accomplie pleinement et développée, registre adapté.
+        Ce qui n'est pas montré ne se note pas : une production courte (moins de 40 mots, ou moins de 25 secondes à l'oral) ne prouve ni une étendue ni une cohérence au-delà de 3. Des exemples notés, s'il y en a, servent d'étalon : situe la réponse par rapport à eux.
+        levelEstimate : le niveau que montre cette production, d'après range, accuracy et coherence (et fluency à l'oral) ; l'hôte le recalcule à partir de ces notes.
+        swScore : la note de la tâche sur le barème indiqué, s'il y en a un, en suivant ses bandes ; sinon 0. La phrase rationale.sw dit quelle bande et pourquoi.
 
-        À l'oral, la réponse est une transcription automatique (Whisper) qui a pu lisser des fautes (articles, terminaisons) et ne dit rien de l'accent : ne juge pas la prononciation, ne relève pas une « faute » qui peut venir de la transcription, appuie la fluence sur les mesures (repères de débit : A2 ≈ 50 mots par minute, B1 ≈ 95, B2 et au-delà ≈ 120 ; silences longs et fréquents = fluence basse).
+        À l'oral, la réponse est une transcription automatique (Whisper) qui a pu lisser des fautes (articles, terminaisons) et ne dit rien de l'accent : ne juge pas l'accent d'après le texte, ne relève pas une « faute » qui peut venir de la transcription, appuie la fluence sur les mesures (repères de débit : A2 ≈ 50 mots par minute, B1 ≈ 95, B2 et au-delà ≈ 120 ; longueur moyenne des passages sans pause : A2 ≈ 3 mots, B1 ≈ 5, B2 ≈ 7 et plus ; silences longs, fréquents ou au milieu des propositions = fluence basse). Pour une lecture à voix haute, l'intelligibilité se juge sur les mesures de reconnaissance du texte lu (part des mots reconnus, mots manqués ou peu sûrs), pas sur le texte de la transcription.
         Une réponse vide, hors sujet ou dans une autre langue vaut 0 pour la tâche : dis-le simplement, sans edits.
         """;
 
     private static readonly string Schema = ExerciseGenre.Compact("""
-        {"type":"object","additionalProperties":false,"required":["scores","swScore","corrected","edits","strengthsFr","priorityFr","feedbackFr","redo","usefulPhrases","cards","levelEstimate"],"properties":{
+        {"type":"object","additionalProperties":false,"required":["rationale","scores","swScore","corrected","edits","goodUses","strengthsFr","priorityFr","feedbackFr","redo","usefulPhrases","cards","levelEstimate"],"properties":{
+        "rationale":{"type":"object","additionalProperties":false,"required":["range","accuracy","coherence","fluency","task","sw"],"description":"Constats avant les notes : une phrase par critère","properties":{"range":{"type":"string"},"accuracy":{"type":"string"},"coherence":{"type":"string"},"fluency":{"type":"string","description":"vide à l'écrit"},"task":{"type":"string"},"sw":{"type":"string","description":"bande du barème S&W et pourquoi ; vide sans barème"}}},
         "scores":{"type":"object","additionalProperties":false,"required":["task","coherence","range","accuracy","fluency"],"properties":{"task":{"type":"integer","description":"0 à 5"},"coherence":{"type":"integer"},"range":{"type":"integer"},"accuracy":{"type":"integer"},"fluency":{"type":"integer","description":"0 à l'écrit"}}},
         "swScore":{"type":"number","description":"Note sur le barème de la tâche s'il est donné, sinon 0"},
         "corrected":{"type":"string"},
         "edits":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["type","category","original","correction","explanationFr","priority"],"properties":{"type":{"type":"string","enum":["error","improvement"]},"category":{"type":"string","enum":@TAX@},"original":{"type":"string","description":"Extrait exact de la réponse de l'apprenant"},"correction":{"type":"string"},"explanationFr":{"type":"string"},"priority":{"type":"integer","description":"1, 2 ou 3"}}}},
+        "goodUses":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["category","quote"],"properties":{"category":{"type":"string","enum":@TAX@},"quote":{"type":"string","description":"Extrait exact de la réponse de l'apprenant, employé correctement"}}}},
         "strengthsFr":{"type":"array","items":{"type":"string"}},
         "priorityFr":{"type":"string"},"feedbackFr":{"type":"string"},"redo":{"type":"string"},
         "usefulPhrases":{"type":"array","items":{"type":"string"}},
@@ -3574,7 +3957,7 @@ internal static class GradeGenre
     /// <summary>Grilles du format S&amp;W, paraphrasees (toeic.md §6.2 et §6.3).</summary>
     private static string Rubric(string kind, int scale) => kind switch
     {
-        "read_aloud" => "Lecture à voix haute : swScore = moyenne de deux notes de 0 à 3, prononciation (intelligibilité) et intonation-accentuation, estimées prudemment d'après la transcription et les mesures (3 : très intelligible, mots tous reconnus, pauses aux ponctuations ; 2 : globalement intelligible, quelques écarts ; 1 : intelligible par moments ; 0 : rien ou pas d'anglais).",
+        "read_aloud" => "Lecture à voix haute : swScore = moyenne de deux notes de 0 à 3, prononciation (intelligibilité) et intonation-accentuation. L'intelligibilité se lit dans la part des mots du texte reconnus avec assurance par la transcription et dans les mots manqués ou reconnus sans assurance (3 : 95 % ou plus reconnus avec assurance, presque aucun mot peu sûr ; 2 : 85 à 95 %, quelques mots manqués ; 1 : 60 à 85 % ; 0 : moins de 60 %, rien ou pas d'anglais) ; l'intonation, prudemment, dans les pauses (aux ponctuations : bien ; au milieu des groupes de mots : mal) et le débit. Sans mesure de reconnaissance, ne dépasse pas 2.",
         "describe" or "respond" or "respond_info" => "Barème 0 à 3 : 3 = réponse complète, pertinente et adaptée (pour un document, informations exactes), vocabulaire et structures suffisants ; 2 = réponse partielle ou imprécise, vocabulaire limité mais sens clair ; 1 = ne répond pas efficacement, vocabulaire inexact ou répétition de la question ; 0 = rien, pas d'anglais ou hors sujet.",
         "opinion" => "Barème 0 à 5 : 5 = position claire, soutenue de façon cohérente (raisons, détails, exemples, liens explicites), débit fluide, bon contrôle des structures simples et complexes ; 4 = position claire, justification adéquate mais pas entièrement développée, gamme limitée ; 3 = position exprimée, au moins une raison, peu développée ou répétitive, surtout des structures de base ; 2 = position pertinente mais soutien absent ou confus, débit haché ; 1 = mots isolés, pas d'opinion intelligible ; 0 = rien, pas d'anglais, hors sujet.",
         "sentence" => "Barème 0 à 3 : 3 = une phrase sans faute, avec les deux mots bien employés, cohérente avec la situation ; 2 = erreurs qui ne gênent pas le sens, deux mots présents ; 1 = erreur qui gêne le sens, mot manquant ou phrase sans rapport ; 0 = vide ou autre langue.",
@@ -3583,7 +3966,21 @@ internal static class GradeGenre
         _ => $"Barème de la tâche : 0 à {scale}, proportionnel à la réussite de la tâche (consignes, pertinence, langue).",
     };
 
-    public static AgentCall Compose(LearnRequest r)
+    /// <summary>Seconde correction d'un bilan : les notes seules, sans la fiche de correction.</summary>
+    private static readonly string ScoreSchema = ExerciseGenre.Compact("""
+        {"type":"object","additionalProperties":false,"required":["rationale","scores","swScore","levelEstimate"],"properties":{
+        "rationale":{"type":"object","additionalProperties":false,"required":["range","accuracy","coherence","fluency","task","sw"],"properties":{"range":{"type":"string"},"accuracy":{"type":"string"},"coherence":{"type":"string"},"fluency":{"type":"string"},"task":{"type":"string"},"sw":{"type":"string"}}},
+        "scores":{"type":"object","additionalProperties":false,"required":["task","coherence","range","accuracy","fluency"],"properties":{"task":{"type":"integer"},"coherence":{"type":"integer"},"range":{"type":"integer"},"accuracy":{"type":"integer"},"fluency":{"type":"integer"}}},
+        "swScore":{"type":"number"},
+        "levelEstimate":{"type":"string","enum":["A1","A2","B1","B1+","B2","B2+","C1"]}}}
+        """);
+
+    public static AgentCall Compose(LearnRequest r) => Compose(r, false);
+
+    /// <summary>Les notes seules (seconde correction d'un bilan, <c>params.double</c>).</summary>
+    public static AgentCall ComposeScores(LearnRequest r) => Compose(r, true);
+
+    private static AgentCall Compose(LearnRequest r, bool scoresOnly)
     {
         var p = r.Params;
         var mode = LJ.Pick(LJ.Str(p, "mode", 10), new[] { "write", "speak" }, "write");
@@ -3594,9 +3991,10 @@ internal static class GradeGenre
         var scale = LJ.Int(task, "scale");
         var response = LJ.Str(p, "response", 12000);
 
+        // A l'aveugle : le niveau suppose de l'apprenant ne sert qu'a choisir la langue des explications,
+        // il n'est jamais montre au correcteur (sinon sa note s'en rapproche et confirme l'estimation).
         var sb = new StringBuilder();
         sb.Append("Mode : ").Append(mode == "write" ? "écrit (texte tapé)" : "oral (transcription automatique)").Append(".\n");
-        sb.Append(Levels.Line(level)).Append('\n');
         sb.Append(Levels.ExplainRule(level, LJ.Str(p, "explain", 10))).Append('\n');
         if (rubric == "sw" && scale > 0)
         {
@@ -3643,6 +4041,13 @@ internal static class GradeGenre
             sb.Append("- Temps ").Append(mode == "speak" ? "de parole" : "conseillé").Append(" : ").Append(seconds).Append(" secondes.\n");
         }
 
+        // Les etalons avant la reponse : le correcteur la situe par rapport a eux.
+        if (!LJ.Bool(p, "noAnchors"))
+        {
+            // Un jeu d'evaluation ne se sert pas de l'echantillon note comme de son propre etalon.
+            sb.Append(LearningAnchors.Block(kind.Length > 0 ? kind : "free", mode, rubric, exclude: LJ.Str(p, "anchorExclude", 80)));
+        }
+
         sb.Append("\nRéponse de l'apprenant (").Append(mode == "write" ? "texte tapé" : "transcription Whisper").Append(", ").Append(LJ.Words(response)).Append(" mots) :\n\"\"\"\n")
           .Append(response.Length > 0 ? response : "(vide)").Append("\n\"\"\"\n");
 
@@ -3658,13 +4063,32 @@ internal static class GradeGenre
                 sb.Append(" ; ").Append(pauses.Count).Append(" silences d'au moins 0,3 s (").Append(longOnes).Append(" d'une seconde ou plus, ")
                   .Append(total.ToString("0.0", CultureInfo.InvariantCulture)).Append(" s en tout)");
             }
-            else
+            else if (metrics["pauses"] is JsonValue)
             {
                 sb.Append(" ; ").Append(LJ.Int(metrics, "pauses")).Append(" silences d'au moins 0,3 s");
             }
 
             var uncertain = LJ.Strings(metrics, "uncertain", 20, 40);
             sb.Append(uncertain.Count > 0 ? " ; mots peu sûrs dans la transcription : " + string.Join(", ", uncertain) : "").Append(".\n");
+            sb.Append(FluencyLine(metrics));
+            if (metrics["accuracy"] is JsonValue)
+            {
+                var accuracy = LJ.Num(metrics, "accuracy", -1);
+                if (accuracy >= 0 && accuracy <= 1)
+                {
+                    sb.Append("Reconnaissance du texte lu : ").Append(Math.Round(accuracy * 100).ToString("0", CultureInfo.InvariantCulture)).Append(" % des mots du texte retrouvés dans la transcription");
+                    var sure = LJ.Num(metrics, "sureAccuracy", -1);
+                    if (sure >= 0 && sure <= 1)
+                    {
+                        sb.Append(" (").Append(Math.Round(sure * 100).ToString("0", CultureInfo.InvariantCulture)).Append(" % avec assurance : un mot reconnu à faible probabilité a souvent été deviné par la transcription plutôt qu'entendu)");
+                    }
+
+                    var missed = LJ.Strings(metrics, "missed", 20, 40);
+                    sb.Append(missed.Count > 0 ? " ; manqués ou mal reconnus : " + string.Join(", ", missed) : "");
+                    var unsure = LJ.Strings(metrics, "unsureRead", 20, 40);
+                    sb.Append(unsure.Count > 0 ? " ; reconnus sans assurance : " + string.Join(", ", unsure) : "").Append(".\n");
+                }
+            }
         }
 
         if (r.Context.Length > 0)
@@ -3672,9 +4096,88 @@ internal static class GradeGenre
             sb.Append('\n').Append(r.Context.Trim()).Append('\n');
         }
 
+        if (scoresOnly)
+        {
+            sb.Append("\nSeconde correction, indépendante : rendez seulement les constats (rationale), les notes, swScore et levelEstimate ; la fiche détaillée est faite à part.");
+            return new AgentCall("", System + Levels.Quotes, ScoreSchema, sb.ToString());
+        }
+
         sb.Append("\nRendez la fiche de correction.");
         return new AgentCall("", System + Levels.Quotes, Schema, sb.ToString());
     }
+
+    /// <summary>Notes d'une seconde correction, bornees comme celles de la premiere.</summary>
+    public static JsonObject SanitizeScores(JsonObject o, LearnRequest r)
+    {
+        var p = r.Params;
+        var mode = LJ.Pick(LJ.Str(p, "mode", 10), new[] { "write", "speak" }, "write");
+        var scale = Math.Clamp(LJ.Int(LJ.Obj(p, "task"), "scale"), 0, 5);
+        var scores = LJ.Obj(o, "scores");
+        int Score(string key) => Math.Clamp(LJ.Int(scores, key), 0, 5);
+        var task = Score("task");
+        var sw = scale > 0 ? Math.Clamp(Math.Round(LJ.Num(o, "swScore") * 2) / 2, 0, scale) : 0;
+        if (task == 0 && LJ.Str(LJ.Obj(p, "task"), "kind", 30) != "read_aloud")
+        {
+            sw = 0;
+        }
+
+        return new JsonObject
+        {
+            ["scores"] = new JsonObject
+            {
+                ["task"] = task,
+                ["coherence"] = Score("coherence"),
+                ["range"] = Score("range"),
+                ["accuracy"] = Score("accuracy"),
+                ["fluency"] = mode == "speak" ? Score("fluency") : 0,
+            },
+            ["swScore"] = sw,
+        };
+    }
+
+    /// <summary>
+    /// Plusieurs corrections d'une meme reponse reunies : la mediane de chaque note (la moyenne a deux) et
+    /// de swScore (arrondi au demi-point) ; le niveau recalcule ; les notes de chaque correction et leur
+    /// ecart (<c>ratings</c>, <c>spread</c>) gardes pour mesurer la fidelite du correcteur.
+    /// </summary>
+    public static void Merge(JsonObject content, IReadOnlyList<JsonObject> ratings, LearnRequest r)
+    {
+        if (ratings.Count < 2)
+        {
+            return;
+        }
+
+        var mode = LJ.Pick(LJ.Str(r.Params, "mode", 10), new[] { "write", "speak" }, "write");
+        static double Median(IEnumerable<double> values)
+        {
+            var v = values.OrderBy(x => x).ToList();
+            return v.Count % 2 == 1 ? v[v.Count / 2] : (v[v.Count / 2 - 1] + v[v.Count / 2]) / 2;
+        }
+
+        var merged = new JsonObject();
+        foreach (var key in new[] { "task", "coherence", "range", "accuracy", "fluency" })
+        {
+            merged[key] = Median(ratings.Select(x => LJ.Num(LJ.Obj(x, "scores"), key)));
+        }
+
+        var sws = ratings.Select(x => LJ.Num(x, "swScore")).ToList();
+        content["scores"] = merged;
+        content["swScore"] = Math.Round(Median(sws) * 2) / 2;
+        content["levelEstimate"] = LevelOfScores(merged, mode);
+        content["ratings"] = new JsonArray(ratings.Select(x => (JsonNode)new JsonObject
+        {
+            ["scores"] = LJ.Obj(x, "scores")?.DeepClone(),
+            ["swScore"] = LJ.Num(x, "swScore"),
+        }).ToArray());
+        content["spread"] = sws.Max() - sws.Min();
+    }
+
+    /// <summary>Les notes d'une fiche de correction, pour <see cref="Merge"/>.</summary>
+    public static JsonObject Rating(JsonObject content) => new()
+    {
+        ["scores"] = LJ.Obj(content, "scores")?.DeepClone(),
+        ["swScore"] = LJ.Num(content, "swScore"),
+    };
 
     public static JsonObject Sanitize(JsonObject o, LearnRequest r)
     {
@@ -3751,16 +4254,49 @@ internal static class GradeGenre
             }
         }
 
+        // Emplois corrects : la citation doit figurer dans la reponse, et ne pas etre une faute relevee.
+        var goodUses = new JsonArray();
+        var faulty = errors.Select(e => LJ.Key(e.Original)).ToList();
+        foreach (var g in LJ.Objects(o, "goodUses"))
+        {
+            var quote = LJ.Str(g, "quote", 200);
+            var key = LJ.Key(quote);
+            if (key.Length == 0 || !haystack.Contains(key, StringComparison.Ordinal) || faulty.Any(f => f.Contains(key, StringComparison.Ordinal) || key.Contains(f, StringComparison.Ordinal)) || goodUses.Count >= 4)
+            {
+                continue;
+            }
+
+            goodUses.Add(new JsonObject { ["category"] = Taxonomy.Normalize(LJ.Str(g, "category", 40)), ["quote"] = quote });
+        }
+
+        var task = Score("task");
         var sw = rubric == "sw" && scale > 0 ? Math.Clamp(Math.Round(LJ.Num(o, "swScore") * 2) / 2, 0, scale) : 0;
+        if (task == 0 && LJ.Str(LJ.Obj(p, "task"), "kind", 30) != "read_aloud")
+        {
+            // Tache non accomplie (vide, hors sujet, autre langue) : la grille dit 0, quelle que soit la note rendue.
+            sw = 0;
+        }
+
+        var rationale = LJ.Obj(o, "rationale");
+        var scoreObject = new JsonObject
+        {
+            ["task"] = task,
+            ["coherence"] = Score("coherence"),
+            ["range"] = Score("range"),
+            ["accuracy"] = Score("accuracy"),
+            ["fluency"] = mode == "speak" ? Score("fluency") : 0,
+        };
         return new JsonObject
         {
-            ["scores"] = new JsonObject
+            ["scores"] = scoreObject,
+            ["rationale"] = new JsonObject
             {
-                ["task"] = Score("task"),
-                ["coherence"] = Score("coherence"),
-                ["range"] = Score("range"),
-                ["accuracy"] = Score("accuracy"),
-                ["fluency"] = mode == "speak" ? Score("fluency") : 0,
+                ["range"] = LJ.Str(rationale, "range", 400),
+                ["accuracy"] = LJ.Str(rationale, "accuracy", 400),
+                ["coherence"] = LJ.Str(rationale, "coherence", 400),
+                ["fluency"] = mode == "speak" ? LJ.Str(rationale, "fluency", 400) : "",
+                ["task"] = LJ.Str(rationale, "task", 400),
+                ["sw"] = LJ.Str(rationale, "sw", 400),
             },
             ["swScore"] = sw,
             ["corrected"] = corrected,
@@ -3771,8 +4307,61 @@ internal static class GradeGenre
             ["redo"] = LJ.Str(o, "redo", 600),
             ["usefulPhrases"] = LJ.Array(LJ.Strings(o, "usefulPhrases", 4, 200)),
             ["cards"] = cards,
-            ["levelEstimate"] = Levels.Normalize(LJ.Str(o, "levelEstimate", 10), Levels.Normalize(LJ.Str(p, "level", 10))),
+            ["goodUses"] = goodUses,
+            ["levelEstimate"] = LevelOfScores(scoreObject, mode),
+            ["levelClaimed"] = Levels.Normalize(LJ.Str(o, "levelEstimate", 10), ""),
         };
+    }
+
+    /// <summary>
+    /// Niveau que montre une production, recalcule a partir de la grille (1 ≈ A1 … 5 ≈ C1) : moyenne de
+    /// range, accuracy, coherence (et fluency a l'oral). Le niveau rendu par le modele (<c>levelClaimed</c>)
+    /// n'est garde que pour information : il s'ecarte parfois de ses propres notes. Vide si un critere
+    /// vaut 0 (rien d'evaluable).
+    /// </summary>
+    internal static string LevelOfScores(JsonObject scores, string mode)
+    {
+        var keys = mode == "speak" ? new[] { "range", "accuracy", "coherence", "fluency" } : new[] { "range", "accuracy", "coherence" };
+        var values = keys.Select(k => LJ.Num(scores, k)).ToList();
+        if (values.Any(v => v <= 0))
+        {
+            return "";
+        }
+
+        var theta = values.Average() - 3;
+        var k = (int)Math.Clamp(Math.Floor(theta + 0.5), -2, 2);
+        var plus = theta - k >= 0.2 && k is 0 or 1;
+        return new[] { "A1", "A2", "B1", "B2", "C1" }[k + 2] + (plus ? "+" : "");
+    }
+
+    /// <summary>Mesures de fluence calculees sur l'enregistrement (SpeechAssessment), quand la page les envoie.</summary>
+    private static string FluencyLine(JsonObject metrics)
+    {
+        var parts = new List<string>();
+        var articulation = LJ.Num(metrics, "articulationWpm");
+        if (articulation > 0)
+        {
+            parts.Add("débit d'articulation (pauses ôtées) " + articulation.ToString("0", CultureInfo.InvariantCulture) + " mots par minute");
+        }
+
+        var mlr = LJ.Num(metrics, "meanRun");
+        if (mlr > 0)
+        {
+            parts.Add("passages sans pause de " + mlr.ToString("0.0", CultureInfo.InvariantCulture) + " mots en moyenne");
+        }
+
+        if (metrics["midPauses"] is JsonValue)
+        {
+            parts.Add(LJ.Int(metrics, "midPauses").ToString(CultureInfo.InvariantCulture) + " pause(s) au milieu d'une proposition");
+        }
+
+        var ratio = LJ.Num(metrics, "pauseRatio", -1);
+        if (ratio >= 0)
+        {
+            parts.Add(Math.Round(ratio * 100).ToString("0", CultureInfo.InvariantCulture) + " % du temps en silence");
+        }
+
+        return parts.Count > 0 ? "Fluence mesurée : " + string.Join(" ; ", parts) + ".\n" : "";
     }
 
     private static JsonObject Edit(string type, string category, string original, string correction, string explanation, int priority) => new()
@@ -3849,7 +4438,7 @@ internal static class TutorGenre
         "Si la conversation n'a pas commencé, ouvre-la : une salutation et une première question simple, dans ton rôle.";
 
     private const string Ending =
-        "Quand la fin est demandée : reply = une conclusion chaleureuse d'une ou deux phrases, sans question ; end = vrai ; summary = errors (deux à quatre erreurs réelles de l'apprenant pendant l'échange : said = l'extrait exact, better, explanationFr de 25 mots au plus, category de la taxonomie), phrases (trois tournures utiles employées ou à retenir), feedbackFr (trois phrases encourageantes et concrètes, en français, en vouvoyant), levelEstimate (A2, B1, B1+, B2, B2+ ou C1). Sinon summary reste vide : listes vides, chaînes vides.";
+        "Quand la fin est demandée : reply = une conclusion chaleureuse d'une ou deux phrases, sans question ; end = vrai ; summary = errors (deux à quatre erreurs réelles de l'apprenant, choisies dans toute la conversation et pas seulement ses dernières répliques : said = l'extrait exact, better, explanationFr de 25 mots au plus, category de la taxonomie), phrases (trois tournures utiles employées ou à retenir), feedbackFr (trois phrases encourageantes et concrètes, en français, en vouvoyant), levelEstimate (A2, B1, B1+, B2, B2+ ou C1 : ce que montrent ses répliques, pas le niveau indiqué en tête, qui n'est qu'une estimation). Sinon summary reste vide : listes vides, chaînes vides.";
 
     private static readonly string System = string.Join("\n\n", Persona + Sheet,
         string.Join("\n", "Ta réplique (reply)", ReplyLevel, ReplyReact, ReplySpoken, ReplyFr), Corrections, Opening, Ending);
@@ -3865,7 +4454,12 @@ internal static class TutorGenre
           "levelEstimate":{"type":"string","description":"A2, B1, B1+, B2, B2+ ou C1 ; vide si la fin n'est pas demandée"}}}}}
         """.Replace("@TAX@", Taxonomy.Enum));
 
-    private static List<(string Role, string Text)> History(JsonObject? p, int take = 12)
+    /// <summary>Repliques reprises a chaque tour ; le bilan de fin, lui, lit toute la conversation (40 au plus).</summary>
+    internal const int TurnHistory = 12;
+
+    internal const int EndHistory = 40;
+
+    private static List<(string Role, string Text)> History(JsonObject? p, int take = TurnHistory)
         => LJ.Objects(p, "history")
             .Select(h => (Role: LJ.Pick(LJ.Str(h, "role", 10), new[] { "user", "tutor" }, "user"), Text: LJ.Str(h, "text", 1200)))
             .Where(h => h.Text.Length > 0)
@@ -3939,7 +4533,7 @@ internal static class TutorGenre
             sb.Append("Taxonomie (summary.errors.category) : ").Append(Taxonomy.Listing()).Append(".\n");
         }
 
-        var history = History(p);
+        var history = History(p, end ? EndHistory : TurnHistory);
         sb.Append("\nConversation jusqu'ici :\n");
         if (history.Count == 0)
         {
@@ -3961,7 +4555,7 @@ internal static class TutorGenre
     {
         var p = r.Params;
         var end = LJ.Bool(p, "end");
-        var history = History(p);
+        var history = History(p, end ? EndHistory : TurnHistory);
         var lastUser = history.LastOrDefault(h => h.Role == "user").Text ?? "";
         var allUser = LJ.Key(string.Join(" \n ", history.Where(h => h.Role == "user").Select(h => h.Text)));
 

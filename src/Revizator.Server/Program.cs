@@ -183,6 +183,12 @@ static int Command(ServerConfig config, string[] args)
             return 0;
         }
 
+        case "anchors":
+            return Evaluation.Anchors(config, args);
+
+        case "eval":
+            return Evaluation.RunAsync(config, args).GetAwaiter().GetResult();
+
         default:
             Console.Error.WriteLine("""
                 Usage :
@@ -202,6 +208,14 @@ static int Command(ServerConfig config, string[] args)
                                                             du dossier %LOCALAPPDATA%\Organizator\ du PC, dans
                                                             l'espace du compte (facultatif s'il n'y en a qu'un ;
                                                             sans compte, pour le premier qui sera cree)
+                  revizator-server anchors import <fichier> [--per-level 2] [--replace]
+                                                            etalons du correcteur, tires d'un jeu note par des
+                                                            humains (JSONL de Revizator, ou Write & Improve)
+                  revizator-server anchors list|clear       liste ou supprime les etalons
+                  revizator-server eval <fichier> [--runs 2] [--limit 60] [--model sonnet] [--effort medium]
+                                   [--no-anchors] [--out rapport.json]
+                                                            mesure le correcteur sur un jeu note : accord (QWK),
+                                                            biais, fidelite d'un passage a l'autre
                 Variables : REVIZATOR_DATA, REVIZATOR_PORT, REVIZATOR_PUBLIC_URL, REVIZATOR_ALLOWED_ORIGINS,
                             REVIZATOR_TRUSTED_PROXIES, REVIZATOR_CLAUDE, CLAUDE_CODE_OAUTH_TOKEN
                             (voir docs/REVIZATOR-SERVER.md).
@@ -278,6 +292,8 @@ static async Task<int> ServeAsync(ServerConfig config)
 {
     Directory.CreateDirectory(config.DataDir);
     var log = new HostLog(config.DataDir);
+    // Etalons du correcteur : communs a tous les comptes, a la racine du dossier de donnees.
+    LearningAnchors.Configure(config.DataDir);
     log.Mirror = line => Console.WriteLine(line);
     log.Info($"Revizator serveur {ServerConfig.Version}{(ServerConfig.Build.Commit.Length > 0 ? " (" + ServerConfig.Build.Commit[..7] + ")" : "")} : donnees {config.DataDir}, page {config.WwwRoot}, port {config.Port}");
     log.Info("Proxys de confiance (X-Forwarded-*) : "

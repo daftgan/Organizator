@@ -16,6 +16,8 @@
      R.toeic.estimateProductive('speaking'|'writing', [{ type, score }]) → { composite, score, range, cefr, capped }
      R.toeic.thetaOfScore(section 'L'|'R'|'S'|'W'|'T', score) → theta (échelle du noyau, B1 = 0)
      R.toeic.cefrLabel(estimation) → { label: 'B1-B2 limite' | 'B2', main, p, pair }
+     R.toeic.fitLearned(section, [{ items: [{ s, c, f, g, u, o, x }] }]) → { label: { A1…C1: points }, lex, n, bilans } | null
+       (difficulté apprise des réponses : décalage par niveau annoncé, effet de l'écart lexical)
 
    Données (R.data.toeic, spec §6) :
      L, R, S, W, T : { mean, sd, at } — tendance (Kalman) ; T = total L + R
@@ -35,6 +37,7 @@
   var CFG = {
     scale: { L: 90, R: 95 },
     guessFactor: 0.8,
+    guessable: 0.5,
     prior: { L: { mean: 325, sd: 150 }, R: { mean: 260, sd: 150 } },
     modelSd: 35,
     levelDifficulty: {
@@ -68,14 +71,129 @@
     return CFG.levelDifficulty.L[c] != null ? c : 'B1';
   }
 
+  function baseDifficulty(section, cefr, features) {
+    var d = CFG.levelDifficulty[section][itemLevel(cefr)];
+    arr(features).forEach(function (f) { d += CFG.featureAdj[f] || 0; });
+    return d;
+  }
+
   function difficulty(item) {
-    var d = item.difficultyPoints != null ? item.difficultyPoints : CFG.levelDifficulty[item.section][itemLevel(item.cefr)];
-    arr(item.features).forEach(function (f) { d += CFG.featureAdj[f] || 0; });
-    return d + num(item.calibrationOffset, 0);
+    var d = item.difficultyPoints != null ? item.difficultyPoints + arr(item.features).reduce(function (a, f) { return a + (CFG.featureAdj[f] || 0); }, 0)
+      : baseDifficulty(item.section, item.cefr, item.features);
+    return d + learnedAdj(item) + num(item.calibrationOffset, 0);
+  }
+
+  /* ══ Difficulté apprise des réponses ═══════════════════════════════════
+     Le niveau d'une question est celui que lui donne son auteur (un modèle de langue), et ses écarts ne
+     sont pas mesurés : une question « C1 » peut n'être pas plus dure qu'une « B2 ». Les réponses passées
+     le mesurent. Pour chaque section, un décalage par niveau annoncé (A1…C1) et un effet de l'écart entre
+     le niveau lexical mesuré du texte et ce niveau annoncé (lexGap, LexicalProfile) sont estimés avec
+     la distribution des capacités des bilans (maximum de vraisemblance marginale par EM : la capacité de
+     chaque bilan est intégrée sur la grille, un pas de Fisher par paramètre, a priori normal centré :
+     40 points par niveau, 15 par niveau lexical). Les décalages par
+     niveau sont recentrés (moyenne pondérée nulle) : ils redessinent l'échelle relative des questions ;
+     son niveau absolu reste celui que fixent les scores officiels (calibrationOffset).
+     Données : les bilans passés de l'apprenant (entry.items) et, sur un serveur, ceux des autres comptes,
+     sans nom (learnItemPool). Rien n'est appris sous 40 réponses. */
+  var LEARN = { tauLabel: 40, tauLex: 15, minItems: 40, iters: 25 };
+  var LEARNED = null, LEARNED_KEY = '';
+
+  function learnedAdj(item) {
+    var l = LEARNED && LEARNED[item.section];
+    if (!l) return 0;
+    return num(l.label[itemLevel(item.cefr)], 0) + num(l.lex, 0) * num(item.lexGap, 0);
+  }
+
+  function fitLearned(section, bilans) {
+    var groups = arr(bilans).map(function (b) { return arr(b.items).filter(function (r) { return r && r.s === section; }); })
+      .filter(function (g) { return g.length >= 5; });
+    var n = groups.reduce(function (a, g) { return a + g.length; }, 0);
+    if (n < LEARN.minItems) return null;
+    var levels = Object.keys(CFG.levelDifficulty[section]);
+    var delta = {}, count = {};
+    levels.forEach(function (c) { delta[c] = 0; count[c] = 0; });
+    groups.forEach(function (g) { g.forEach(function (r) { count[itemLevel(r.c)]++; }); });
+    var beta = 0, sc = CFG.scale[section];
+    /* Distribution des capacités des bilans, estimée elle aussi (EM marginal) : la supposer large, ou
+       remplacer chaque capacité par son estimation ponctuelle, tasserait l'échelle des questions. */
+    var mu = CFG.prior[section].mean, sigma = CFG.prior[section].sd;
+    var tl = 1 / (LEARN.tauLabel * LEARN.tauLabel), tb = 1 / (LEARN.tauLex * LEARN.tauLex);
+    var pre = groups.map(function (g) {
+      return g.map(function (r) { return { b: baseDifficulty(section, r.c, r.f), c: itemLevel(r.c), g: num(r.g, 0), q: r.u ? CFG.guessable : CFG.guessFactor / (num(r.o, 0) || 4), x: !!r.x }; });
+    });
+    for (var it = 0; it < LEARN.iters; it++) {
+      var gl = {}, il = {}, gb = 0, ib = 0, m1 = 0, m2 = 0;
+      levels.forEach(function (c) { gl[c] = 0; il[c] = 0; });
+      pre.forEach(function (items) {
+        var lp = GRID.map(function (S) {
+          var v = -0.5 * Math.pow((S - mu) / sigma, 2);
+          items.forEach(function (q) {
+            var p = q.q + (1 - q.q) / (1 + Math.exp(-(S - q.b - delta[q.c] - beta * q.g) / sc));
+            v += Math.log(q.x ? p : 1 - p);
+          });
+          return v;
+        });
+        var top = Math.max.apply(null, lp), z = 0;
+        var w = lp.map(function (v) { var e = Math.exp(v - top); z += e; return e; });
+        GRID.forEach(function (S, k) {
+          var pk = w[k] / z;
+          m1 += pk * S; m2 += pk * S * S;
+          if (pk < 1e-6) return;
+          items.forEach(function (q) {
+            var s = 1 / (1 + Math.exp(-(S - q.b - delta[q.c] - beta * q.g) / sc));
+            var p = q.q + (1 - q.q) * s;
+            var dp = -(1 - q.q) * s * (1 - s) / sc;              /* ∂p/∂d */
+            var score = pk * (q.x ? 1 / p : -1 / (1 - p)) * dp;  /* ∂ℓ/∂d, attendu sous la capacité */
+            var info = pk * dp * dp / (p * (1 - p));
+            gl[q.c] += score; il[q.c] += info;
+            gb += score * q.g; ib += info * q.g * q.g;
+          });
+        });
+      });
+      levels.forEach(function (c) { delta[c] += (gl[c] - delta[c] * tl) / (il[c] + tl); });
+      beta += (gb - beta * tb) / (ib + tb);
+      var tot = 0, wsum = 0;
+      levels.forEach(function (c) { tot += delta[c] * count[c]; wsum += count[c]; });
+      var mean = wsum ? tot / wsum : 0;
+      levels.forEach(function (c) { delta[c] -= mean; });
+      mu = m1 / pre.length;
+      sigma = Math.max(25, Math.sqrt(Math.max(0, m2 / pre.length - mu * mu)));
+    }
+    var label = {};
+    levels.forEach(function (c) { label[c] = count[c] ? Math.round(delta[c]) : 0; });
+    return { label: label, lex: Math.round(beta * 10) / 10, n: n, bilans: groups.length, count: count };
+  }
+
+  /* Recalculé quand l'historique ou le lot partagé change. */
+  function refreshLearned() {
+    var t = R.data && R.data.toeic;
+    var own = arr(t && t.history).filter(function (e) { return e && arr(e.items).length; });
+    var pool = arr(U.pool && U.pool.bilans);
+    var key = own.length + ':' + (own.length ? own[own.length - 1].id : '') + ':' + pool.length;
+    if (key === LEARNED_KEY) return LEARNED;
+    LEARNED_KEY = key;
+    var all = own.concat(pool);
+    LEARNED = { L: fitLearned('L', all), R: fitLearned('R', all), own: own.length, pooled: pool.length };
+    return LEARNED;
+  }
+
+  /* Les bilans des autres comptes du serveur, sans nom : une fois par séance. */
+  function loadPool() {
+    if (U.pool || U.poolLoading || !window.bridge || bridge.isShim) return;
+    U.poolLoading = true;
+    bridge.call('learnItemPool', {}, 20000).then(function (r) {
+      U.pool = { bilans: arr(r && r.bilans), at: Date.now() };
+    }, function () { U.pool = { bilans: [], at: Date.now() }; }).then(function () { U.poolLoading = false; LEARNED_KEY = ''; });
+  }
+
+  /* Hasard d'un item : celui des options, ou plus fort pour une question que la relecture sans support a
+     trouvée avec assurance (ToeicCheck, guessable) — sa bonne réponse en dit moins sur la compréhension. */
+  function guessOf(item) {
+    return item.guess != null ? item.guess : CFG.guessFactor / (item.nOptions || 4);
   }
 
   function pCorrect(S, item) {
-    var c = CFG.guessFactor / (item.nOptions || 4);
+    var c = guessOf(item);
     return c + (1 - c) / (1 + Math.exp(-(S - difficulty(item)) / CFG.scale[item.section]));
   }
 
@@ -92,7 +210,7 @@
     var prior = opts.prior || CFG.prior[section];
     var modelSd = opts.modelSd != null ? opts.modelSd : CFG.modelSd;
     var pre = arr(responses).map(function (r) {
-      return { d: difficulty(r.item), c: CFG.guessFactor / (r.item.nOptions || 4), x: !!r.correct };
+      return { d: difficulty(r.item), c: guessOf(r.item), x: !!r.correct };
     });
     var sc = CFG.scale[section];
     var logPost = GRID.map(function (S) {
@@ -156,8 +274,18 @@
     return out;
   }
 
+  /* Total : les erreurs de mesure des deux sections sont indépendantes, mais pas l'erreur de modèle (les
+     mêmes questions générées, la même échelle de difficulté, trop faciles ou trop dures ensemble) : elle
+     s'additionne, au lieu de se compenser en partie. */
   function combineTotal(L, Rr) {
-    var sd = Math.sqrt(L.sd * L.sd + Rr.sd * Rr.sd), t = L.score + Rr.score;
+    var t = L.score + Rr.score, sd;
+    if (L.sdMeasurement != null && Rr.sdMeasurement != null) {
+      var mL = Math.sqrt(Math.max(0, L.sd * L.sd - L.sdMeasurement * L.sdMeasurement));
+      var mR = Math.sqrt(Math.max(0, Rr.sd * Rr.sd - Rr.sdMeasurement * Rr.sdMeasurement));
+      sd = Math.sqrt(L.sdMeasurement * L.sdMeasurement + Rr.sdMeasurement * Rr.sdMeasurement + (mL + mR) * (mL + mR));
+    } else {
+      sd = Math.sqrt(L.sd * L.sd + Rr.sd * Rr.sd);
+    }
     return {
       score: t, sd: Math.round(sd), ci90: [round5(t - 1.645 * sd, 10, 990), round5(t + 1.645 * sd, 10, 990)],
       cefr: cefrOf('T', t), cefrProb: normalCefr('T', t, sd)
@@ -166,6 +294,7 @@
 
   /* Routage après l'étape 1 : estimation provisoire sans erreur de modèle. */
   function routeStage2(section, stage1, threshold) {
+    refreshLearned();
     return estimateSection(section, stage1, { modelSd: 0 }).score >= threshold ? 'hard' : 'easy';
   }
 
@@ -559,6 +688,7 @@
   /* ══ Bilan express : déroulé ════════════════════════════════════════════ */
 
   function runStart() {
+    loadPool();
     var t = TD(), p = t.prep;
     if (!p || !prepComplete(p) || t.run) return;
     t.run = {
@@ -609,13 +739,28 @@
     var part = num(it.set.part, it.section === 'L' ? 3 : 5);
     return {
       section: it.section, part: part, cefr: itemLevel(it.q.cefr), features: arr(it.q.features), ability: it.q.ability || '',
-      nOptions: arr(it.q.options).length || (part === 2 ? 3 : 4), calibrationOffset: offset || 0
+      nOptions: arr(it.q.options).length || (part === 2 ? 3 : 4), calibrationOffset: offset || 0,
+      guess: it.q.guessable ? CFG.guessable : null, lexGap: num(it.q.lexGap, 0)
     };
   }
+  /* Les réponses du bilan sous une forme compacte (niveau annoncé, caractéristiques, écart lexical,
+     devinable, nombre d'options, juste ou non) : ce qui sert à apprendre la difficulté des questions. */
+  function itemRecords(run) {
+    var out = [];
+    ['L', 'R'].forEach(function (s) {
+      responsesOf(run, s, [1, 2], 0).forEach(function (r) {
+        out.push({ s: s, c: r.item.cefr, f: arr(r.item.features).slice(0, 6), g: r.item.lexGap || 0, u: r.item.guess != null ? 1 : 0, o: r.item.nOptions, x: r.correct ? 1 : 0 });
+      });
+    });
+    return out;
+  }
+
   function responsesOf(run, section, stages, offset) {
     var out = [];
     stages.forEach(function (st) {
       flat(run, section, st).forEach(function (it) {
+        /* Une question neutralisée par la relecture (clé douteuse, deux réponses défendables) ne compte pas. */
+        if (it.q.neutral) return;
         var a = run.answers[it.key];
         out.push({ item: itemOf(it, offset), correct: a != null && +a === +it.q.answer, it: it });
       });
@@ -896,6 +1041,7 @@
     if (!needDocs('toeic', ids)) { U.finishPending = true; R.render(); return; }
     U.finishPending = false;
     var endedAt = Date.now();
+    refreshLearned();
     var readMs = run.phase === 'read' ? readElapsed(run) : run.read.ms;
     var res = {}, abil = {};
     ['L', 'R'].forEach(function (s) {
@@ -906,7 +1052,8 @@
       var lab = cefrLabel(est);
       res[s] = {
         score: est.score, sd: est.sd, sdMeasurement: est.sdMeasurement, ci90: est.ci90, cefr: est.cefr, cefrProb: est.cefrProb,
-        label: lab.label, n: est.nItems, correct: est.nCorrect, raw: raw, offset: off, path: run.path[s], parts: partsOf(resp)
+        label: lab.label, n: est.nItems, correct: est.nCorrect, raw: raw, offset: off, path: run.path[s], parts: partsOf(resp),
+        neutral: [1, 2].reduce(function (a, st) { return a + flat(run, s, st).filter(function (it) { return it.q.neutral; }).length; }, 0)
       };
       weakPoints(s, resp, est.score).forEach(function (w) { abil[w.ability] = { n: w.n, c: w.correct, e: w.expected, v: w.v, z: w.z }; });
     });
@@ -924,6 +1071,7 @@
       path: { L: run.path.L, R: run.path.R }, threshold: run.threshold,
       modules: { stage1: run.docs.stage1, L: stageDocId(run, 'L', 2), R: stageDocId(run, 'R', 2) },
       answers: Object.assign({}, run.answers), abilities: abil, pauses: run.pauses, replays: run.replays,
+      items: itemRecords(run),
       trend: { L: { mean: tL.mean, sd: tL.sd }, R: { mean: tR.mean, sd: tR.sd }, T: { mean: tT.mean, sd: tT.sd } },
       prevTrendAt: lastTrendAt
     };
@@ -1128,11 +1276,10 @@
     var stt = r && r.stt;
     var url = (stt && stt.url) || '';
     if (!url && r && r.audio && r.audio.url) U.blobUrls[st.key] = r.audio.url;
-    var uncertain = arr(stt && stt.words).filter(function (w) { return num(w.p, 1) < 0.5; }).map(function (w) { return w.text; }).slice(0, 12);
+    var metrics = R.speechMetrics(stt, r && r.audio && r.audio.seconds);
     sr.responses[st.key] = {
       text: String((stt && stt.text) || '').trim().slice(0, 4000), url: url, recId: (stt && stt.id) || '', at: Date.now(),
-      metrics: { seconds: Math.round(num(r && r.audio && r.audio.seconds, 0) * 10) / 10, wpm: Math.round(num(stt && stt.wpm, 0)), pauses: arr(stt && stt.pauses).length, uncertain: uncertain,
-        accuracy: stt && stt.alignment ? stt.alignment.accuracy : null }
+      metrics: metrics
     };
     gradeEnqueue(st.key);
     R.save();
@@ -1266,10 +1413,12 @@
     var words = u.type === 'essay' ? [300, 600] : (u.type === 'email' ? [60, 200] : (u.type === 'sentence' ? [6, 40] : [0, 0]));
     var m = resp.metrics || null;
     return {
-      mode: u.mode, rubric: 'sw',
+      /* Double correction (médiane de deux ou trois notes, LearningAgent.RegradeAsync) : une note de bilan
+         pèse sur le niveau, elle doit tenir d'une correction à l'autre. */
+      mode: u.mode, rubric: 'sw', double: true,
       task: { id: u.key, kind: u.type, promptFr: String(t.promptFr || ''), prompt: prompt.slice(0, 3000), criteria: (SW_TASKS[u.type] || SW_TASKS.respond).criteria, scale: scaleOf(u), words: words, seconds: u.step && u.step.rec ? u.step.rec : (u.step && u.step.minutes ? u.step.minutes * 60 : 0) },
       response: String(resp.text || ''),
-      metrics: m ? { seconds: num(m.seconds, 0), wpm: num(m.wpm, 0), pauses: num(m.pauses, 0), uncertain: arr(m.uncertain) } : null,
+      metrics: m ? Object.assign({}, m, { seconds: num(m.seconds, 0), wpm: num(m.wpm, 0), pauses: num(m.pauses, 0), uncertain: arr(m.uncertain) }) : null,
       level: R.level(u.mode === 'speak' ? 'speak' : 'write').band,
       targets: R.weakPoints(5).map(function (w) { return w.category; })
     };
@@ -1288,7 +1437,7 @@
     var job = R.uid('rztg');
     sr.gradeJobs[key] = job;
     R.save();
-    return R.gen('grade', gradeParams(sr, u), { job: job }).then(function (r) {
+    return R.gen('grade', gradeParams(sr, u), { job: job, timeout: 600000 }).then(function (r) {
       var s2 = TD().swRun;
       if (!s2 || s2.id !== sr.id) return;
       setGrade(s2, key, r && r.doc);
@@ -1385,6 +1534,7 @@
       if (u.mode === 'speak') spMin += num(u.step && u.step.rec, 30) / 60 + num(u.step && u.step.prep, 0) / 60;
       if (!g || g.empty) return;
       R.addErrors(g.edits, { mode: u.mode, ref: sr.docId });
+      R.addGoodUses(g.goodUses, { mode: u.mode, ref: sr.docId });
       arr(g.cards).forEach(function (c) { cards.push(c); });
       if (R.cards && typeof R.cards.fromEdits === 'function') { try { arr(R.cards.fromEdits(g.edits, 1)).forEach(function (c) { cards.push(c); }); } catch (e) { /* module des cartes différent */ } }
       R.data.attempts.push({ id: R.uid('att'), at: resp.at || endedAt, mode: u.mode, ref: 'sw:' + sr.docId, task: (SW_TASKS[u.type] || {}).label || u.type, response: String(resp.text || '').slice(0, 2000),
@@ -1959,7 +2109,7 @@
     return '<div class="rz-card rzt-sec"><div class="rzt-sec-head">' + R.h.skill(s === 'L' ? 'listen' : 'read', false) + '<span class="rzt-sec-name">' + name + '</span>' + levelPill(r.label || r.cefr) + '</div>'
       + '<div class="rzt-sec-score"><b>' + r.score + '</b><span class="rz-muted"> / 495</span><span class="rzt-sec-ci">' + esc(scoreRange(r.ci90)) + ' à 90 %</span></div>'
       + rangeBarHtml(s, r)
-      + '<div class="rzt-sec-sub">' + r.correct + ' bonnes réponses sur ' + r.n + ' · étape 2 ' + (r.path === 'hard' ? 'exigeante' : 'accessible')
+      + '<div class="rzt-sec-sub">' + r.correct + ' bonnes réponses sur ' + r.n + (r.neutral ? ' (et ' + r.neutral + ' question' + (r.neutral > 1 ? 's' : '') + ' neutralisée' + (r.neutral > 1 ? 's' : '') + ' par la relecture)' : '') + ' · étape 2 ' + (r.path === 'hard' ? 'exigeante' : 'accessible')
       + (delta != null ? ' · <span class="' + (delta >= 0 ? 'rzt-up' : 'rzt-down') + '">' + signed(delta) + '</span> depuis le bilan précédent' : '') + '</div>'
       + cefrBarsHtml(r.cefrProb) + '</div>';
   }
@@ -2048,12 +2198,13 @@
       var k = docId + ':' + set.id + ':' + (q.id || ('q' + (qi + 1)));
       var a = e.answers[k];
       var ok = a != null && +a === +q.answer;
-      h.push('<div class="rzt-rv-q ' + (ok ? 'is-ok' : 'is-ko') + '"><div class="rzt-q-stem" lang="en"><span class="rzt-q-n">' + (startN + qi) + '</span>'
-        + (+set.part === 2 ? 'Meilleure réponse à la question entendue' : (q.stem ? esc(q.stem) : 'Trou [' + (qi + 1) + ']')) + '<span class="rzt-rv-mark">' + R.icon(ok ? 'check' : 'cross') + (ok ? 'Juste' : (a == null ? 'Sans réponse' : 'Faux')) + '</span></div>');
+      h.push('<div class="rzt-rv-q ' + (ok ? 'is-ok' : 'is-ko') + (q.neutral ? ' is-neutral' : '') + '"><div class="rzt-q-stem" lang="en"><span class="rzt-q-n">' + (startN + qi) + '</span>'
+        + (+set.part === 2 ? 'Meilleure réponse à la question entendue' : (q.stem ? esc(q.stem) : 'Trou [' + (qi + 1) + ']')) + '<span class="rzt-rv-mark">' + R.icon(ok ? 'check' : 'cross') + (ok ? 'Juste' : (a == null ? 'Sans réponse' : 'Faux')) + (q.neutral ? ' · hors score' : '') + '</span></div>');
       h.push('<ul class="rzt-rv-opts" lang="en">' + arr(q.options).map(function (o, i) {
         var cls = i === +q.answer ? ' is-key' : (a != null && +a === i ? ' is-wrong' : '');
         return '<li class="' + cls.trim() + '"><span class="rzt-opt-l">' + LETTERS[i] + '</span>' + esc(o) + (i === +q.answer ? ' <span class="rzt-rv-why">bonne réponse</span>' : (a != null && +a === i ? ' <span class="rzt-rv-why">votre réponse</span>' : '')) + '</li>';
       }).join('') + '</ul>');
+      if (q.neutral) h.push('<div class="rzt-rv-neutral">' + R.icon('shield') + ' Question neutralisée, hors du score. ' + esc(q.neutralWhy || '') + (q.check && q.check.issue ? ' <span lang="en">(' + esc(q.check.issue) + ')</span>' : '') + '</div>');
       if (q.explanationFr) h.push('<div class="rzt-rv-exp">' + esc(q.explanationFr) + '</div>');
       if (q.evidence) h.push('<div class="rzt-rv-ev" lang="en">« ' + esc(q.evidence) + ' »</div>');
       h.push('</div>');
@@ -2671,6 +2822,7 @@
     CFG: CFG, estimateSection: estimateSection, combineTotal: combineTotal, routeStage2: routeStage2, weakPoints: weakPoints,
     kalman: kalman, calibrationOffset: calibrationOffset, estimateProductive: estimateProductive, thetaOfScore: thetaOfScore,
     cefrLabel: cefrLabel, pCorrect: pCorrect, difficulty: difficulty, MENTION: MENTION, ABILITIES: ABILITIES, PARTS: PARTS,
+    fitLearned: fitLearned, learned: refreshLearned, itemRecords: itemRecords,
     /* Pour les tests : avancer l'horloge des minuteurs, lire l'état. */
     _skip: function (ms) { U.skew += ms; tick(); },
     _center: centerLevel,

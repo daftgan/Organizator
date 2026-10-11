@@ -887,7 +887,9 @@
     var r = judge(it, v);
     d.ans[k] = { v: v.slice(0, 400), r: r };
     delete U.drafts[k];
-    R.observe(it.skill, L.level, r === 'exact' ? 1 : (r === 'close' ? 0.75 : 0));
+    /* Un texte écrit pour être compris (95 % des mots connus au niveau du cours) : ses questions sont faites
+       pour être réussies le plus souvent, environ trois sur quatre. */
+    R.observe(it.skill, L.level, r === 'exact' ? 1 : (r === 'close' ? 0.75 : 0), 1, 0.75);
     persist();
     R.render();
     focusCurrent(a, false);
@@ -1458,7 +1460,8 @@
     var sp = sd(a).speak, t = obj(r && r.stt) || {};
     var words = arr(t.words).slice(0, 600).map(function (w) { return [str(w.text).trim(), Math.round(num(w.pMin != null ? w.pMin : w.p, 1) * 100) / 100]; }).filter(function (w) { return w[0]; });
     sp.rec = { text: str(t.text).trim(), words: words, wpm: Math.round(num(t.wpm, 0)), seconds: Math.round(num(t.speechSeconds, 0) * 10) / 10 || Math.round(num(r.audio && r.audio.seconds, 0)),
-      duration: Math.round(num(r.audio && r.audio.seconds, 0) * 10) / 10, pauses: arr(t.pauses).length, url: str(t.url), at: Date.now() };
+      duration: Math.round(num(r.audio && r.audio.seconds, 0) * 10) / 10, pauses: arr(t.pauses).length, url: str(t.url), at: Date.now(),
+      fluency: (function (m) { return { articulationWpm: m.articulationWpm, meanRun: m.meanRun, midPauses: m.midPauses, pauseRatio: m.pauseRatio }; })(R.speechMetrics(t, 0)) };
     sp.grade = null; sp.redo = null; sp.pron = {};
     U.prepUntil[id] = 0; delete U.gradeError.speak;
     persist();
@@ -1594,7 +1597,8 @@
       w.grade = g; w.gradedText = text; w.gradedAt = Date.now(); w.redo = null;
       U.drafts.redo = '';
       R.addErrors(g.edits, { mode: 'write', ref: id });
-      if (g.levelEstimate) R.observeLevel('write', g.levelEstimate);
+      R.addGoodUses(g.goodUses, { mode: 'write', ref: id });
+      if (g.levelEstimate) R.observeLevel('write', g.levelEstimate, R.productionWeight(text, 'write'));
       pushAttempt({ mode: 'write', ref: id, task: L.writing.taskFr, response: text, grade: g });
       persist(); R.render();
     }, function (e) { delete U.grading.write; U.gradeError.write = e.message; R.render(); });
@@ -1608,7 +1612,7 @@
     var sp = sd(a).speak, rec = obj(sp.rec);
     if (!L || !rec || !rec.text.trim()) return;
     var uncertain = arr(rec.words).filter(function (w) { return num(w[1], 1) < 0.5; }).map(function (w) { return w[0]; }).slice(0, 30);
-    var metrics = { seconds: num(rec.seconds || rec.duration, 0), wpm: num(rec.wpm, 0), pauses: num(rec.pauses, 0), uncertain: uncertain };
+    var metrics = Object.assign({}, obj(rec.fluency) || {}, { seconds: num(rec.seconds || rec.duration, 0), wpm: num(rec.wpm, 0), pauses: num(rec.pauses, 0), uncertain: uncertain });
     var task = { id: a.id + ':speaking', kind: 'speaking', promptFr: L.speaking.taskFr, prompt: L.speaking.prompts.join(' '), criteria: [], scale: 5, words: [0, 0], seconds: L.speaking.speakSeconds };
     var job = R.uid('rzgrs'), id = a.id, startedAt = a.startedAt;
     U.grading.speak = job; delete U.gradeError.speak;
@@ -1620,7 +1624,8 @@
       var s2 = sd(a2).speak;
       s2.grade = g; s2.redo = null;
       R.addErrors(g.edits, { mode: 'speak', ref: id });
-      if (g.levelEstimate) R.observeLevel('speak', g.levelEstimate);
+      R.addGoodUses(g.goodUses, { mode: 'speak', ref: id });
+      if (g.levelEstimate) R.observeLevel('speak', g.levelEstimate, R.productionWeight(rec.text, 'speak'));
       pushAttempt({ mode: 'speak', ref: id, task: L.speaking.taskFr, response: rec.text, url: rec.url, metrics: metrics, grade: g });
       persist(); R.render();
     }, function (e) { delete U.grading.speak; U.gradeError.speak = e.message; R.render(); });

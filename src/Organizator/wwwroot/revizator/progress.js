@@ -448,13 +448,17 @@
     h.push('<ol class="rzp-weak-list">' + list.map(function (w) {
       var recent = arr(w.examples).filter(function (e) { return num(e.at, 0) > now - 14 * DAY; }).length;
       var age = (now - num(w.lastSeen, now)) / DAY;
-      var trend = recent >= 2 ? { t: 'fréquente ces jours-ci', c: 'is-up', a: '↗' } : (age > 21 ? { t: 'en recul', c: 'is-down', a: '↘' } : { t: 'stable', c: '', a: '→' });
+      var trend = recent >= 2 ? { t: 'fréquente ces jours-ci', c: 'is-up', a: '↗' } : (age > 21 || w.goodSince >= 1 ? { t: w.goodSince ? 'en recul · ' + plural(w.goodSince, 'bon emploi', 'bons emplois') + ' depuis' : 'en recul', c: 'is-down', a: '↘' } : { t: 'stable', c: '', a: '→' });
       var ex = arr(w.examples)[0];
       return '<li class="rzp-weak-item"' + tipAttr([plural(w.count, 'occurrence'), w.label, 'vue pour la dernière fois le ' + longDate(w.lastSeen)]) + '><div class="rzp-weak-top"><span class="rzp-weak-label">' + esc(w.label) + '</span>'
         + '<span class="rzp-weak-trend ' + trend.c + '">' + trend.a + ' ' + esc(trend.t) + '</span><span class="rzp-weak-n">' + w.count + '</span></div>'
         + '<span class="rzp-weak-bar"><i style="width:' + (w.count / max * 100).toFixed(1) + '%"></i></span>'
         + (ex ? '<div class="rzp-weak-ex" lang="en"><span class="rz-fb-orig">' + esc(ex.original) + '</span>' + R.icon('arrow') + '<span class="rz-fb-corr">' + esc(ex.correction) + '</span></div>' : '') + '</li>';
     }).join('') + '</ol>');
+    var done = R.mastered();
+    if (done.length) {
+      h.push('<div class="rz-card-foot">Acquis (trois bons emplois de suite, sans faute depuis deux semaines) : ' + done.slice(0, 8).map(function (m) { return esc(m.label); }).join(', ') + '.</div>');
+    }
     h.push('<div class="rzp-actions"><button type="button" class="btn btn-secondary" data-act="rz-go" data-view="exercises">S’exercer sur ces points ' + R.icon('arrow') + '</button></div></section>');
     return h.join('');
   }

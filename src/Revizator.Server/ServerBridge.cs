@@ -28,7 +28,7 @@ public sealed class ServerBridge : IDisposable
     {
         // Revizator
         "learnLoad", "learnSave", "learnDoc", "learnDocSave", "learnDocDelete", "learnNews",
-        "learnGenerate", "learnCancel", "learnJobs", "learnWait", "learnBoard", "learnPolicy",
+        "learnGenerate", "learnCancel", "learnJobs", "learnWait", "learnBoard", "learnPolicy", "learnItemPool",
         // administration (refusee a qui n'administre pas le serveur)
         "adminUsers", "adminUserSet", "adminUserRemove", "adminUserAdmin", "adminPolicySave",
         // voix anglaises
@@ -53,6 +53,7 @@ public sealed class ServerBridge : IDisposable
     private readonly AgentLauncher _launcher;
     private readonly UserSpaces _spaces;
     private readonly Leaderboard _board;
+    private readonly ItemPool _pool;
     private readonly UserStore _users;
     private readonly TokenStore _tokens;
     private readonly AdminPolicy _policy;
@@ -88,6 +89,7 @@ public sealed class ServerBridge : IDisposable
         _voice.Progress += payload => PostOwned("voice", payload, "conversationId");
         _spaces = new UserSpaces(config.DataDir, accounts, CreateSpace, log);
         _board = new Leaderboard(config.DataDir, accounts, log);
+        _pool = new ItemPool(config.DataDir, accounts, log);
         var sherpa = new SherpaRuntime(config.DataDir, log, ServerConfig.Version);
         _tts = new TextToSpeech(config.DataDir, log, ServerConfig.Version, sherpa);
         _tts.Progress += payload => PostOwned("tts", payload, "job");
@@ -295,6 +297,7 @@ public sealed class ServerBridge : IDisposable
         "learnWait" => await _spaces.Get(login).Agent.WaitAsync(Str(payload, "job")).ConfigureAwait(false),
         "learnBoard" => await LearnBoardAsync(payload, login).ConfigureAwait(false),
         "learnPolicy" => LearnPolicy(login),
+        "learnItemPool" => await Task.Run(() => _pool.Build(login)).ConfigureAwait(false),
         "adminUsers" => AdminUsers(login),
         "adminUserSet" => await AdminUserSetAsync(payload, login).ConfigureAwait(false),
         "adminUserRemove" => AdminUserRemove(payload, login),

@@ -53,6 +53,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Liste de vocabulaire CEFR-J (profil lexical des textes du bilan express, LexicalProfile). -->
+    <EmbeddedResource Include="Services\Data\cefrj.tsv">
+      <LogicalName>data/cefrj.tsv</LogicalName>
+      <WithCulture>false</WithCulture>
+      <Type>Non-Resx</Type>
+    </EmbeddedResource>
     <EmbeddedResource Include="$(PkgWhisper_net_Runtime)\build\win-x64\*.dll">
       <LogicalName>whisper/win-x64/%(Filename)%(Extension)</LogicalName>
       <WithCulture>false</WithCulture>
