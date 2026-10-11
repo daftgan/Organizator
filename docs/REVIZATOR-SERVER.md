@@ -263,6 +263,12 @@ Trois cas, décidés au chargement :
    `whisper`, `learnChanged` du serveur sont émis dans la page ; ceux de l'hôte local pour ces mêmes
    noms sont ignorés. Serveur injoignable : les appels échouent avec « Serveur Révizator injoignable »
    (jamais de repli silencieux sur les données locales, qui divergeraient).
+   **Pas de mode local** : sans serveur réglé (jeton vide), `bridge.needsServer()` est vrai dans WebView2
+   et ces mêmes appels échouent tout de suite (erreur `needsServer`, « Révizator passe par son
+   serveur… ») au lieu de partir à l'hôte : Révizator ne lit ni n'écrit plus jamais le `learning.json`
+   du PC. Sa page montre alors seulement le formulaire de connexion (la carte « Serveur Révizator »).
+   Les exceptions ci-dessous (fichiers joints, `local: true`) restent sur l'hôte comme avant. Le shim
+   garde son mode local pour les essais, sauf avec `window.__shimServerOnly = true`.
    **Exceptions** (ce qui n'existe que sur le PC) : un appel avec des fichiers joints
    (`bridge.call(…, files)`) et un `transcribe` qui porte un `path` (enregistrement joint à une tâche),
    ainsi que le `cancelTranscribe` de ce travail, restent sur l'hôte local, et les événements de l'hôte
@@ -285,7 +291,7 @@ Trois cas, décidés au chargement :
      `bridge.testRemote` (`GET /api/health` puis ouverture du WebSocket avec le jeton → `online` /
      `unreachable` / `refused`, affichés « Connecté » avec la version du serveur, « Injoignable »,
      « Refusé »), et « Se déconnecter » = `bridge.logoutRemote` (`POST /api/logout`, jamais en échec),
-     jeton vidé, `configureRemote({ url: '' })` : Révizator revient aux données du PC.
+     jeton vidé, `configureRemote({ url: '' })` : Révizator revient au formulaire de connexion.
    « Refusé » au test veut dire : `/api/health` répond mais le WebSocket refuse la session (fermée sur le
    serveur : se déconnecter puis se reconnecter) ; un proxy qui bloquerait les WebSocket donnerait le même
    message, ou « Injoignable » s'il ne répond pas en 8 s. `configureRemote` émet
