@@ -1854,7 +1854,7 @@
     var t = u.test;
     if (t) {
       h.push('<div class="rz-set-help rz-server-test is-' + esc(t.state) + '"><strong>' + esc(SERVER_STATES[t.state] || t.state) + '</strong>'
-        + (t.version ? ' · version ' + esc(t.version) : '') + (t.error ? ' — ' + esc(t.error) : '') + '</div>');
+        + (t.version ? ' · ' + esc(buildText(t)) : '') + (t.error ? ' — ' + esc(t.error) : '') + '</div>');
     }
     var foot = live
       ? 'En service : ' + esc(live.url) + ' — <strong>' + esc(SERVER_STATES[live.state] || live.state) + '</strong>.'
@@ -1979,16 +1979,31 @@
     R.render();
   });
 
+  /* Le déploiement du serveur (/api/health, /api/me) : version, commit, heure de construction de l'image
+     et de démarrage — pour voir qu'une mise à jour est bien en ligne. Vide si le serveur ne le dit pas. */
+  function buildText(b) {
+    if (!b || !b.version) return '';
+    var at = function (iso) {
+      var d = iso ? new Date(iso) : null;
+      return d && !isNaN(d) ? d.toLocaleString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    };
+    var parts = ['version ' + b.version + (b.commit ? ' (' + String(b.commit).slice(0, 7) + ')' : '')];
+    if (at(b.builtAt)) parts.push('construit le ' + at(b.builtAt));
+    if (at(b.startedAt)) parts.push('démarré le ' + at(b.startedAt));
+    return parts.join(' · ');
+  }
+
   /* Page servie par le serveur : le compte connecté et la déconnexion (formulaire POST /logout, sans script). */
-  var ACCOUNT = { login: null, asked: false };
+  var ACCOUNT = { login: null, build: null, asked: false };
   function accountCardHtml() {
     if (!ACCOUNT.asked) {
       ACCOUNT.asked = true;
       fetch('/api/me', { cache: 'no-store', credentials: 'same-origin' }).then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (b) { if (b && b.login) { ACCOUNT.login = b.login; R.renderSoon(); } }, function () { /* hors ligne */ });
+        .then(function (b) { if (b && b.login) { ACCOUNT.login = b.login; ACCOUNT.build = b; R.renderSoon(); } }, function () { /* hors ligne */ });
     }
     return '<div class="set-card"><div class="set-card-head"><span class="set-card-title">Compte</span></div>'
       + A.setFieldHtml('Connecté', '<span>' + (ACCOUNT.login ? '<strong>' + esc(ACCOUNT.login) + '</strong>' : '…') + '</span>')
+      + (buildText(ACCOUNT.build) ? A.setFieldHtml('Serveur', '<span>' + esc(buildText(ACCOUNT.build)) + '</span>') : '')
       + A.setFieldHtml('', '<form method="post" action="/logout" class="rz-logout"><button type="submit" class="btn btn-secondary">Se déconnecter</button></form>')
       + (installMode() ? A.setFieldHtml('Application', '<div class="rz-install">' + installStepsHtml(installMode()) + '</div>') : '')
       + (installMode() !== 'organizator' && organizatorInfo() ? A.setFieldHtml('Sur un PC', '<div class="rz-install">' + organizatorLinkHtml('btn-secondary')

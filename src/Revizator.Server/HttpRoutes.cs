@@ -130,7 +130,7 @@ public sealed class HttpRoutes
 
         if (path == "/api/health")
         {
-            await response.WriteAsJsonAsync(new { ok = true, version = ServerConfig.Version }).ConfigureAwait(false);
+            await response.WriteAsJsonAsync(new { ok = true, version = ServerConfig.Version, commit = ServerConfig.Build.Commit, builtAt = ServerConfig.Build.BuiltAt, startedAt = ServerConfig.Build.StartedAt }).ConfigureAwait(false);
             return;
         }
 
@@ -588,7 +588,7 @@ public sealed class HttpRoutes
             return;
         }
 
-        await context.Response.WriteAsJsonAsync(new { login = _tokens.UserOf(token) ?? "", version = ServerConfig.Version }).ConfigureAwait(false);
+        await context.Response.WriteAsJsonAsync(new { login = _tokens.UserOf(token) ?? "", version = ServerConfig.Version, commit = ServerConfig.Build.Commit, builtAt = ServerConfig.Build.BuiltAt, startedAt = ServerConfig.Build.StartedAt }).ConfigureAwait(false);
     }
 
     private static string? BearerToken(HttpRequest request)

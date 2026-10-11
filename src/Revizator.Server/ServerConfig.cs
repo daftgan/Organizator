@@ -9,6 +9,9 @@ public sealed class ServerConfig
     public static readonly string Version =
         typeof(ServerConfig).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
 
+    /// <summary>Le deploiement en cours : commit et heure de construction de l'image, heure de demarrage.</summary>
+    public static readonly BuildInfo Build = BuildInfo.Load(Path.Combine(AppContext.BaseDirectory, "build-info.json"));
+
     /// <summary>Dossier de donnees : meme disposition que <c>%LOCALAPPDATA%\Organizator\</c> pour Revizator.</summary>
     public required string DataDir { get; init; }
 
@@ -105,5 +108,32 @@ public sealed class ServerConfig
             ReleasesRepo = Read("REVIZATOR_RELEASES_REPO", "daftgan/Organizator") is var repo && repo.Equals("none", StringComparison.OrdinalIgnoreCase) ? "" : repo,
             GitHubToken = Read("REVIZATOR_GITHUB_TOKEN", ""),
         };
+    }
+}
+
+/// <summary>
+/// Ce qui identifie un deploiement, pour les Reglages et <c>/api/health</c> : le commit construit et
+/// l'heure de construction (ecrits par deploy/Dockerfile dans <c>build-info.json</c>, a cote de la DLL),
+/// et l'heure de demarrage du serveur. Hors image Docker, le fichier manque : commit et construction vides.
+/// </summary>
+public sealed record BuildInfo(string Commit, DateTimeOffset? BuiltAt, DateTimeOffset StartedAt)
+{
+    public static BuildInfo Load(string path)
+    {
+        var started = DateTimeOffset.UtcNow;
+        try
+        {
+            if (!File.Exists(path)) return new BuildInfo("", null, started);
+            var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path));
+            var commit = node?["commit"]?.GetValue<string>() ?? "";
+            if (!System.Text.RegularExpressions.Regex.IsMatch(commit, "^[0-9a-f]{7,64}$")) commit = "";
+            DateTimeOffset? built = DateTimeOffset.TryParse(node?["builtAt"]?.GetValue<string>(), System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal, out var at) ? at : null;
+            return new BuildInfo(commit, built, started);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException)
+        {
+            return new BuildInfo("", null, started);
+        }
     }
 }

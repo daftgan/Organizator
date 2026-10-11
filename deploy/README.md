@@ -23,7 +23,7 @@ PC : Organizator ─┘  jeton de session                                       
 |---|---|---|
 | Révizator (public) | https://revizator.daft-lab.fr | identifiant et mot de passe (page `/login`) |
 | Révizator (LAN) | http://192.168.1.30:8080 | sans HTTPS : pas de micro ni d'installation sur le téléphone |
-| Santé | https://revizator.daft-lab.fr/api/health | `{"ok":true,"version":"…"}`, sans connexion |
+| Santé | https://revizator.daft-lab.fr/api/health | `{"ok":true,"version":"…","commit":"…","builtAt":"…","startedAt":"…"}`, sans connexion |
 | SSH | `ssh root@192.168.1.30` | |
 | Komodo | http://192.168.1.21:9120 | stack `revizator` sur le serveur `revizator` |
 | NPM | http://192.168.1.11:81 | hôte proxy `revizator.daft-lab.fr` |
@@ -227,7 +227,7 @@ Vérifier :
 
 ```bash
 docker ps --filter name=revizator            # STATUS : Up … (healthy)
-curl -s http://127.0.0.1:8080/api/health     # {"ok":true,"version":"1.0.0"}
+curl -s http://127.0.0.1:8080/api/health     # {"ok":true,"version":"1.0.0","commit":"…",…}
 docker logs revizator | tail                 # « Claude Code present »
 docker exec revizator claude -p "Réponds seulement OK" --model haiku   # OK (le jeton marche)
 ```
@@ -408,6 +408,12 @@ cd /opt/revizator/src && git pull
 
 Puis Komodo › stack `revizator` › **Deploy** (reconstruit l'image et recrée le conteneur ; les données
 restent). Sans Komodo : `cd deploy && docker compose up -d --build`.
+
+Pour vérifier que la mise à jour est en ligne : **Réglages › Révizator › Compte › Serveur** sur le téléphone
+(ou **Tester la connexion** dans Organizator) affiche la version, le commit construit (les 7 premiers caractères,
+comme sur GitHub), l'heure de construction de l'image et celle du démarrage du serveur ; `curl -s
+https://revizator.daft-lab.fr/api/health` donne la même chose. Le commit est lu dans le `.git` du dossier
+construit : un `git pull` oublié se voit tout de suite.
 
 Après une mise à jour, le téléphone prend la nouvelle version au prochain lancement (le service worker
 porte le numéro de version) ; au besoin, fermer et rouvrir l'application.
