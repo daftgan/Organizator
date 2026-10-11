@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Organizator.Services;
@@ -129,8 +130,16 @@ public sealed class AppSettings
 
     [JsonPropertyName("window")] public WindowPlacement? Window { get; set; }
 
+    /// <summary>
+    /// Reglages que cette version ne connait pas (ecrits par une version plus recente, ou plus ancienne) :
+    /// gardes tels quels et reecrits, pour qu'ouvrir une autre version d'Organizator ne les efface pas
+    /// (par exemple la connexion au serveur Revizator).
+    /// </summary>
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Unknown { get; set; }
+
     public AppSettings Clone() => new()
     {
+        Unknown = Unknown is null ? null : new Dictionary<string, JsonElement>(Unknown),
         TopCount = TopCount,
         ShowBands = ShowBands,
         Compact = Compact,

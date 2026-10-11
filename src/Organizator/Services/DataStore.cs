@@ -129,7 +129,8 @@ public sealed class DataStore
 
     /// <summary>
     /// Enregistre les reglages de l'UI. <c>window</c> n'est jamais ecrase ici : il est
-    /// relu depuis le fichier courant (l'hote en est le seul proprietaire).
+    /// relu depuis le fichier courant (l'hote en est le seul proprietaire). Les reglages que cette
+    /// version ne connait pas sont repris du fichier courant : la page ne les envoie pas.
     /// </summary>
     public AppSettings SaveSettings(AppSettings incoming)
     {
@@ -138,6 +139,15 @@ public sealed class DataStore
             var current = LoadSettingsNoLock();
             var merged = incoming.Clone();
             merged.Window = current.Window;
+            if (current.Unknown is { Count: > 0 })
+            {
+                merged.Unknown ??= new Dictionary<string, JsonElement>();
+                foreach (var (key, value) in current.Unknown)
+                {
+                    merged.Unknown.TryAdd(key, value);
+                }
+            }
+
             merged.Sanitize();
             WriteAtomic(SettingsPath, JsonSerializer.Serialize(merged, SettingsJson));
             return merged;
