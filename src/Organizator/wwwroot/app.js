@@ -1361,9 +1361,18 @@
     dictBox.style.top = Math.max(4, Math.min(window.innerHeight - h - 4, r.bottom - h - 6)) + 'px';
   }
 
+  /* Où rendre l'accès au micro : la page ne peut pas se l'accorder, seul le système ou le navigateur le peut.
+     Sur le téléphone (page du serveur Révizator), ce ne sont pas les Paramètres de Windows. */
+  function micDeniedHelp() {
+    var ua = navigator.userAgent || '';
+    if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'Réglages › Apps › Safari › Micro : Autoriser, puis rouvrez Révizator';
+    if (/Android/.test(ua)) return 's’il ne demande plus la permission : Chrome › ⋮ › Paramètres › Paramètres des sites › Micro';
+    return 'Paramètres Windows › Confidentialité › Microphone';
+  }
+
   function micError(e) {
     var n = e && e.name;
-    if (n === 'NotAllowedError' || n === 'SecurityError') return 'accès refusé (Paramètres Windows › Confidentialité › Microphone).';
+    if (n === 'NotAllowedError' || n === 'SecurityError') return 'accès refusé (' + micDeniedHelp() + ').';
     if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'aucun micro trouvé.';
     if (n === 'NotReadableError') return 'le micro est déjà pris par une autre application.';
     return (e && e.message) || String(e);
