@@ -7,6 +7,9 @@
 ; Les donnees (%LOCALAPPDATA%\Organizator) ne sont jamais touchees, ni a la mise a jour ni a la
 ; desinstallation. Relancer un installateur plus recent met a jour en place (meme AppId).
 ;
+; Mise a jour automatique (Services\AppUpdater.cs) : Organizator lance l'installateur avec
+; /VERYSILENT /SUPPRESSMSGBOXES /NORESTART, et /relaunch=1 s'il doit etre relance a la fin.
+;
 ; Construit par .github/workflows/organizator.yml, ou a la main :
 ;   publish.ps1 -SelfContained -Installer
 ;   ISCC.exe /DAppVersion=1.2.3 installer\Organizator.iss
@@ -60,6 +63,7 @@ Name: "{autodesktop}\Organizator"; Filename: "{app}\Organizator.exe"; Tasks: des
 
 [Run]
 Filename: "{app}\Organizator.exe"; Description: "Lancer Organizator"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Organizator.exe"; Flags: nowait; Check: RelaunchAfterUpdate
 
 [Code]
 const
@@ -94,8 +98,14 @@ begin
   end;
 end;
 
+{ Mise a jour silencieuse demandee par Organizator (« Installer maintenant ») : il est relance a la fin. }
+function RelaunchAfterUpdate(): Boolean;
+begin
+  Result := WizardSilent() and (ExpandConstant('{param:relaunch|0}') = '1');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if (CurStep = ssPostInstall) and not HasWebView2() then
+  if (CurStep = ssPostInstall) and not HasWebView2() and not WizardSilent() then
     InstallWebView2();
 end;

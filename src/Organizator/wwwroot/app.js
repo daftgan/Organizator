@@ -5192,7 +5192,51 @@
       + setRowHtml('Bandes de priorité', 'Maintenant, Ensuite, Plus tard.', switchHtml(s.showBands, 'toggle-bands', 'Bandes de priorité'))
       + setRowHtml('Mode compact', 'Cartes plus resserrées.', switchHtml(s.compact, 'toggle-compact', 'Mode compact'))
       + setRowHtml('Notifications Windows', 'Quand une réponse est prête ou qu’un agent pose une question alors qu’Organizator est derrière une autre fenêtre ou réduit : une notification en bas de l’écran, gardée dans le centre de notifications. La cloche, en tête, en garde l’historique dans tous les cas.',
-        switchHtml(s.windowsNotifications !== false, 'toggle-win-notifs', 'Notifications Windows'));
+        switchHtml(s.windowsNotifications !== false, 'toggle-win-notifs', 'Notifications Windows'))
+      + (S.env.update ? '<div data-update-row>' + updateRowHtml() + '</div>' : '');
+  }
+
+  /* ── Mises à jour d'Organizator (hôte : AppUpdater) ─────────────────────
+     Le serveur Révizator réglé sert le dernier installateur : l'hôte le vérifie au démarrage puis
+     toutes les six heures, le télécharge en arrière-plan, et l'installe à la fermeture. */
+  function updateRowHtml() {
+    var u = S.env.update || {};
+    var t = u.checkedAt ? new Date(u.checkedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '';
+    var line, btn = '<button type="button" class="btn btn-secondary" data-act="update-check"'
+      + (u.state === 'checking' || u.state === 'downloading' ? ' disabled' : '') + '>Rechercher</button>';
+    switch (u.state) {
+      case 'checking': line = 'Recherche d’une nouvelle version…'; break;
+      case 'downloading': line = 'Téléchargement de la version ' + esc(u.latest) + '… ' + (u.percent || 0) + ' %'; break;
+      case 'ready':
+        line = '<strong>Version ' + esc(u.latest) + ' prête</strong> : elle s’installera à la fermeture d’Organizator.';
+        btn = '<button type="button" class="btn btn-primary" data-act="update-install">Installer maintenant</button>';
+        break;
+      case 'available':
+        line = 'Version ' + esc(u.latest) + ' disponible. Cette copie ne vient pas de l’installateur : elle ne se met pas à jour d’elle-même.';
+        btn = '<button type="button" class="btn btn-secondary" data-act="update-download">Télécharger l’installateur</button>';
+        break;
+      case 'uptodate': line = 'À jour' + (t ? ' (vérifié à ' + esc(t) + ')' : '') + '.'; break;
+      case 'noserver': line = 'Les mises à jour viennent du serveur Révizator : réglez-le dans Réglages › Révizator.'; btn = ''; break;
+      case 'error': line = 'Vérification impossible : ' + esc(u.error || 'erreur inconnue') + '.'; break;
+      default: line = 'Première vérification dans quelques secondes.';
+    }
+    return setRowHtml('Version ' + (u.current || S.env.version), line, btn);
+  }
+
+  function onUpdateEvent(p) {
+    var was = (S.env.update || {}).state;
+    S.env.update = p || {};
+    if (S.env.update.state === 'ready' && was !== 'ready') {
+      toast('Organizator ' + S.env.update.latest + ' est prêt : il s’installera à la fermeture.', { label: 'Installer maintenant', run: installUpdateNow });
+    }
+    var row = document.querySelector('[data-update-row]');
+    if (row) row.innerHTML = updateRowHtml();
+  }
+
+  function installUpdateNow() {
+    bridge.call('updateInstall', {}).then(function (r) {
+      if (!r || !r.ok) toast('Aucune mise à jour prête à installer.');
+    })['catch'](function (e) { toast('Installation impossible : ' + e.message); });
   }
 
   /* Agent par défaut et terminal, puis une carte par agent : son modèle et son effort par défaut. */
@@ -8714,6 +8758,14 @@
       }
       render();
     },
+    'update-check': function () {
+      bridge.call('updateCheck', {}, 20 * 60000).then(onUpdateEvent)['catch'](function (e) { toast('Vérification impossible : ' + e.message); });
+    },
+    'update-install': installUpdateNow,
+    'update-download': function () {
+      var url = String(S.settings.revizatorServerUrl || '').replace(/\/+$/, '');
+      if (url) bridge.call('openUrl', { url: url + '/download/organizator' })['catch'](function (e) { toast('Ouverture impossible : ' + e.message); });
+    },
     'toast-act': function () {
       var act = S.ui.toastAction;
       clearToast();
@@ -9476,6 +9528,7 @@
     /* Dictée et transcription : le micro des zones de saisie, l'avancement de Whisper. */
     bindDictate();
     bridge.on('whisper', onWhisperEvent);
+    bridge.on('update', onUpdateEvent);
 
     /* Messages du cadre isolé du lecteur : prêt à recevoir le HTML, lien cliqué, Échap. */
     window.addEventListener('message', function (e) {

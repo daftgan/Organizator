@@ -200,6 +200,19 @@ async function main() {
   await fetch(BASE + '/logout', { method: 'POST', redirect: 'manual', headers: { Cookie: pairedCookie, Origin: BASE } });
   check((await fetch(BASE + '/api/me', { headers: { Cookie: pairedCookie } })).status === 401, 'session de l’appairage fermée');
 
+  section('Installateur d’Organizator');
+  const orgInfo = await fetch(BASE + '/api/organizator');
+  const orgBody = await orgInfo.json().catch(() => ({}));
+  if (orgInfo.status === 200) {
+    check(/^\d+\.\d+\.\d+/.test(orgBody.version || '') && /^[0-9a-f]{64}$/.test(orgBody.sha256 || '') && orgBody.size > 0, 'GET /api/organizator (sans session) : version, empreinte, taille', JSON.stringify(orgBody));
+    const dl = await fetch(BASE + '/download/organizator', { method: 'HEAD' });
+    check(dl.status === 200 && /attachment/.test(dl.headers.get('content-disposition') || '') && Number(dl.headers.get('content-length')) === orgBody.size,
+      'HEAD /download/organizator : pièce jointe de la bonne taille', dl.status + ' ' + dl.headers.get('content-disposition'));
+    check((await (await fetch(BASE + '/login')).text()).includes('/download/organizator'), 'page de connexion : lien vers l’installateur');
+  } else {
+    check(orgInfo.status === 404 && (await fetch(BASE + '/download/organizator')).status === 404, 'aucun installateur sur ce serveur : 404 (REVIZATOR_GITHUB_TOKEN ?)', orgInfo.status);
+  }
+
   section('WebSocket');
   const a = await connect(WS_BASE + '/api/ws?token=' + encodeURIComponent(token));
   check(true, 'connexion A (jeton dans l’URL, comme Organizator sur le PC)');

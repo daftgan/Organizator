@@ -59,6 +59,9 @@ public sealed class BridgeHost
     private readonly LiveAsr _asr;
     private readonly PerfMonitor? _perf;
 
+    // Mises a jour d'Organizator, servies par le serveur Revizator regle (voir AppUpdater).
+    private readonly AppUpdater _updater;
+
     // Dossier actuellement servi sous https://report.organizator/ (voir ArtifactReader.Locate).
     private string? _reportRoot;
 
@@ -138,13 +141,20 @@ public sealed class BridgeHost
         // Transcription en direct : texte partiel et telechargements des modeles arrivent au fil de l'eau.
         _asr = new LiveAsr(store.DataDir, log, HostVersion, sherpa);
         _asr.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("asr", payload));
+        // Mises a jour : verification au demarrage puis toutes les six heures, telechargement en arriere-plan.
+        _updater = new AppUpdater(store.DataDir, log, () => _store.LoadSettings().RevizatorServerUrl, enabled: true);
+        _updater.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("update", payload));
+        _updater.Start();
         _core.WebMessageReceived += OnWebMessageReceived;
     }
 
     /// <summary>Dossier des pieces jointes, servi a l'UI sous <see cref="TaskAttachments.Host"/>.</summary>
     public string AttachmentsRoot => _attachments.Root;
 
-    /// <summary>Fermeture de l'application : la conversation vocale et la synthese s'arretent (processus claude tue).</summary>
+    /// <summary>
+    /// Fermeture de l'application : la conversation vocale et la synthese s'arretent (processus claude tue),
+    /// puis une mise a jour prete s'installe (les donnees viennent d'etre enregistrees).
+    /// </summary>
     public void Shutdown()
     {
         try
@@ -157,6 +167,22 @@ public sealed class BridgeHost
         {
             _log.Warn("Arret de la conversation vocale incomplet : " + ex.Message);
         }
+
+        _updater.InstallOnExit();
+        _updater.Dispose();
+    }
+
+    /// <summary>« Installer maintenant » : la fenetre se ferme (donnees enregistrees), l'installateur la relance.</summary>
+    private JsonObject InstallUpdateNow()
+    {
+        if (!_updater.Ready)
+        {
+            return new JsonObject { ["ok"] = false };
+        }
+
+        _updater.RelaunchWanted = true;
+        _owner.Dispatcher.BeginInvoke(() => _owner.Close());
+        return new JsonObject { ["ok"] = true };
     }
     /// <summary>Dossier <c>learning\</c> de Revizator, servi a l'UI sous <see cref="LearningStore.Host"/>.</summary>
     public string LearningRoot => _learning.Root;
@@ -374,6 +400,9 @@ public sealed class BridgeHost
         "asrEnd" => new JsonObject { ["text"] = await _asr.EndAsync(Str(payload, "session")).ConfigureAwait(true) },
         "asrReset" => await ResetAsrAsync(payload).ConfigureAwait(true),
         "asrStop" => StopAsr(payload),
+        "updateStatus" => _updater.Status(),
+        "updateCheck" => await _updater.CheckAsync().ConfigureAwait(true),
+        "updateInstall" => InstallUpdateNow(),
         "log" => LogFromWeb(payload),
         "perf" => RecordPerf(payload),
         _ => throw new InvalidOperationException($"Type de message inconnu : {type}"),
@@ -396,6 +425,7 @@ public sealed class BridgeHost
             ["env"] = new JsonObject
             {
                 ["version"] = HostVersion,
+                ["update"] = _updater.Status(),
                 ["hasClaude"] = _launcher.HasClaude,
                 ["hasCopilot"] = _launcher.HasCopilot,
                 ["hasWt"] = _launcher.HasWt,

@@ -29,6 +29,15 @@ public sealed class ServerConfig
     /// </summary>
     public required IReadOnlyList<System.Net.IPNetwork> TrustedProxies { get; init; }
 
+    /// <summary>
+    /// Depot GitHub dont la derniere Release fournit l'installateur d'Organizator (<c>proprietaire/depot</c>) ;
+    /// vide (<c>none</c>) : seulement ce qui est depose dans <c>releases/</c>. Voir OrganizatorReleases.
+    /// </summary>
+    public required string ReleasesRepo { get; init; }
+
+    /// <summary>Jeton GitHub en lecture seule du depot (depot prive) ; vide pour un depot public.</summary>
+    public required string GitHubToken { get; init; }
+
     /// <summary>Reseaux prives et locaux : valeur par defaut de <c>REVIZATOR_TRUSTED_PROXIES</c>.</summary>
     public const string PrivateNetworks = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,fc00::/7,fe80::/10";
 
@@ -93,6 +102,8 @@ public sealed class ServerConfig
             AllowedOrigins = origins,
             WwwRoot = Path.GetFullPath(Read("REVIZATOR_WWWROOT", Path.Combine(AppContext.BaseDirectory, "wwwroot"))),
             TrustedProxies = ParseNetworks(Read("REVIZATOR_TRUSTED_PROXIES", "private")),
+            ReleasesRepo = Read("REVIZATOR_RELEASES_REPO", "daftgan/Organizator") is var repo && repo.Equals("none", StringComparison.OrdinalIgnoreCase) ? "" : repo,
+            GitHubToken = Read("REVIZATOR_GITHUB_TOKEN", ""),
         };
     }
 }

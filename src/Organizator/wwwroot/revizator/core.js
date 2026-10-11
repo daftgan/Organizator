@@ -137,6 +137,7 @@
   var FEMALE_NAMES = /zira|aria|jenny|hazel|susan|catherine|linda|heera|emma|sonia|libby|natasha|clara|eva|michelle|ana|sara|samantha|karen|moira|tessa|female/i;
 
   var ICONS = {
+    download: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"></path><path d="M5 19h14"></path></svg>',
     book: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5.5c3-1.4 6-1.4 9 .2v13.2c-3-1.6-6-1.6-9-.2z"></path><path d="M21 5.5c-3-1.4-6-1.4-9 .2v13.2c3-1.6 6-1.6 9-.2z"></path></svg>',
     sun: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"></path></svg>',
     play: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.8v14.4a1 1 0 0 0 1.5.86l11.6-7.2a1 1 0 0 0 0-1.72L8.5 3.94A1 1 0 0 0 7 4.8z"></path></svg>',
@@ -1891,20 +1892,43 @@
     var ua = navigator.userAgent || '';
     if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'ios';
     if (/Android/.test(ua)) return 'android';
+    if (/Windows/.test(ua)) return 'windows';
     return 'other';
+  }
+  /* L'installateur d'Organizator que sert le serveur (GET /api/organizator) : { version, size }, ou null. */
+  var ORGANIZATOR = { info: null, asked: false };
+  function organizatorInfo() {
+    if (!ORGANIZATOR.asked && onServer()) {
+      ORGANIZATOR.asked = true;
+      fetch('/api/organizator', { cache: 'no-store', credentials: 'same-origin' }).then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (b) { if (b && b.version) { ORGANIZATOR.info = b; R.renderSoon(); } }, function () { /* hors ligne */ });
+    }
+    return ORGANIZATOR.info;
+  }
+  function organizatorLinkHtml(cls) {
+    var o = organizatorInfo();
+    return o ? '<a class="btn ' + cls + '" href="/download/organizator" download>' + R.icon('download') + ' Télécharger Organizator</a>' : '';
+  }
+  function organizatorFootHtml() {
+    var o = organizatorInfo();
+    return o ? 'Version ' + esc(o.version) + ', ' + Math.max(1, Math.round(o.size / 1048576)) + ' Mo. Lancez le fichier téléchargé : pas de droits d’administrateur, et Organizator se met ensuite à jour tout seul. '
+      + 'Si Windows affiche « Windows a protégé votre ordinateur » : Informations complémentaires › Exécuter quand même.' : '';
   }
   function installLater() {
     try { return Date.now() < Number(localStorage.getItem(INSTALL_LATER) || 0); } catch (e) { return false; }
   }
-  /* 'prompt' (bouton du système), 'ios' ou 'android' (gestes à faire), ou '' (rien à proposer). */
+  /* 'organizator' (PC Windows : l'application de bureau), 'prompt' (bouton du système), 'ios' ou
+     'android' (gestes à faire), ou '' (rien à proposer). */
   function installMode() {
     if (!onServer() || INSTALL.done || standalone()) return '';
-    if (INSTALL.prompt) return 'prompt';
     var pf = installPlatform();
-    return pf === 'other' ? '' : pf;
+    if (pf === 'windows' && organizatorInfo()) return 'organizator';
+    if (INSTALL.prompt) return 'prompt';
+    return pf === 'other' || pf === 'windows' ? '' : pf;
   }
   var SHARE_ICON = '<svg class="rz-install-glyph" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M8 7l4-4 4 4"></path><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"></path></svg>';
   function installStepsHtml(mode) {
+    if (mode === 'organizator') return organizatorLinkHtml('btn-primary rz-big') + '<div class="rz-card-foot">' + organizatorFootHtml() + '</div>';
     if (mode === 'prompt') return '<button type="button" class="btn btn-primary rz-big" data-act="rz-install">' + R.icon('plus') + ' Installer l’application</button>';
     if (mode === 'ios') {
       return '<ol class="rz-install-steps"><li>Touchez <strong>Partager</strong> ' + SHARE_ICON + ' dans la barre de Safari (en bas, ou en haut sur iPad).</li>'
@@ -1917,9 +1941,12 @@
   R.homeCard({ id: 'install', area: 'hero', order: 1, html: function () {
     var mode = installMode();
     if (!mode || installLater()) return '';
-    return '<section class="rz-card rz-install"><div class="rz-card-head"><span class="rz-card-title">Installer Révizator</span>'
+    var desktop = mode === 'organizator';
+    return '<section class="rz-card rz-install"><div class="rz-card-head"><span class="rz-card-title">' + (desktop ? 'Organizator pour Windows' : 'Installer Révizator') + '</span>'
       + '<button type="button" class="btn btn-ghost" data-act="rz-install-later">Plus tard</button></div>'
-      + '<div class="rz-install-lead">Une icône sur l’écran d’accueil, et Révizator s’ouvre en plein écran, comme une application.</div>'
+      + '<div class="rz-install-lead">' + (desktop
+        ? 'Révizator et votre file de tâches dans une application Windows, connectée à ce serveur.'
+        : 'Une icône sur l’écran d’accueil, et Révizator s’ouvre en plein écran, comme une application.') + '</div>'
       + installStepsHtml(mode) + '</section>';
   } });
   R.act('rz-install', function () {
@@ -1948,6 +1975,8 @@
       + A.setFieldHtml('Connecté', '<span>' + (ACCOUNT.login ? '<strong>' + esc(ACCOUNT.login) + '</strong>' : '…') + '</span>')
       + A.setFieldHtml('', '<form method="post" action="/logout" class="rz-logout"><button type="submit" class="btn btn-secondary">Se déconnecter</button></form>')
       + (installMode() ? A.setFieldHtml('Application', '<div class="rz-install">' + installStepsHtml(installMode()) + '</div>') : '')
+      + (installMode() !== 'organizator' && organizatorInfo() ? A.setFieldHtml('Sur un PC', '<div class="rz-install">' + organizatorLinkHtml('btn-secondary')
+        + '<div class="rz-card-foot">Organizator pour Windows, version ' + esc(organizatorInfo().version) + '.</div></div>') : '')
       + '<div class="set-card-foot">La déconnexion ferme la session de cet appareil ; les autres restent connectés.</div></div>';
   }
 
