@@ -659,6 +659,13 @@ public sealed class LearningAgent
 
         await reading.ConfigureAwait(false);
         await process.WaitForExitAsync().ConfigureAwait(false);
+        // Un travail peut enchainer plusieurs appels (relecture, double correction) : une annulation entre
+        // deux ne doit pas viser ce processus, bientot libere ; le drapeau Cancelled arretera le suivant.
+        if (ReferenceEquals(entry.Process, process))
+        {
+            entry.Process = null;
+        }
+
         var error = AgentDraft.Clean(await stderr.ConfigureAwait(false));
 
         if (entry.Cancelled)
@@ -3594,6 +3601,12 @@ internal static class ToeicCheck
                 {
                     checkedCount++;
                     var choice = Array.IndexOf(Letters, LJ.Str(a, "choice", 2));
+                    if (choice >= count)
+                    {
+                        // Une lettre hors des options (« D » sur trois) n'est pas une reponse : pas de verdict.
+                        continue;
+                    }
+
                     var defensible = LJ.Strings(a, "defensible", 4, 2).Select(l => Array.IndexOf(Letters, l)).Where(i => i >= 0 && i < count).Distinct().ToList();
                     if (choice >= 0 && !defensible.Contains(choice))
                     {
@@ -4162,7 +4175,7 @@ internal static class GradeGenre
 
         var sws = ratings.Select(x => LJ.Num(x, "swScore")).ToList();
         content["scores"] = merged;
-        content["swScore"] = Math.Round(Median(sws) * 2) / 2;
+        content["swScore"] = Math.Round(Median(sws) * 2, MidpointRounding.AwayFromZero) / 2;
         content["levelEstimate"] = LevelOfScores(merged, mode);
         content["ratings"] = new JsonArray(ratings.Select(x => (JsonNode)new JsonObject
         {
@@ -4321,7 +4334,8 @@ internal static class GradeGenre
     /// </summary>
     internal static string LevelOfScores(JsonObject scores, string mode)
     {
-        var keys = mode == "speak" ? new[] { "range", "accuracy", "coherence", "fluency" } : new[] { "range", "accuracy", "coherence" };
+        // A l'oral sans mesure de fluence (fluency 0), le niveau se lit sur les trois autres criteres.
+        var keys = mode == "speak" && LJ.Num(scores, "fluency") > 0 ? new[] { "range", "accuracy", "coherence", "fluency" } : new[] { "range", "accuracy", "coherence" };
         var values = keys.Select(k => LJ.Num(scores, k)).ToList();
         if (values.Any(v => v <= 0))
         {

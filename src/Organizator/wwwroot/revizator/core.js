@@ -119,7 +119,7 @@
   var DEFAULT_PROFILE = { onboarded: false, goal: '', interests: '', startLevel: 'B1', weeklyGoal: 4, defaultMinutes: 20, explain: 'auto' };
 
   /* Délais d'attente de l'UI par genre (l'hôte abandonne avant, spec §4.2). */
-  var GEN_WAIT = { lesson: 330000, exercise: 180000, toeic: 600000, sw: 180000, grade: 210000, tutor: 90000, cardcheck: 70000, cardfix: 160000 };
+  var GEN_WAIT = { lesson: 330000, exercise: 180000, toeic: 600000, sw: 180000, grade: 600000, tutor: 90000, cardcheck: 70000, cardfix: 160000 };
   var GEN_MODEL = {
     lesson: ['lessonModel', 'lessonEffort'], exercise: ['genModel', 'genEffort'], toeic: ['genModel', 'genEffort'],
     sw: ['genModel', 'genEffort'], grade: ['gradeModel', 'gradeEffort'], tutor: ['tutorModel', ''],
@@ -958,8 +958,12 @@
     var refs = num(al.refWords, 0) || ops.filter(function (o) { return o && o.op !== 'ins'; }).length;
     if (!ops.length || !refs) return num(al.accuracy, 0);
     var got = 0;
-    ops.forEach(function (o) { if (o && o.op === 'ok') got += o.p != null && num(o.p, 1) < SURE_P ? 0.5 : 1; });
-    return clamp(got / refs, 0, 1);
+    ops.forEach(function (o) {
+      if (!o) return;
+      if (o.op === 'ok') got += o.p != null && num(o.p, 1) < SURE_P ? 0.5 : 1;
+      else if (o.op === 'ins') got -= 1;             /* comme accuracy (1 − WER) : un mot ajouté coûte */
+    });
+    return clamp(Math.min(num(al.accuracy, 0), got / refs), 0, 1);
   };
   R.unsureRead = function (al) {
     return (al && Array.isArray(al.ops) ? al.ops : []).filter(function (o) { return o && o.op === 'ok' && o.p != null && num(o.p, 1) < SURE_P && o.ref; })

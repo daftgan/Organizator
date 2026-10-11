@@ -156,7 +156,8 @@ public static class LearningAnchors
 
         var kind = Str(o, "kind", 30).Trim().ToLowerInvariant();
         var id = Str(o, "id", 80).Trim();
-        return new Sample(id.Length > 0 ? id : "s" + Math.Abs(text.GetHashCode(StringComparison.Ordinal)).ToString(CultureInfo.InvariantCulture),
+        // Sans id : une empreinte du texte, stable d'un lancement a l'autre (string.GetHashCode ne l'est pas).
+        return new Sample(id.Length > 0 ? id : "s" + Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(Encoding.UTF8.GetBytes(text)))[..12].ToLowerInvariant(),
             mode, kind.Length > 0 ? kind : "free", level, Num(o, "swScore"), (int)Num(o, "scale"), Str(o, "prompt", 600).Trim(), text, Str(o, "source", 200).Trim());
     }
 

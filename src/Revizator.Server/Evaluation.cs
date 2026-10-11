@@ -312,6 +312,11 @@ public static class Evaluation
             var doc = result["doc"] as JsonObject;
             var scores = doc?["scores"] as JsonObject;
             var keys = s.Mode == "speak" ? new[] { "range", "accuracy", "coherence", "fluency" } : new[] { "range", "accuracy", "coherence" };
+            if (scores is not null && s.Mode == "speak" && LJ.Num(scores, "fluency") <= 0)
+            {
+                keys = new[] { "range", "accuracy", "coherence" }; // comme LevelOfScores : sans mesure de fluence
+            }
+
             var level = scores is null ? double.NaN : keys.Average(k => LJ.Num(scores, k)) - 1; // 1 ≈ A1 -> 0
             return new Run(s, pass, level, LJ.Num(doc, "swScore"), LJ.Num(result, "cost"), "");
         }

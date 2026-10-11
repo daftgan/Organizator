@@ -499,7 +499,8 @@ questions générées (la page : `fitLearned` de `test.js`), le serveur rend les
 **autres** comptes : par bilan, la liste `toeic.history[].items` de leur `learning.json`, recopiée champ par
 champ et bornée (`s` L|R, `c` A1…C1, `f` caractéristiques en minuscules, `g` −3…3, `u` 0|1, `o` 3|4, `x`
 0|1) — ni compte, ni date, ni texte de question, ni score. 40 bilans par compte au plus (les plus récents),
-60 réponses par bilan ; un compte avec `profile.boardHidden` n'y contribue pas ; fichiers relus seulement
+60 réponses par bilan, mélangés ; rien tant que moins de deux autres comptes y contribuent (avec un seul,
+ses réponses seraient les siennes à coup sûr) ; un compte avec `profile.boardHidden` n'y contribue pas ; fichiers relus seulement
 quand ils changent (date, taille). La page le demande une fois par séance, au début d'un bilan.
 
 **Étalons du correcteur** (`LearningAnchors.cs`, `anchors.json` à la racine du dossier de données, communs

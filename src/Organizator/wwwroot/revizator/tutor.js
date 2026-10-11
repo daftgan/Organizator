@@ -591,8 +591,12 @@
       prompt: clean(sc.learnerGoal, 400), criteria: [], scale: 0, words: [0, 0], seconds: 0
     };
     chat.levelPending = true;
+    var chatId = chat.id;
     R.gen('grade', { mode: mode, rubric: 'lesson', task: task, response: text.slice(0, 6000), metrics: metrics, level: speakLevel(), targets: [] }, { job: R.uid('rztlv') }).then(function (r) {
       var g = r && r.doc;
+      /* Les données ont pu être relues entre-temps (autre appareil) : la conversation est reprise par son id. */
+      chat = chatById(chatId) || chat;
+      s = chat.summary || s;
       delete chat.levelPending;
       if (!g || !g.levelEstimate) { fallback(); R.save(); return; }
       chat.levelGrade = { level: g.levelEstimate, scores: g.scores, rationale: g.rationale || null, tutor: s.levelEstimate || '', at: Date.now() };
@@ -601,7 +605,7 @@
       R.addGoodUses(g.goodUses, { mode: mode, ref: chat.id });
       R.save();
       if (R.viewId() === 'tutor') R.render();
-    }, function () { delete chat.levelPending; fallback(); R.save(); });
+    }, function () { chat = chatById(chatId) || chat; delete chat.levelPending; fallback(); R.save(); });
   }
 
   function logChat(chat) {

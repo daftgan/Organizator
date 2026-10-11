@@ -118,6 +118,7 @@
        remplacer chaque capacité par son estimation ponctuelle, tasserait l'échelle des questions. */
     var mu = CFG.prior[section].mean, sigma = CFG.prior[section].sd;
     var tl = 1 / (LEARN.tauLabel * LEARN.tauLabel), tb = 1 / (LEARN.tauLex * LEARN.tauLex);
+    var gmean = groups.reduce(function (a, g) { return a + g.reduce(function (b, r) { return b + num(r.g, 0); }, 0); }, 0) / n;
     var pre = groups.map(function (g) {
       return g.map(function (r) { return { b: baseDifficulty(section, r.c, r.f), c: itemLevel(r.c), g: num(r.g, 0), q: r.u ? CFG.guessable : CFG.guessFactor / (num(r.o, 0) || 4), x: !!r.x }; });
     });
@@ -154,8 +155,10 @@
       beta += (gb - beta * tb) / (ib + tb);
       var tot = 0, wsum = 0;
       levels.forEach(function (c) { tot += delta[c] * count[c]; wsum += count[c]; });
+      /* Recentré avec l'effet lexical : l'ajustement moyen des réponses reste nul (beta·ḡ compris), l'échelle
+         absolue reste celle des scores officiels. */
       var mean = wsum ? tot / wsum : 0;
-      levels.forEach(function (c) { delta[c] -= mean; });
+      levels.forEach(function (c) { delta[c] -= mean + beta * gmean; });
       mu = m1 / pre.length;
       sigma = Math.max(25, Math.sqrt(Math.max(0, m2 / pre.length - mu * mu)));
     }
@@ -168,7 +171,8 @@
   function refreshLearned() {
     var t = R.data && R.data.toeic;
     var own = arr(t && t.history).filter(function (e) { return e && arr(e.items).length; });
-    var pool = arr(U.pool && U.pool.bilans);
+    /* Le calcul tourne dans la page : 150 bilans partagés au plus (déjà mélangés par le serveur). */
+    var pool = arr(U.pool && U.pool.bilans).slice(0, 150);
     var key = own.length + ':' + (own.length ? own[own.length - 1].id : '') + ':' + pool.length;
     if (key === LEARNED_KEY) return LEARNED;
     LEARNED_KEY = key;

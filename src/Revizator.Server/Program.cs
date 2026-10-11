@@ -187,6 +187,7 @@ static int Command(ServerConfig config, string[] args)
             return Evaluation.Anchors(config, args);
 
         case "eval":
+            CheckClaudeToken(new HostLog(config.DataDir));
             return Evaluation.RunAsync(config, args).GetAwaiter().GetResult();
 
         default:

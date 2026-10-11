@@ -17,6 +17,7 @@ public sealed class ItemPool
 {
     private const int MaxBilansPerAccount = 40;
     private const int MaxItemsPerBilan = 60;
+    private const int MinContributors = 2;
 
     private static readonly JsonDocumentOptions ReadOptions = new()
     {
@@ -39,24 +40,38 @@ public sealed class ItemPool
         _log = log;
     }
 
-    /// <summary><c>{ bilans: [{ items: [{ s, c, f, g, u, o, x }] }] }</c>, ceux des autres comptes que <paramref name="me"/>.</summary>
+    /// <summary>
+    /// <c>{ bilans: [{ items: [{ s, c, f, g, u, o, x }] }] }</c>, ceux des autres comptes que <paramref name="me"/>,
+    /// melanges. Rien tant que moins de deux autres comptes y contribuent : avec un seul, ses reponses — en
+    /// somme ses scores — seraient les siennes a coup sur.
+    /// </summary>
     public JsonObject Build(string me)
     {
-        var bilans = new JsonArray();
-        foreach (var account in _accounts().OrderBy(a => a.Login, StringComparer.Ordinal))
+        var all = new List<JsonNode?>();
+        var contributors = 0;
+        foreach (var account in _accounts())
         {
             if (account.Login == me)
             {
                 continue;
             }
 
-            foreach (var b in Read(account.Login))
+            var mine = Read(account.Login);
+            if (mine.Count > 0)
             {
-                bilans.Add(b?.DeepClone());
+                contributors++;
             }
+
+            all.AddRange(mine.Select(b => b?.DeepClone()));
         }
 
-        return new JsonObject { ["bilans"] = bilans };
+        if (contributors < MinContributors)
+        {
+            return new JsonObject { ["bilans"] = new JsonArray() };
+        }
+
+        Random.Shared.Shuffle(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(all));
+        return new JsonObject { ["bilans"] = new JsonArray(all.ToArray()) };
     }
 
     private JsonArray Read(string login)
