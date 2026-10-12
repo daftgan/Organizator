@@ -6,6 +6,8 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
+using SharpCompress.Compressors;
+using SharpCompress.Compressors.BZip2;
 using SherpaOnnx;
 
 namespace Organizator.Services;
@@ -38,7 +40,7 @@ public sealed record TtsLine(string Id, string Voice, string Text);
 /// <item><description>Une instance par accent (lexique US ou GB, choisi a la creation ; <c>fr-FR</c> est
 /// l'instance VITS de Tom), chargee a la demande, liberee apres cinq minutes sans usage (pres de 1 Go
 /// pour Kokoro, bien moins pour Tom). Une synthese a la fois.</description></item>
-/// <item><description>Le francais (<see cref="FrenchFiles"/>, 63 Mo : le modele de Tom, et deux fichiers
+/// <item><description>Le francais (<see cref="FrenchFiles"/>, 67 Mo : le modele de Tom, et deux fichiers
 /// d'espeak-ng que Tom partage avec Kokoro) ne compte pas dans « voix pretes » — des voix installees avant
 /// lui restent pretes. Il se telecharge depuis les Reglages, avec le reste du modele, ou de lui-meme en
 /// arriere-plan a la premiere phrase francaise (qui echoue en le disant : la page prend alors une voix de
@@ -95,8 +97,10 @@ public sealed class TextToSpeech
     // Le runtime (paquet NuGet win-x64, deux DLL controlees) est telecharge et charge par SherpaRuntime.
     private static readonly long RuntimeSize = SherpaRuntime.DownloadSize;
 
-    /// <param name="Url">Adresse du fichier quand il ne vient pas du depot de Kokoro (<see cref="ModelBase"/>).</param>
-    private sealed record Asset(string Path, long Size, string Sha256, string? Url = null);
+    private sealed record Asset(string Path, long Size, string Sha256);
+
+    /// <summary>Une archive <c>.tar.bz2</c> dont on ne garde que quelques fichiers (<paramref name="Members"/> : nom dans l'archive, fichier).</summary>
+    private sealed record Archive(string Url, string Name, long Size, string Sha256, (string Entry, Asset Asset)[] Members);
 
     // Petits fichiers d'abord : un echec reseau se voit avant les 325 Mo du modele. espeak-ng-data est
     // reduit aux 9 fichiers de l'anglais (0,8 Mo au lieu de 18) : meme transcription Whisper, US et GB.
@@ -121,27 +125,38 @@ public sealed class TextToSpeech
     /// <summary>Dossier de Tom sous celui du modele (il part avec lui a la suppression des voix).</summary>
     private const string TomDir = "piper-fr_FR-tom-medium";
 
-    /// <summary>
-    /// Depot Hugging Face de l'auteur de sherpa-onnx pour Tom : le modele Piper avec les metadonnees que
-    /// sherpa-onnx lit (frequence, langue espeak). Les empreintes ci-dessous valent pour toute revision.
-    /// </summary>
-    private const string TomBase = "https://huggingface.co/csukuangfj/vits-piper-fr_FR-tom-medium/resolve/main/";
+    private static readonly Asset TomModel = new(TomDir + "/fr_FR-tom-medium.onnx", 63_153_773, "1548b82666f41f5adf24e0924c622170e504c1dc49f7aaed723f718d8ed368a5");
+    private static readonly Asset TomTokens = new(TomDir + "/tokens.txt", 940, "ef3a7e4a8d1af0c9d4dc45aaae1a6242ebe24a7ed6f3d025a49eb29682784c6d");
 
     /// <summary>
-    /// Le francais (voix fr_tom) : le modele de Tom et deux fichiers d'espeak-ng (dictionnaire et langue),
-    /// pris dans le depot de Kokoro et partages avec lui. Verifies le 12 octobre 2026 : les empreintes sont
-    /// celles de vits-piper-fr_FR-tom-medium.tar.bz2 des modeles de sherpa-onnx, dont l'espeak-ng-data a,
-    /// fichier pour fichier, les memes empreintes que celui de Kokoro epingle ci-dessus.
+    /// Tom vient du paquet des modeles de sherpa-onnx sur GitHub, une archive qui ne change pas (verifie le
+    /// 12 octobre 2026) : le depot Hugging Face de Tom sert un autre export du modele (63 511 165 octets), sans
+    /// empreinte publiee qu'on puisse epingler. On n'en garde que le modele et ses jetons ; son espeak-ng-data
+    /// a, fichier pour fichier, les memes empreintes que celui de Kokoro epingle ci-dessus.
+    /// </summary>
+    private static readonly Archive TomArchive = new(
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fr_FR-tom-medium.tar.bz2",
+        "vits-piper-fr_FR-tom-medium.tar.bz2", 67_202_955, "3d8258ef8466b5d5f2cc46c06e1415d3d01c9cbaeed8b6d5b3d152073672472c",
+        [("vits-piper-fr_FR-tom-medium/fr_FR-tom-medium.onnx", TomModel), ("vits-piper-fr_FR-tom-medium/tokens.txt", TomTokens)]);
+
+    /// <summary>
+    /// Le francais (voix fr_tom) : le modele de Tom et ses jetons (<see cref="TomArchive"/>), et deux fichiers
+    /// d'espeak-ng (dictionnaire et langue) pris dans le depot de Kokoro et partages avec lui.
     /// </summary>
     private static readonly Asset[] FrenchFiles =
     [
         new("espeak-ng-data/fr_dict", 63_727, "e399ab924c4d10beef1fc310b30ea56e4ddfd8b4b64b8ed978e9c65394d49b2d"),
         new("espeak-ng-data/lang/roa/fr", 79, "95f44834b48c075dad13eace54d2c98ff79b81aa0074dd67eebaf66c2909eef8"),
-        new(TomDir + "/tokens.txt", 940, "ef3a7e4a8d1af0c9d4dc45aaae1a6242ebe24a7ed6f3d025a49eb29682784c6d", TomBase + "tokens.txt"),
-        new(TomDir + "/fr_FR-tom-medium.onnx", 63_153_773, "1548b82666f41f5adf24e0924c622170e504c1dc49f7aaed723f718d8ed368a5", TomBase + "fr_FR-tom-medium.onnx"),
+        TomTokens,
+        TomModel,
     ];
 
-    private static readonly long ModelSize = ModelFiles.Sum(f => f.Size) + FrenchFiles.Sum(f => f.Size);
+    /// <summary>Ce que coute le francais a telecharger : l'archive de Tom et les deux fichiers d'espeak-ng.</summary>
+    private static readonly long FrenchDownloadSize = TomArchive.Size + FrenchFiles.Where(f => !InArchive(f)).Sum(f => f.Size);
+
+    private static bool InArchive(Asset asset) => TomArchive.Members.Any(m => ReferenceEquals(m.Asset, asset));
+
+    private static readonly long ModelSize = ModelFiles.Sum(f => f.Size) + FrenchDownloadSize;
 
     // Le code natif (espeak-ng) borne ses chemins : on garde de la marge sous MAX_PATH.
     private const int NativePathLimit = SherpaRuntime.NativePathLimit;
@@ -324,7 +339,7 @@ public sealed class TextToSpeech
                 ["size"] = ModelSize,
                 ["downloaded"] = model,
                 ["french"] = model && FrenchPresent(),
-                ["frenchSize"] = FrenchFiles.Sum(f => f.Size),
+                ["frenchSize"] = FrenchDownloadSize,
                 ["downloading"] = downloading,
                 ["received"] = downloading ? Interlocked.Read(ref download!.Received) : 0,
                 ["total"] = downloading ? download!.Total : 0,
@@ -419,10 +434,13 @@ public sealed class TextToSpeech
             // (SherpaRuntime.EnsureAsync leve la marque d'effacement).
             var runtimeMissing = !_runtime.FilesPresent;
             var missing = ModelFiles.Concat(FrenchFiles).Where(f => !Present(f, _modelDir)).ToList();
-            download.Total = (runtimeMissing ? RuntimeSize : 0) + missing.Sum(f => f.Size);
+            var tomMissing = missing.Any(InArchive);
+            missing = missing.Where(f => !InArchive(f)).ToList();
+            download.Total = (runtimeMissing ? RuntimeSize : 0) + missing.Sum(f => f.Size) + (tomMissing ? TomArchive.Size : 0);
             _log.Info($"TTS : telechargement des voix ({download.Total / 1_000_000} Mo : "
                 + (runtimeMissing ? "runtime sherpa-onnx " + RuntimeVersion + ", " : "")
-                + $"{missing.Count} fichiers du modele {ModelId} a la revision {ModelRevision[..8]})");
+                + $"{missing.Count} fichiers du modele {ModelId} a la revision {ModelRevision[..8]}"
+                + (tomMissing ? ", archive de la voix francaise Tom" : "") + ")");
             EmitDownload(download, "", force: true);
 
             // Partage avec la transcription en direct : un seul telechargement, ses octets comptent ici.
@@ -437,8 +455,18 @@ public sealed class TextToSpeech
                 var target = Path.Combine(_modelDir, asset.Path.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 part = target + ".part";
-                await FetchAsync(download, asset.Url ?? ModelBase + asset.Path, part, asset.Size, HashAlgorithmName.SHA256, asset.Sha256, base64: false, asset.Path, ct).ConfigureAwait(false);
+                await FetchAsync(download, ModelBase + asset.Path, part, asset.Size, HashAlgorithmName.SHA256, asset.Sha256, base64: false, asset.Path, ct).ConfigureAwait(false);
                 File.Move(part, target, overwrite: true);
+                part = null;
+            }
+
+            if (tomMissing)
+            {
+                // L'archive est verifiee entiere, puis chaque fichier garde l'est a son tour ; elle part ensuite.
+                part = Path.Combine(_modelDir, TomArchive.Name + ".part");
+                await FetchAsync(download, TomArchive.Url, part, TomArchive.Size, HashAlgorithmName.SHA256, TomArchive.Sha256, base64: false, TomArchive.Name, ct).ConfigureAwait(false);
+                await Task.Run(() => ExtractMembers(part, TomArchive, _modelDir, ct), ct).ConfigureAwait(false);
+                TryDelete(part);
                 part = null;
             }
 
@@ -463,6 +491,145 @@ public sealed class TextToSpeech
             var message = "Téléchargement des voix impossible : " + (ex is HttpRequestException ? "réseau indisponible (" + ex.Message + ")" : ex.Message);
             Emit(new JsonObject { ["phase"] = "download-failed", ["model"] = ModelId, ["error"] = message });
             throw new InvalidOperationException(message);
+        }
+    }
+
+    /// <summary>
+    /// Extrait d'une archive <c>.tar.bz2</c> les fichiers voulus, sans rien d'autre : chacun passe par
+    /// <c>.part</c>, sa taille et son SHA-256 sont controles, puis il est renomme. Lecteur tar minimal (en-tetes
+    /// ustar et GNU, noms longs GNU « L ») : les archives de sherpa-onnx n'ont que des fichiers et des dossiers.
+    /// </summary>
+    private static void ExtractMembers(string archive, Archive spec, string dir, CancellationToken ct)
+    {
+        var wanted = spec.Members.ToDictionary(m => m.Entry, m => m.Asset, StringComparer.Ordinal);
+        using var file = File.OpenRead(archive);
+        using var bz = new BZip2Stream(file, CompressionMode.Decompress, decompressConcatenated: false);
+        var header = new byte[512];
+        var buffer = new byte[1 << 16];
+        string? longName = null;
+        while (wanted.Count > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!ReadFull(bz, header, header.Length) || header.All(b => b == 0))
+            {
+                break;
+            }
+
+            var name = longName ?? TarString(header, 0, 100);
+            longName = null;
+            var prefix = TarString(header, 345, 155);
+            if (prefix.Length > 0 && header[257] == (byte)'u')
+            {
+                name = prefix + "/" + name;
+            }
+
+            var size = Convert.ToInt64(TarString(header, 124, 12).Trim() is { Length: > 0 } octal ? octal : "0", 8);
+            var type = (char)header[156];
+            var padded = (size + 511) / 512 * 512;
+            if (type == 'L')
+            {
+                var raw = new byte[padded];
+                if (!ReadFull(bz, raw, raw.Length))
+                {
+                    break;
+                }
+
+                longName = Encoding.UTF8.GetString(raw, 0, (int)size).TrimEnd('\0');
+                continue;
+            }
+
+            if ((type == '0' || type == '\0') && wanted.Remove(name, out var asset))
+            {
+                if (size != asset.Size)
+                {
+                    throw new InvalidOperationException($"{asset.Path} : taille inattendue dans l'archive ({size} octets au lieu de {asset.Size}).");
+                }
+
+                var target = Path.Combine(dir, asset.Path.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                var part = target + ".part";
+                try
+                {
+                    using (var output = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None))
+                    using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+                    {
+                        var left = size;
+                        while (left > 0)
+                        {
+                            ct.ThrowIfCancellationRequested();
+                            var n = bz.Read(buffer, 0, (int)Math.Min(buffer.Length, left));
+                            if (n <= 0)
+                            {
+                                throw new InvalidOperationException($"{asset.Path} : archive tronquée.");
+                            }
+
+                            output.Write(buffer, 0, n);
+                            hash.AppendData(buffer, 0, n);
+                            left -= n;
+                        }
+
+                        var got = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+                        if (got != asset.Sha256)
+                        {
+                            throw new InvalidOperationException($"{asset.Path} : empreinte inattendue dans l'archive.");
+                        }
+                    }
+
+                    File.Move(part, target, overwrite: true);
+                }
+                catch
+                {
+                    TryDelete(part);
+                    throw;
+                }
+
+                Skip(bz, padded - size, buffer);
+                continue;
+            }
+
+            Skip(bz, padded, buffer);
+        }
+
+        if (wanted.Count > 0)
+        {
+            throw new InvalidOperationException($"{spec.Name} : {string.Join(", ", wanted.Keys)} absent de l'archive.");
+        }
+    }
+
+    private static string TarString(byte[] header, int offset, int length)
+    {
+        var end = Array.IndexOf(header, (byte)0, offset, length);
+        return Encoding.UTF8.GetString(header, offset, (end < 0 ? offset + length : end) - offset);
+    }
+
+    private static bool ReadFull(Stream stream, byte[] buffer, int count)
+    {
+        var read = 0;
+        while (read < count)
+        {
+            var n = stream.Read(buffer, read, count - read);
+            if (n <= 0)
+            {
+                return false;
+            }
+
+            read += n;
+        }
+
+        return true;
+    }
+
+    private static void Skip(Stream stream, long count, byte[] buffer)
+    {
+        while (count > 0)
+        {
+            var n = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, count));
+            if (n <= 0)
+            {
+                return;
+            }
+
+            count -= n;
         }
     }
 
@@ -575,7 +742,7 @@ public sealed class TextToSpeech
 
         if (accent == AccentFr && !FrenchPresent())
         {
-            // Voix installees avant le francais : son complement (Tom, 63 Mo) vient d'abord, en arriere-plan.
+            // Voix installees avant le francais : son complement (Tom, 67 Mo) vient d'abord, en arriere-plan.
             _ = EnsureModelAsync(CancellationToken.None).ContinueWith(t =>
             {
                 if (t.IsCompletedSuccessfully)
@@ -747,10 +914,10 @@ public sealed class TextToSpeech
                 {
                     if (piece.Voice.Accent == AccentFr && IsReady && !FrenchPresent())
                     {
-                        // Voix installees avant le francais : on ne fait pas attendre 63 Mo a une phrase. Le
+                        // Voix installees avant le francais : on ne fait pas attendre 67 Mo a une phrase. Le
                         // telechargement part en arriere-plan ; la page dit pourquoi et prend une voix de l'appareil.
                         _ = EnsureModelAsync(CancellationToken.None).ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
-                        throw new InvalidOperationException("La voix française (Tom, 63 Mo) se télécharge sur " + (OperatingSystem.IsWindows() ? "ce poste" : "le serveur") + " : elle servira dès qu’elle sera prête.");
+                        throw new InvalidOperationException("La voix française (Tom, 67 Mo) se télécharge sur " + (OperatingSystem.IsWindows() ? "ce poste" : "le serveur") + " : elle servira dès qu’elle sera prête.");
                     }
 
                     if (!gateHeld)

@@ -1893,7 +1893,7 @@
   R.h.voiceStatus = voiceStatusHtml;
 
   /* La voix française (Tom, une voix Piper : le professeur s'en sert pour expliquer en français). Ses
-     fichiers (63 Mo) ne comptent pas dans « voix prêtes » : on dit ici s'ils sont là. Un serveur d'avant
+     fichiers (67 Mo) ne comptent pas dans « voix prêtes » : on dit ici s'ils sont là. Un serveur d'avant
      Tom ne le liste pas (ou propose l'ancienne voix) : il faut le mettre à jour, et on le dit. */
   function frenchVoiceHtml(st) {
     var fr = arr(st && st.voices).filter(function (v) { return v.id === 'fr_tom'; })[0];

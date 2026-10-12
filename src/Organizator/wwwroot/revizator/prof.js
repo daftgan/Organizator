@@ -627,7 +627,7 @@
   }
 
   /* ══ Voix : les voix naturelles de Révizator pour l'anglais (Kokoro) et le français (Tom) ════════
-     Tom (63 Mo) se télécharge depuis Réglages › Voix, ou de lui-même en arrière-plan à la première phrase
+     Tom (67 Mo) se télécharge depuis Réglages › Voix, ou de lui-même en arrière-plan à la première phrase
      française. Sans voix naturelles, ou tant que Tom n'est pas là, le français passe par une voix de
      l'appareil (speechSynthesis). */
 
@@ -906,7 +906,7 @@
       h.push('<div class="rz-set-help">Le niveau règle la profondeur des explications (de « une idée à la fois » à « explications de linguiste ») et l’anglais qu’il emploie. « Adapté à mon niveau » suit votre niveau estimé.</div>');
       h.push(R.setField('Réponses à voix haute', chips('profVoice', ['true', 'false'], ['Oui', 'Non, à l’écrit seulement'])));
       var st = R.tts.status(), fr = R.tts.ready()
-        ? (st.model && st.model.french ? 'Le français a sa voix naturelle (Tom).' : 'Sa voix naturelle française (Tom, 63 Mo) se télécharge depuis la carte Voix ci-dessus, ou d’elle-même à sa première réponse en français.')
+        ? (st.model && st.model.french ? 'Le français a sa voix naturelle (Tom).' : 'Sa voix naturelle française (Tom, 67 Mo) se télécharge depuis la carte Voix ci-dessus, ou d’elle-même à sa première réponse en français.')
         : 'Avec les voix naturelles (ci-dessus), il parle aussi français avec une voix naturelle ; sans elles, avec une voix de l’appareil.';
       h.push('<div class="set-card-foot">L’anglais est lu par les voix naturelles de Révizator (voix britannique masculine). ' + esc(fr) + ' Chaque réponse compte dans le quota Claude Code ; son modèle se règle dans « Agents (Claude Code) » ci-dessus.</div></div>');
       return h.join('');
