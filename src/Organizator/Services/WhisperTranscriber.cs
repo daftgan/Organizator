@@ -638,6 +638,9 @@ public sealed class WhisperTranscriber
         result["wpm"] = fluency.Wpm;
         result["articulationWpm"] = fluency.ArticulationWpm;
         result["speechSeconds"] = fluency.SpeechSeconds;
+        result["meanRun"] = fluency.MeanRun;
+        result["midPauses"] = fluency.MidPauses;
+        result["pauseRatio"] = fluency.PauseRatio;
         result["pauses"] = new JsonArray(fluency.Pauses.Select(p => (JsonNode)new JsonObject
         {
             ["after"] = p.After,

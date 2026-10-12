@@ -19,7 +19,8 @@
      R.items.snapshot(setKey) → état sérialisable (reprise) ; R.items.go(setKey, i) / next / prev / finish
      R.items.keydown(e, el) → bool (Entrée vérifie puis passe à la suite, 1-9 choisit, ← → naviguent, Ctrl+Entrée envoie un écrit)
      R.items.cardSpec(setKey, index) → carte proposée pour un item (ou null) ; R.items.align(ref, hyp) ; R.items.normItem(item)
-   Chaque réponse corrigée automatiquement appelle R.observe(compétence, niveau de la série, score) une fois (premier essai).
+   Chaque réponse corrigée automatiquement appelle R.observe(compétence, niveau de la série, score, poids, 0,8) une fois
+   (premier essai) : les séries sont écrites pour environ 80 % de réussite au niveau demandé (ExerciseGenre).
    ═══════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
@@ -34,6 +35,8 @@
   var CLICK = { choice: 1, truefalse: 1, minimal_pair: 1, stress: 1 };
   var TYPED = { gap: 1, transform: 1, translate: 1, error_spot: 1, dictation: 1, partial_dictation: 1 };
   var SPEECH = { shadow: 1, read_aloud: 1 };
+  /* Réussite visée par le générateur au niveau demandé (« Visez environ 80 % de réussite », LearningAgent.ExerciseGenre). */
+  var SERIES_TARGET = 0.8;
   var OPEN = { open_write: 1, open_speak: 1 };
   var ALIAS = { mcq: 'choice', qcm: 'choice', multiple_choice: 'choice', true_false: 'truefalse', tf: 'truefalse', gap_fill: 'gap', cloze: 'gap',
     fill: 'gap', reorder: 'order', error: 'error_spot', minimal_pairs: 'minimal_pair', shadowing: 'shadow', write: 'open_write', speak: 'open_speak' };
@@ -175,7 +178,8 @@
         var refT = k === 'shadow' ? (it.audioText || it.prompt) : (it.prompt || it.audioText);
         var stt = answer && typeof answer === 'object' ? answer : { text: s(answer) };
         var al2 = stt.alignment && arr(stt.alignment.ops).length ? stt.alignment : align(refT, stt.text);
-        sc = round2(R.clamp(Number(al2.accuracy) || 0, 0, 1));
+        /* Reconnu avec assurance (R.sureAccuracy) : un mot que Whisper a deviné plutôt qu'entendu compte pour moitié. */
+        sc = round2(R.clamp(stt.alignment ? R.sureAccuracy(al2) : (Number(al2.accuracy) || 0), 0, 1));
         return { verdict: sc >= 0.9 ? 'exact' : (sc >= 0.7 ? 'close' : 'wrong'), score: round2(sc), expected: refT, align: al2 };
       }
       case 'open_write': case 'open_speak': {
@@ -235,7 +239,7 @@
       st.first = res.score; st.score = res.score;
       if (!OPEN[it.kind]) {
         var sk = skillOf(set, it);
-        R.observe(sk, levelOf(set, sk), res.score, SPEECH[it.kind] ? 0.5 : 1);
+        R.observe(sk, levelOf(set, sk), res.score, SPEECH[it.kind] ? 0.5 : 1, SERIES_TARGET);
       }
     }
     var fn = set.opts.onAnswer;
@@ -650,7 +654,7 @@
     st.grade = null; st.gradeErr = ''; st.checked = false;
     st.transcript = t;
     st.audioSeconds = r && r.audio ? r.audio.seconds || 0 : 0;
-    st.stt = r && r.stt ? { wpm: r.stt.wpm || 0, pauses: arr(r.stt.pauses).length, uncertain: arr(r.stt.words).filter(function (w) { return w && w.p != null && w.p < 0.5; }).map(function (w) { return w.text; }).slice(0, 12), url: r.stt.url || '' } : null;
+    st.stt = r && r.stt ? Object.assign(R.speechMetrics(r.stt, st.audioSeconds), { url: r.stt.url || '' }) : null;
     if (R.text.count(t) < 3) { st.gradeErr = 'presque rien n’a été entendu — rapprochez-vous du micro et recommencez'; return; }
     gradeOpen(set, i, 'speak');
   }
@@ -665,7 +669,7 @@
       mode: mode, rubric: 'lesson',
       task: { id: it.id || 'i' + (i + 1), kind: it.kind, promptFr: it.promptFr, prompt: it.prompt, criteria: it.criteria, scale: 0, words: mode === 'write' ? wordRange(it.promptFr) : [0, 0], seconds: it.seconds },
       response: response.slice(0, 6000),
-      metrics: mode === 'speak' && st.stt ? { seconds: st.audioSeconds, wpm: st.stt.wpm, pauses: st.stt.pauses, uncertain: st.stt.uncertain } : null,
+      metrics: mode === 'speak' && st.stt ? Object.assign({}, st.stt, { seconds: st.audioSeconds, url: undefined }) : null,
       level: levelOf(set, sk), targets: R.weakPoints(5).map(function (w) { return w.category; })
     };
     touch(set);
@@ -687,13 +691,14 @@
     st.grade = g;
     var ref = set.opts.ref || set.key;
     R.addErrors(g.edits, { mode: mode, ref: ref });
+    R.addGoodUses(g.goodUses, { mode: mode, ref: ref });
     var n = 0;
     if (R.cards) {
       n += R.cards.addMany(R.cards.fromEdits(g.edits, 3), { kind: 'grade', ref: ref });
       n += R.cards.addMany(g.cards, { kind: 'grade', ref: ref });
     }
     st.cardsAdded = n;
-    if (g.levelEstimate) R.observeLevel(mode === 'speak' ? 'speak' : 'write', g.levelEstimate);
+    if (g.levelEstimate) R.observeLevel(mode === 'speak' ? 'speak' : 'write', g.levelEstimate, R.productionWeight(mode === 'speak' ? st.transcript : st.text, mode));
     record(set, i, check(it, g));
   }
 

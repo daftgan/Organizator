@@ -126,7 +126,7 @@
   /* Messages de Révizator que traite le serveur (§ 4) ; getState, saveSettings, notify, log et perf
      restent sur l'hôte local d'Organizator. */
   var REMOTE_TYPES = {};
-  ('learnLoad learnSave learnDoc learnDocSave learnDocDelete learnNews learnGenerate learnCancel learnJobs learnWait learnBoard learnPolicy '
+  ('learnLoad learnSave learnDoc learnDocSave learnDocDelete learnNews learnGenerate learnCancel learnJobs learnWait learnBoard learnPolicy learnItemPool '
     + 'adminUsers adminUserSet adminUserRemove adminUserAdmin adminPolicySave '
     + 'ttsStatus ttsDownload ttsRemove ttsWarm speak speakScript cancelSpeak ttsClearCache '
     + 'whisperStatus whisperDownload whisperRemove whisperWarm transcribe cancelTranscribe '

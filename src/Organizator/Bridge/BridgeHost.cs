@@ -132,6 +132,7 @@ public sealed class BridgeHost
         _learning = new LearningStore(store.DataDir, log);
         _learnNews = new NewsMenu(_learning, log);
         _learnAgent = new LearningAgent(launcher, _learning, _learnNews, log, store.DataDir);
+        LearningAnchors.Configure(store.DataDir);
         _learnAgent.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("learn", payload));
         // Synthese vocale anglaise (Revizator) : telechargement des voix et phrases pretes arrivent au fil de l'eau.
         // Runtime sherpa-onnx partage par la synthese (Kokoro) et la transcription en direct.

@@ -39,9 +39,9 @@
    Modèle de l'apprenant
      R.SKILLS, R.LEVELS, R.band(theta), R.thetaOf(level), R.level(skill) → { theta, band, n, conf }
      R.globalBand(), R.explainLang() → 'fr'|'mixed'|'en'
-     R.observe(skill, cefr, x 0..1, weight)    réponse à un item (Elo)
+     R.observe(skill, cefr, x 0..1, weight, target)    réponse à un item (Elo) ; target = réussite visée au niveau cefr (0,5 par défaut)
      R.observeLevel(skill, level, weight)      niveau estimé d'une production
-     R.addErrors(edits, { mode, ref }) ; R.weakPoints(n) ; R.categoryLabel(cat) ; R.CATEGORIES
+     R.addErrors(edits, { mode, ref }) ; R.addGoodUses(uses, { mode, ref }) ; R.weakPoints(n) ; R.mastered() ; R.categoryLabel(cat) ; R.CATEGORIES
      R.logSession({ kind, ref, title, startedAt, endedAt, skillMinutes, score }) ; R.week()
      R.active() / R.setActive(obj|null)      séance reprenable
    Audio
@@ -112,22 +112,24 @@
   };
 
   var DEFAULT_PREFS = {
-    lessonModel: 'sonnet', lessonEffort: 'medium', genModel: 'sonnet', genEffort: 'low', gradeModel: 'sonnet',
+    lessonModel: 'sonnet', lessonEffort: 'medium', genModel: 'sonnet', genEffort: 'low', gradeModel: 'sonnet', gradeEffort: 'medium',
     tutorModel: 'haiku', cardModel: 'haiku', engine: 'auto', voiceUs: 'af_heart', voiceGb: 'bf_emma', speed: 1, retention: 0.9,
     whisperModel: 'small', tutorLive: true, tutorSensitivity: 40, tutorBargeIn: 'words'
   };
   var DEFAULT_PROFILE = { onboarded: false, goal: '', interests: '', startLevel: 'B1', weeklyGoal: 4, defaultMinutes: 20, explain: 'auto' };
 
   /* Délais d'attente de l'UI par genre (l'hôte abandonne avant, spec §4.2). */
-  var GEN_WAIT = { lesson: 330000, exercise: 180000, toeic: 270000, sw: 180000, grade: 150000, tutor: 90000, cardcheck: 70000, cardfix: 160000 };
+  var GEN_WAIT = { lesson: 330000, exercise: 180000, toeic: 600000, sw: 180000, grade: 600000, tutor: 90000, cardcheck: 70000, cardfix: 160000 };
   var GEN_MODEL = {
     lesson: ['lessonModel', 'lessonEffort'], exercise: ['genModel', 'genEffort'], toeic: ['genModel', 'genEffort'],
-    sw: ['genModel', 'genEffort'], grade: ['gradeModel', 'genEffort'], tutor: ['tutorModel', ''],
+    sw: ['genModel', 'genEffort'], grade: ['gradeModel', 'gradeEffort'], tutor: ['tutorModel', ''],
     cardcheck: ['cardModel', ''], cardfix: ['cardModel', '']
   };
   /* Générations qui se font sans bruit : pas de ligne « en préparation » dans la barre, pas de rendu
      à leur départ ni à leur fin (la vue qui les attend se met à jour elle-même), pas de document. */
   var QUIET_KINDS = { grade: 1, tutor: 1, cardcheck: 1, cardfix: 1 };
+  /* Générations qui jugent l'apprenant : leur contexte ne dit pas son niveau supposé (R.context). */
+  var BLIND_KINDS = { grade: 1, cardcheck: 1 };
 
   var KOKORO = {
     'en-US': { female: ['af_heart', 'af_bella', 'af_nicole'], male: ['am_michael', 'am_puck', 'am_fenrir'] },
@@ -905,11 +907,17 @@
     SKILLS.forEach(function (k) { var s = skill(k.id); var wt = k.id === 'lang' ? 0.5 : 1; t += s.theta * wt; w += wt; });
     return t / w;
   };
-  /* Réponse à un item réceptif (lecture, écoute, langue) : un « match » apprenant / item (Elo, logit). */
-  R.observe = function (id, cefr, x, weight) {
+  /* Réponse à un item réceptif (lecture, écoute, langue) : un « match » apprenant / item (Elo, logit).
+     target : la réussite pour laquelle l'item a été écrit, au niveau cefr. Une série « à 80 % de réussite
+     au niveau B1 » a des items plus faciles que B1 au sens d'Elo (50 %) : leur difficulté est
+     thetaOf(cefr) − logit(target). Sans ce décalage, réussir 80 % d'une série écrite pour 80 % faisait
+     monter le niveau à chaque série, et la suivante était demandée un cran plus haut. */
+  R.observe = function (id, cefr, x, weight, target) {
     var s = skill(id);
     var b = thetaOf(cefr);
     if (b == null) b = s.theta;
+    var t = clamp(num(target, 0.5), 0.05, 0.95);
+    b -= Math.log(t / (1 - t));
     x = clamp(num(x, 0), 0, 1);
     var p = 1 / (1 + Math.exp(-(s.theta - b)));
     var k = Math.max(0.6 / (1 + 0.05 * s.n), 0.08) * clamp(num(weight, 1), 0.1, 3);
@@ -930,6 +938,56 @@
     pushHist(s);
     R.save();
     return s.theta;
+  };
+  /* Poids d'une production dans l'estimation du niveau : deux phrases ne montrent pas un niveau comme un
+     e-mail de 120 mots (un correcteur surnote volontiers une production courte). */
+  R.productionWeight = function (text, mode) {
+    return clamp(R.text.count(String(text || '')) / (mode === 'speak' ? 60 : 80), 0.25, 1);
+  };
+  /* Mesures de l'oral envoyées au correcteur (genre grade) à partir du résultat de la transcription (stt) :
+     débit, débit d'articulation, passages sans pause, pauses en milieu de proposition, part de silence,
+     mots peu sûrs et, pour un texte lu, la part reconnue et les mots manqués. */
+  /* Part du texte lu reconnue avec assurance : Whisper « corrige » volontiers un mot mal prononcé en le
+     reconnaissant quand même (son modèle de langue devine le mot attendu), mais il le fait alors avec une
+     probabilité basse. Un mot reconnu sous SURE_P compte pour moitié : un signal faible, faute d'un vrai
+     score de prononciation par phonème, mais qui ne laisse plus passer pour juste ce qui ne l'était pas. */
+  var SURE_P = 0.4;
+  R.sureAccuracy = function (al) {
+    if (!al || al.accuracy == null) return null;
+    var ops = Array.isArray(al.ops) ? al.ops : [];
+    var refs = num(al.refWords, 0) || ops.filter(function (o) { return o && o.op !== 'ins'; }).length;
+    if (!ops.length || !refs) return num(al.accuracy, 0);
+    var got = 0;
+    ops.forEach(function (o) {
+      if (!o) return;
+      if (o.op === 'ok') got += o.p != null && num(o.p, 1) < SURE_P ? 0.5 : 1;
+      else if (o.op === 'ins') got -= 1;             /* comme accuracy (1 − WER) : un mot ajouté coûte */
+    });
+    return clamp(Math.min(num(al.accuracy, 0), got / refs), 0, 1);
+  };
+  R.unsureRead = function (al) {
+    return (al && Array.isArray(al.ops) ? al.ops : []).filter(function (o) { return o && o.op === 'ok' && o.p != null && num(o.p, 1) < SURE_P && o.ref; })
+      .map(function (o) { return String(o.ref); }).slice(0, 15);
+  };
+  R.speechMetrics = function (stt, seconds) {
+    stt = stt || {};
+    var m = {
+      seconds: Math.round(num(seconds, 0) * 10) / 10, wpm: Math.round(num(stt.wpm, 0)),
+      pauses: Array.isArray(stt.pauses) ? stt.pauses.length : Math.round(num(stt.pauses, 0)),
+      uncertain: (Array.isArray(stt.words) ? stt.words : []).filter(function (w) { return w && num(w.p, 1) < 0.5; }).map(function (w) { return String(w.text || ''); }).slice(0, 12)
+    };
+    if (num(stt.articulationWpm, 0) > 0) m.articulationWpm = Math.round(stt.articulationWpm);
+    if (num(stt.meanRun, 0) > 0) m.meanRun = Math.round(stt.meanRun * 10) / 10;
+    if (stt.midPauses != null) m.midPauses = Math.round(num(stt.midPauses, 0));
+    if (stt.pauseRatio != null) m.pauseRatio = Math.round(num(stt.pauseRatio, 0) * 100) / 100;
+    var al = stt.alignment;
+    if (al && al.accuracy != null) {
+      m.accuracy = Math.round(num(al.accuracy, 0) * 1000) / 1000;
+      m.sureAccuracy = Math.round(R.sureAccuracy(al) * 1000) / 1000;
+      m.missed = (Array.isArray(al.ops) ? al.ops : []).filter(function (o) { return o && (o.op === 'sub' || o.op === 'del') && o.ref; }).map(function (o) { return String(o.ref); }).slice(0, 15);
+      m.unsureRead = R.unsureRead(al);
+    }
+    return m;
   };
   /* Une observation à fort poids (bilan) : le niveau d'une compétence est recalé. */
   R.calibrate = function (id, theta, weight) {
@@ -955,12 +1013,34 @@
       if (!e || e.type === 'improvement') return;
       var cat = CATEGORIES[e.category] ? e.category : (String(e.category || '').indexOf('lex.') === 0 ? 'lex.word_choice' : 'gram.other');
       var x = errs[cat] = errs[cat] || { count: 0, lastSeen: 0, examples: [], correctUses: 0, status: 'active' };
-      x.count++; x.lastSeen = now; x.status = 'active';
+      x.count++; x.lastSeen = now; x.status = 'active'; x.goodSince = 0;
       x.examples = arr(x.examples);
       if (e.original || e.correction) x.examples.unshift({ original: String(e.original || '').slice(0, 200), correction: String(e.correction || '').slice(0, 200), at: now, mode: meta && meta.mode || '' });
       if (x.examples.length > 5) x.examples.length = 5;
     });
     R.save();
+  };
+  /* La preuve positive : un emploi correct, relevé par le correcteur (citation vérifiée par l'hôte), d'un
+     point où l'apprenant s'est déjà trompé. Sans elle, un point faible ne sortait du journal que par
+     l'oubli (30 jours) ; avec elle, il recule à chaque bon emploi, et trois bons emplois de suite, sans
+     faute depuis deux semaines au moins, le disent acquis. Une nouvelle faute le rend actif. */
+  var MASTERY_USES = 3, MASTERY_DAYS = 14;
+  R.addGoodUses = function (uses, meta) {
+    var errs = subject().errors;
+    var now = Date.now(), changed = false;
+    arr(uses).forEach(function (u) {
+      var x = u && errs[u.category];
+      if (!x || !num(x.count, 0)) return;
+      x.correctUses = num(x.correctUses, 0) + 1;
+      x.goodSince = num(x.goodSince, 0) + 1;
+      x.lastGood = now;
+      x.good = arr(x.good);
+      x.good.unshift({ quote: String(u.quote || '').slice(0, 200), at: now, mode: meta && meta.mode || '' });
+      if (x.good.length > 3) x.good.length = 3;
+      if (x.goodSince >= MASTERY_USES && now - num(x.lastSeen, 0) >= MASTERY_DAYS * 86400000) { x.status = 'mastered'; x.masteredAt = now; }
+      changed = true;
+    });
+    if (changed) R.save();
   };
   R.weakPoints = function (n) {
     var errs = subject().errors, now = Date.now();
@@ -968,9 +1048,16 @@
       var e = errs[k];
       var days = Math.max(0, (now - num(e.lastSeen, 0)) / 86400000);
       return { category: k, label: R.categoryLabel(k), count: num(e.count, 0), lastSeen: e.lastSeen, examples: arr(e.examples), status: e.status,
-        score: num(e.count, 0) * Math.exp(-days / 30) };
+        goodSince: num(e.goodSince, 0), good: arr(e.good),
+        score: num(e.count, 0) * Math.exp(-days / 30) / (1 + num(e.goodSince, 0)) };
     }).filter(function (e) { return e.status !== 'mastered' && e.count > 0; })
       .sort(function (a, b) { return b.score - a.score; }).slice(0, n || 6);
+  };
+  R.mastered = function () {
+    var errs = subject().errors;
+    return Object.keys(errs).filter(function (k) { return errs[k] && errs[k].status === 'mastered'; })
+      .map(function (k) { return { category: k, label: R.categoryLabel(k), at: num(errs[k].masteredAt, 0), good: arr(errs[k].good) }; })
+      .sort(function (a, b) { return b.at - a.at; });
   };
 
   R.logSession = function (o) {
@@ -1018,10 +1105,12 @@
     L.push('Apprenant : adulte francophone, développeur, qui réapprend l’anglais (sessions de 10 à 45 minutes).');
     if (p.goal) L.push('Objectif : ' + String(p.goal).slice(0, 300));
     if (p.interests) L.push('Centres d’intérêt : ' + String(p.interests).slice(0, 400));
+    /* Le correcteur note à l'aveugle : ni niveau estimé ni score de bilan (sa note s'en rapprocherait). */
+    var blind = BLIND_KINDS[kind];
     var lv = SKILLS.map(function (k) { var l = R.level(k.id); return k.label.toLowerCase() + ' ' + l.band + (l.conf === 'faible' ? ' (à confirmer)' : ''); });
-    L.push('Niveau estimé : ' + R.globalBand() + ' en moyenne — ' + lv.join(', ') + '.');
+    if (!blind) L.push('Niveau estimé : ' + R.globalBand() + ' en moyenne — ' + lv.join(', ') + '.');
     var t = d.toeic;
-    if (t && (t.L || t.R)) {
+    if (!blind && t && (t.L || t.R)) {
       L.push('Dernier bilan type TOEIC : ' + (t.L ? 'écoute ≈ ' + Math.round(t.L.mean) : '') + (t.L && t.R ? ', ' : '') + (t.R ? 'lecture ≈ ' + Math.round(t.R.mean) : '') + '.');
     }
     var weak = R.weakPoints(6);
@@ -1816,7 +1905,7 @@
   var MODEL_FIELDS = [
     { key: 'lessonModel', effort: 'lessonEffort', label: 'Cours du jour', help: 'Cherche l’actualité, lit les articles et écrit le cours : sonnet avec un effort moyen. Deux à quatre minutes, et un peu de votre quota Claude Code.' },
     { key: 'genModel', effort: 'genEffort', label: 'Exercices et bilans', help: 'Écrit les séries d’exercices et les bilans, sans recherche web : une à deux minutes.' },
-    { key: 'gradeModel', effort: '', label: 'Correction', help: 'Corrige l’écrit et l’oral : sonnet est plus fin, haiku plus rapide.' },
+    { key: 'gradeModel', effort: 'gradeEffort', label: 'Correction', help: 'Corrige l’écrit et l’oral et note les bilans : sonnet avec un effort moyen. C’est là que réfléchir paie : une note juste plutôt qu’une note rapide.' },
     { key: 'tutorModel', effort: '', label: 'Tuteur', help: 'Répond pendant la conversation : un modèle rapide garde l’échange fluide.' },
     { key: 'cardModel', effort: '', label: 'Correcteur des cartes', help: 'Relit une réponse refusée pendant les révisions et réécrit les cartes floues : un modèle rapide suffit.' }
   ];

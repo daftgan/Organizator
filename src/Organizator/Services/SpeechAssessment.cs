@@ -25,7 +25,15 @@ public sealed record EnergyProfile(bool HasSpeech, double SpeechStart, double Sp
 /// <summary>Pause rattachee au mot <c>After</c> (indice dans les mots), commencee a <c>At</c> secondes.</summary>
 public sealed record SpeechPause(int After, double At, double Seconds);
 
-public sealed record SpeechFluency(double Wpm, double ArticulationWpm, double SpeechSeconds, IReadOnlyList<SpeechPause> Pauses);
+/// <summary>
+/// Fluence d'un enregistrement. <c>MeanRun</c> : nombre moyen de mots entre deux pauses (« mean length of
+/// run ») ; <c>MidPauses</c> : pauses au milieu d'une proposition (ni apres une ponctuation, ni devant un mot
+/// qui ouvre une proposition) ; <c>PauseRatio</c> : part du temps de parole passee en silence. Avec le debit,
+/// ce sont les mesures les mieux liees a la fluence percue (Suzuki, Kormos et Uchihara, Modern Language
+/// Journal 2021 : vitesse et frequence des pauses r ≈ 0,6 ; pauses en milieu de proposition surtout).
+/// </summary>
+public sealed record SpeechFluency(double Wpm, double ArticulationWpm, double SpeechSeconds, IReadOnlyList<SpeechPause> Pauses,
+    double MeanRun = 0, int MidPauses = 0, double PauseRatio = 0);
 
 /// <summary>
 /// Une operation de l'alignement : <c>ok</c>, <c>sub</c> (substitution), <c>del</c> (mot attendu omis),
@@ -1241,7 +1249,32 @@ public static class SpeechAssessment
         var paused = pauses.Sum(p => p.Seconds);
         var wpm = span > 0 ? words.Count / span * 60 : 0;
         var articulation = span - paused > 0.2 ? words.Count / (span - paused) * 60 : wpm;
-        return new SpeechFluency(Math.Round(wpm), Math.Round(articulation), Math.Round(span, 2), pauses);
+        var runs = pauses.Select(p => p.After).Distinct().Count() + 1;
+        var mid = pauses.Count(p => p.After + 1 < words.Count && !ClauseBoundary(words[p.After], words[p.After + 1]));
+        return new SpeechFluency(Math.Round(wpm), Math.Round(articulation), Math.Round(span, 2), pauses,
+            Math.Round((double)words.Count / runs, 1), mid, span > 0 ? Math.Round(Math.Min(1, paused / span), 2) : 0);
+    }
+
+    // Mots qui ouvrent d'ordinaire une proposition : une pause devant eux est une pause « de frontiere ».
+    private static readonly HashSet<string> ClauseOpeners = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "and", "but", "so", "or", "because", "since", "although", "though", "while", "when", "whereas", "if", "unless",
+        "which", "who", "whom", "whose", "where", "that", "then", "after", "before", "until", "as", "however", "also",
+        "actually", "well", "anyway", "first", "second", "finally", "i", "we", "they", "he", "she", "there",
+        "um", "uh", "er", "erm", "hmm",
+    };
+
+    /// <summary>Vrai si la pause entre ces deux mots tombe a une frontiere de proposition (approximation).</summary>
+    internal static bool ClauseBoundary(SpokenWord before, SpokenWord after)
+    {
+        var tail = before.Text.TrimEnd();
+        if (tail.Length > 0 && ".,;:!?…—-".Contains(tail[^1]))
+        {
+            return true;
+        }
+
+        var next = new string(after.Text.Trim().Where(c => char.IsLetter(c) || c == '\'').ToArray());
+        return ClauseOpeners.Contains(next);
     }
 
     /// <summary>Mot de deux syllables ou plus, dure moins de 80 ms par syllabe, commence a la fin du precedent.</summary>

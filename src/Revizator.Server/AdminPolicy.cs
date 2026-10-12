@@ -25,6 +25,7 @@ public sealed class AdminPolicy
         ["genModel"] = "sonnet",
         ["genEffort"] = "low",
         ["gradeModel"] = "sonnet",
+        ["gradeEffort"] = "medium",
         ["tutorModel"] = "haiku",
         ["cardModel"] = "haiku",
     };
@@ -36,7 +37,7 @@ public sealed class AdminPolicy
         ["exercise"] = ("genModel", "genEffort"),
         ["toeic"] = ("genModel", "genEffort"),
         ["sw"] = ("genModel", "genEffort"),
-        ["grade"] = ("gradeModel", "genEffort"),
+        ["grade"] = ("gradeModel", "gradeEffort"),
         ["tutor"] = ("tutorModel", null),
         ["cardcheck"] = ("cardModel", null),
         ["cardfix"] = ("cardModel", null),
