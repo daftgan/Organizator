@@ -301,3 +301,6 @@
 .rz-pair-url { font-family: var(--font-mono, monospace); word-break: break-all; }
 .rz-pair-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 560px) { .rz-pair { flex-direction: column; align-items: center; } }
+
+/* Réglages › Voix : une note à la place d'un contrôle (voix française absente du serveur). */
+.rz-voice-note { font-size: 13px; line-height: 1.45; color: var(--rz-ink-soft); }

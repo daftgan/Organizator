@@ -1871,7 +1871,7 @@
     var dl = R.ui.ttsDl;
     var h = [];
     if (st && st.ready) {
-      h.push('<div class="rz-voice-ok">' + R.icon('check') + ' Voix naturelles installées — américaines et britanniques, ' + kokoroWhere() + '.</div>');
+      h.push('<div class="rz-voice-ok">' + R.icon('check') + ' Voix naturelles installées — ' + (st.model && st.model.french ? 'américaines, britanniques et française' : 'américaines et britanniques') + ', ' + kokoroWhere() + '.</div>');
     } else if (R.tts.downloading()) {
       var m = st && st.model || {};
       var rec = (dl && dl.received) || m.received || 0, tot = (dl && dl.total) || m.total || 0;
@@ -1887,6 +1887,29 @@
     return h.join('');
   }
   R.h.voiceStatus = voiceStatusHtml;
+
+  /* La voix française (ff_siwis, la seule de Kokoro : le professeur s'en sert pour expliquer en français).
+     Ses deux fichiers (64 Ko) ne comptent pas dans « voix prêtes » : on dit ici s'ils sont là. Un serveur
+     d'avant la voix française ne la liste pas : il faut le mettre à jour, et on le dit. */
+  function frenchVoiceHtml(st) {
+    var fr = arr(st && st.voices).filter(function (v) { return v.accent === 'fr-FR'; })[0];
+    if (!fr) {
+      return '<span class="rz-voice-note">' + esc(onServer() || (bridge.remote && bridge.remote())
+        ? 'Le serveur Révizator ne connaît pas encore la voix française : mettez-le à jour (git pull, puis Deploy dans Komodo).'
+        : 'Mettez Organizator à jour pour avoir la voix française.') + '</span>';
+    }
+    var one = '<select class="input set-select" disabled aria-label="Voix française"><option>' + esc((fr.label || fr.id) + ' · femme' + (fr.grade ? ' · ' + fr.grade : '')) + '</option></select>';
+    if (st.model && st.model.french) return one + '<button type="button" class="btn btn-secondary" data-act="rz-tts-try" data-accent="fr-FR">Essayer</button>';
+    return one + '<button type="button" class="btn btn-secondary" data-act="rz-tts-download"' + (R.tts.downloading() ? ' disabled' : '') + '>Télécharger (64 Ko)</button>';
+  }
+
+  function tryFrench() {
+    var pl = R.tts.say('Bonjour ! Je suis Oliver, votre professeur d’anglais. On commence ?', { voice: 'ff_siwis', engine: 'kokoro', key: 'rz-try' });
+    pl.done.then(function (p) {
+      if (p && p.state === 'error') R.toast('Voix française indisponible : ' + (p.error || 'synthèse impossible') + '.');
+      R.tts.refresh();
+    });
+  }
 
   function ttsDlInner(rec, tot) {
     var pct = tot ? Math.round(rec / tot * 100) : 0;
@@ -2128,6 +2151,7 @@
       };
       h.push(A.setFieldHtml('Voix américaine', sel('voiceUs', us) + '<button type="button" class="btn btn-secondary" data-act="rz-tts-try" data-accent="en-US">Essayer</button>'));
       h.push(A.setFieldHtml('Voix britannique', sel('voiceGb', gb) + '<button type="button" class="btn btn-secondary" data-act="rz-tts-try" data-accent="en-GB">Essayer</button>'));
+      h.push(A.setFieldHtml('Voix française', frenchVoiceHtml(st)));
     }
     h.push(A.setFieldHtml('Débit', '<div class="seg2">' + [0.85, 0.9, 1, 1.1].map(function (v) {
       return '<button type="button" class="' + (Math.abs(p.speed - v) < 0.01 ? 'on' : '') + '" data-act="rz-set-speed" data-value="' + v + '">' + String(v).replace('.', ',') + '×</button>';
@@ -2230,6 +2254,7 @@
     });
     R.act('rz-tts-try', function (el) {
       var acc = el.getAttribute('data-accent') || 'en-GB';
+      if (acc === 'fr-FR') { tryFrench(); return; }
       var text = acc === 'en-US' ? 'Hi! I’m your English tutor. Shall we start today’s lesson?' : 'Hello there! Fancy a quick English lesson before your next meeting?';
       R.tts.say(text, { accent: acc, gender: 'female', key: 'rz-try' });
     });

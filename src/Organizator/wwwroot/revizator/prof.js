@@ -668,8 +668,10 @@
       var pl = R.tts.say(text, { key: 'rzf-say', voice: FR_VOICE, engine: 'kokoro' });
       return pl.done.then(function (p) {
         if (!p || p.state !== 'error' || token !== SAY.token) return null;
-        /* Voix française indisponible (complément pas téléchargé) : l'appareil, et pour toute la séance. */
+        /* Voix française indisponible (complément pas téléchargé, serveur pas à jour) : l'appareil, pour
+           toute la séance, et on dit pourquoi une fois. */
         SAY.frFailed = true;
+        R.toast('Voix française naturelle indisponible (' + (p.error || 'synthèse impossible') + ') : ' + NAME + ' parle français avec la voix de l’appareil. Voir Réglages › Révizator › Voix.');
         return sayFrDevice(text);
       });
     } catch (e) { return sayFrDevice(text); }
