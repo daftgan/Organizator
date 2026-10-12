@@ -21,8 +21,8 @@ public sealed record TtsLine(string Id, string Voice, string Text);
 
 /// <summary>
 /// Synthese vocale neuronale, en local, sur le processeur : sherpa-onnx 1.13.8 et le modele
-/// Kokoro v1.0 (fp32), voix americaines et britanniques, et une voix francaise (le professeur de
-/// Revizator explique aussi en francais). Rien ne sort du poste.
+/// Kokoro v1.0 (fp32), voix americaines et britanniques ; pour le francais (le professeur de Revizator
+/// explique aussi en francais), la voix Piper « Tom » (VITS, 44,1 kHz), par le meme moteur. Rien ne sort du poste.
 ///
 /// <list type="bullet">
 /// <item><description>Rien n'est embarque dans l'exe : les deux DLL natives (onnxruntime 1.28.2 et
@@ -35,12 +35,14 @@ public sealed record TtsLine(string Id, string Voice, string Text);
 /// reglage invalide ne leve rien a la construction : le premier appel tue alors le processus
 /// (<see cref="AccessViolationException"/>). Chaque fichier est donc verifie avant
 /// <c>new OfflineTts</c>, et les chemins passent par leur nom court 8.3.</description></item>
-/// <item><description>Une instance par accent (lexique US ou GB, choisi a la creation ; le francais n'a pas
-/// de lexique, espeak-ng le phonetise), chargee a la demande, liberee apres cinq minutes sans usage
-/// (pres de 1 Go chacune). Une synthese a la fois.</description></item>
-/// <item><description>Le francais ne demande que deux petits fichiers d'espeak-ng de plus (<see cref="FrenchFiles"/>,
-/// 64 Ko) : ils ne comptent pas dans « voix pretes » — des voix installees avant eux restent pretes — et
-/// se telechargent d'eux-memes a la premiere phrase francaise, ou avec le reste du modele.</description></item>
+/// <item><description>Une instance par accent (lexique US ou GB, choisi a la creation ; <c>fr-FR</c> est
+/// l'instance VITS de Tom), chargee a la demande, liberee apres cinq minutes sans usage (pres de 1 Go
+/// pour Kokoro, bien moins pour Tom). Une synthese a la fois.</description></item>
+/// <item><description>Le francais (<see cref="FrenchFiles"/>, 63 Mo : le modele de Tom, et deux fichiers
+/// d'espeak-ng que Tom partage avec Kokoro) ne compte pas dans « voix pretes » — des voix installees avant
+/// lui restent pretes. Il se telecharge depuis les Reglages, avec le reste du modele, ou de lui-meme en
+/// arriere-plan a la premiere phrase francaise (qui echoue en le disant : la page prend alors une voix de
+/// l'appareil).</description></item>
 /// <item><description>Le texte est decoupe en phrases ; chacune est synthetisee, ecrite dans le cache
 /// (<c>cache\ab\&lt;cle&gt;.wav</c>, servi sous <see cref="Host"/>) et annoncee aussitot : la page commence
 /// la lecture a la premiere. Une phrase deja dite ne coute plus rien.</description></item>
@@ -81,8 +83,8 @@ public sealed class TextToSpeech
         new("bf_isabella", 22, AccentGb, "F", "C", "Isabella"),
         new("bm_george", 26, AccentGb, "M", "C", "George"),
         new("bm_fable", 25, AccentGb, "M", "C", "Fable"),
-        // La seule voix francaise de Kokoro v1.0.
-        new("ff_siwis", 30, AccentFr, "F", "B-", "Siwis"),
+        // La voix francaise : Piper « Tom » (fr_FR-tom-medium), un seul locuteur.
+        new("fr_tom", 0, AccentFr, "M", "", "Tom"),
     ];
 
     // Revision du depot csukuangfj/kokoro-multi-lang-v1_0 (2026-09-08) : un depot personnel, les
@@ -93,7 +95,8 @@ public sealed class TextToSpeech
     // Le runtime (paquet NuGet win-x64, deux DLL controlees) est telecharge et charge par SherpaRuntime.
     private static readonly long RuntimeSize = SherpaRuntime.DownloadSize;
 
-    private sealed record Asset(string Path, long Size, string Sha256);
+    /// <param name="Url">Adresse du fichier quand il ne vient pas du depot de Kokoro (<see cref="ModelBase"/>).</param>
+    private sealed record Asset(string Path, long Size, string Sha256, string? Url = null);
 
     // Petits fichiers d'abord : un echec reseau se voit avant les 325 Mo du modele. espeak-ng-data est
     // reduit aux 9 fichiers de l'anglais (0,8 Mo au lieu de 18) : meme transcription Whisper, US et GB.
@@ -115,15 +118,27 @@ public sealed class TextToSpeech
         new("model.onnx", 325_560_556, "b40f62b166ac8164b0627ef48a0b358eda0985e272fb03ef5252e7206305da11"),
     ];
 
+    /// <summary>Dossier de Tom sous celui du modele (il part avec lui a la suppression des voix).</summary>
+    private const string TomDir = "piper-fr_FR-tom-medium";
+
     /// <summary>
-    /// Le francais (voix ff_siwis) : dictionnaire et langue d'espeak-ng, de la meme revision. Verifies le
-    /// 12 octobre 2026 : identiques a ceux de espeak-ng-data.tar.bz2 des modeles de sherpa-onnx, dont les
-    /// neuf fichiers anglais ci-dessus ont les memes empreintes.
+    /// Depot Hugging Face de l'auteur de sherpa-onnx pour Tom : le modele Piper avec les metadonnees que
+    /// sherpa-onnx lit (frequence, langue espeak). Les empreintes ci-dessous valent pour toute revision.
+    /// </summary>
+    private const string TomBase = "https://huggingface.co/csukuangfj/vits-piper-fr_FR-tom-medium/resolve/main/";
+
+    /// <summary>
+    /// Le francais (voix fr_tom) : le modele de Tom et deux fichiers d'espeak-ng (dictionnaire et langue),
+    /// pris dans le depot de Kokoro et partages avec lui. Verifies le 12 octobre 2026 : les empreintes sont
+    /// celles de vits-piper-fr_FR-tom-medium.tar.bz2 des modeles de sherpa-onnx, dont l'espeak-ng-data a,
+    /// fichier pour fichier, les memes empreintes que celui de Kokoro epingle ci-dessus.
     /// </summary>
     private static readonly Asset[] FrenchFiles =
     [
         new("espeak-ng-data/fr_dict", 63_727, "e399ab924c4d10beef1fc310b30ea56e4ddfd8b4b64b8ed978e9c65394d49b2d"),
         new("espeak-ng-data/lang/roa/fr", 79, "95f44834b48c075dad13eace54d2c98ff79b81aa0074dd67eebaf66c2909eef8"),
+        new(TomDir + "/tokens.txt", 940, "ef3a7e4a8d1af0c9d4dc45aaae1a6242ebe24a7ed6f3d025a49eb29682784c6d", TomBase + "tokens.txt"),
+        new(TomDir + "/fr_FR-tom-medium.onnx", 63_153_773, "1548b82666f41f5adf24e0924c622170e504c1dc49f7aaed723f718d8ed368a5", TomBase + "fr_FR-tom-medium.onnx"),
     ];
 
     private static readonly long ModelSize = ModelFiles.Sum(f => f.Size) + FrenchFiles.Sum(f => f.Size);
@@ -309,6 +324,7 @@ public sealed class TextToSpeech
                 ["size"] = ModelSize,
                 ["downloaded"] = model,
                 ["french"] = model && FrenchPresent(),
+                ["frenchSize"] = FrenchFiles.Sum(f => f.Size),
                 ["downloading"] = downloading,
                 ["received"] = downloading ? Interlocked.Read(ref download!.Received) : 0,
                 ["total"] = downloading ? download!.Total : 0,
@@ -421,7 +437,7 @@ public sealed class TextToSpeech
                 var target = Path.Combine(_modelDir, asset.Path.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 part = target + ".part";
-                await FetchAsync(download, ModelBase + asset.Path, part, asset.Size, HashAlgorithmName.SHA256, asset.Sha256, base64: false, asset.Path, ct).ConfigureAwait(false);
+                await FetchAsync(download, asset.Url ?? ModelBase + asset.Path, part, asset.Size, HashAlgorithmName.SHA256, asset.Sha256, base64: false, asset.Path, ct).ConfigureAwait(false);
                 File.Move(part, target, overwrite: true);
                 part = null;
             }
@@ -559,7 +575,7 @@ public sealed class TextToSpeech
 
         if (accent == AccentFr && !FrenchPresent())
         {
-            // Voix installees avant le francais : son complement (64 Ko) vient d'abord.
+            // Voix installees avant le francais : son complement (Tom, 63 Mo) vient d'abord, en arriere-plan.
             _ = EnsureModelAsync(CancellationToken.None).ContinueWith(t =>
             {
                 if (t.IsCompletedSuccessfully)
@@ -731,8 +747,10 @@ public sealed class TextToSpeech
                 {
                     if (piece.Voice.Accent == AccentFr && IsReady && !FrenchPresent())
                     {
-                        // Voix installees avant le francais : son complement (64 Ko), en quelques secondes au plus.
-                        await EnsureModelAsync(ct).ConfigureAwait(false);
+                        // Voix installees avant le francais : on ne fait pas attendre 63 Mo a une phrase. Le
+                        // telechargement part en arriere-plan ; la page dit pourquoi et prend une voix de l'appareil.
+                        _ = EnsureModelAsync(CancellationToken.None).ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
+                        throw new InvalidOperationException("La voix française (Tom, 63 Mo) se télécharge sur " + (OperatingSystem.IsWindows() ? "ce poste" : "le serveur") + " : elle servira dès qu’elle sera prête.");
                     }
 
                     if (!gateHeld)
@@ -995,14 +1013,28 @@ public sealed class TextToSpeech
         var us = accent == AccentUs;
 
         var config = new OfflineTtsConfig();
-        config.Model.Kokoro.Model = paths.Model;
-        config.Model.Kokoro.Voices = paths.Voices;
-        config.Model.Kokoro.Tokens = paths.Tokens;
-        config.Model.Kokoro.DataDir = paths.Espeak;
-        // Lexique choisi a la creation ; « en-gb » est refuse par espeak-ng (son nul) : l'anglais britannique est « en ».
-        // Le francais n'a pas de lexique : espeak-ng (fr_dict) phonetise tout.
-        config.Model.Kokoro.Lexicon = french ? "" : (us ? paths.LexiconUs : paths.LexiconGb);
-        config.Model.Kokoro.Lang = french ? "fr" : (us ? "en-us" : "en");
+        if (french)
+        {
+            // Tom (Piper, VITS) : sa langue espeak (« fr ») est dans les metadonnees du modele ; reglages de
+            // bruit et de duree de sa fiche (noise_scale 0.667, noise_w 0.8, length_scale 1).
+            config.Model.Vits.Model = paths.TomModel;
+            config.Model.Vits.Tokens = paths.TomTokens;
+            config.Model.Vits.DataDir = paths.Espeak;
+            config.Model.Vits.NoiseScale = 0.667f;
+            config.Model.Vits.NoiseScaleW = 0.8f;
+            config.Model.Vits.LengthScale = 1f;
+        }
+        else
+        {
+            config.Model.Kokoro.Model = paths.Model;
+            config.Model.Kokoro.Voices = paths.Voices;
+            config.Model.Kokoro.Tokens = paths.Tokens;
+            config.Model.Kokoro.DataDir = paths.Espeak;
+            // Lexique choisi a la creation ; « en-gb » est refuse par espeak-ng (son nul) : l'anglais britannique est « en ».
+            config.Model.Kokoro.Lexicon = us ? paths.LexiconUs : paths.LexiconGb;
+            config.Model.Kokoro.Lang = us ? "en-us" : "en";
+        }
+
         config.Model.NumThreads = Threads;
         config.Model.Provider = "cpu";
         config.Model.Debug = 0;
@@ -1019,7 +1051,7 @@ public sealed class TextToSpeech
         Engine engine;
         try
         {
-            if (tts.NumSpeakers < 28)
+            if (!french && tts.NumSpeakers < 28)
             {
                 throw new InvalidOperationException($"Modèle de voix inattendu ({tts.NumSpeakers} voix) : supprimez puis retéléchargez les voix.");
             }
@@ -1027,7 +1059,7 @@ public sealed class TextToSpeech
             engine = new Engine { Tts = tts, SampleRate = tts.SampleRate, LastUse = Environment.TickCount64 };
             var loadMs = watch.ElapsedMilliseconds;
             // Le tout premier appel coute 0,3 a 2 s de plus (chauffe) : on le fait a blanc.
-            Generate(engine, french ? "Bonjour." : "Hello.", french ? 30 : (us ? 3 : 21), 1f, CancellationToken.None);
+            Generate(engine, french ? "Bonjour." : "Hello.", french ? 0 : (us ? 3 : 21), 1f, CancellationToken.None);
             _log.Info($"TTS : {accent} charge en {loadMs} ms, pret en {watch.ElapsedMilliseconds} ms ({Threads} fils, +{(PrivateBytes() - before) / 1024 / 1024} Mo)");
         }
         catch
@@ -1125,7 +1157,7 @@ public sealed class TextToSpeech
 
     // ------------------------------------------------------------------ natif
 
-    private sealed record ModelPaths(string Model, string Voices, string Tokens, string Espeak, string LexiconUs, string LexiconGb);
+    private sealed record ModelPaths(string Model, string Voices, string Tokens, string Espeak, string LexiconUs, string LexiconGb, string TomModel, string TomTokens);
 
     /// <summary>
     /// Chemins remis au code natif : chaque fichier present et entier, chemins ASCII et courts (nom
@@ -1150,7 +1182,9 @@ public sealed class TextToSpeech
             Path.Combine(dir, "tokens.txt"),
             espeak,
             Path.Combine(dir, "lexicon-us-en.txt"),
-            Path.Combine(dir, "lexicon-gb-en.txt"));
+            Path.Combine(dir, "lexicon-gb-en.txt"),
+            Path.Combine(dir, TomDir, "fr_FR-tom-medium.onnx"),
+            Path.Combine(dir, TomDir, "tokens.txt"));
 
         // Le plus long chemin que le moteur composera lui-meme.
         var deepest = Path.Combine(espeak, "lang", "gmw", "en-GB-x-rp");

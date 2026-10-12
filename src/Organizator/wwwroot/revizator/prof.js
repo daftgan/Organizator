@@ -626,13 +626,14 @@
     if (window.innerWidth <= 600) close(true);
   }
 
-  /* ══ Voix : les voix naturelles de Révizator (Kokoro) pour l'anglais et le français ══════════
-     Le français a sa voix naturelle (ff_siwis, la seule de Kokoro) : l'hôte télécharge de lui-même son
-     complément (64 Ko) à la première phrase française. Sans voix naturelles, ou si ce complément ne
-     vient pas, le français passe par une voix de l'appareil (speechSynthesis). */
+  /* ══ Voix : les voix naturelles de Révizator pour l'anglais (Kokoro) et le français (Tom) ════════
+     Tom (63 Mo) se télécharge depuis Réglages › Voix, ou de lui-même en arrière-plan à la première phrase
+     française. Sans voix naturelles, ou tant que Tom n'est pas là, le français passe par une voix de
+     l'appareil (speechSynthesis). */
 
-  var FR_VOICE = 'ff_siwis';
-  var SAY = { token: 0, utter: null, frFailed: false };
+  var FR_VOICE = 'fr_tom';
+  /* frUntil : la voix française a échoué (en téléchargement, serveur pas à jour) ; on n'y revient qu'après. */
+  var SAY = { token: 0, utter: null, frUntil: 0, frTold: false };
   function plain(text) { return String(text || '').replace(/\*\*?|`/g, '').replace(/^\s*[-•]\s+/gm, '').replace(/\n+/g, ' ').trim(); }
 
   function speak(m) {
@@ -663,22 +664,27 @@
     } catch (e) { return Promise.resolve(); }
   }
   function sayFr(text, token) {
-    if (R.tts.engine() !== 'kokoro' || SAY.frFailed) return sayFrDevice(text);
+    if (R.tts.engine() !== 'kokoro' || Date.now() < SAY.frUntil) return sayFrDevice(text);
     try {
       var pl = R.tts.say(text, { key: 'rzf-say', voice: FR_VOICE, engine: 'kokoro' });
       return pl.done.then(function (p) {
         if (!p || p.state !== 'error' || token !== SAY.token) return null;
-        /* Voix française indisponible (complément pas téléchargé, serveur pas à jour) : l'appareil, pour
-           toute la séance, et on dit pourquoi une fois. */
-        SAY.frFailed = true;
-        R.toast('Voix française naturelle indisponible (' + (p.error || 'synthèse impossible') + ') : ' + NAME + ' parle français avec la voix de l’appareil. Voir Réglages › Révizator › Voix.');
+        /* Voix française indisponible (en téléchargement, serveur pas à jour) : la voix de l'appareil pendant
+           deux minutes, puis on réessaie ; on dit pourquoi une fois. */
+        SAY.frUntil = Date.now() + 120000;
+        if (!SAY.frTold) {
+          SAY.frTold = true;
+          R.toast(/se télécharge/.test(p.error || '') ? p.error + ' En attendant, ' + NAME + ' parle français avec la voix de l’appareil.'
+            : 'Voix française naturelle indisponible (' + (p.error || 'synthèse impossible') + ') : ' + NAME + ' parle français avec la voix de l’appareil. Voir Réglages › Révizator › Voix.');
+          R.tts.refresh();
+        }
         return sayFrDevice(text);
       });
     } catch (e) { return sayFrDevice(text); }
   }
   /* Pendant que le professeur réfléchit, l'hôte prépare la voix française (et son complément au besoin). */
   function warmFr() {
-    if (lang() === 'en' || R.prefs.profVoice === false || R.tts.engine() !== 'kokoro' || SAY.frFailed) return;
+    if (lang() === 'en' || R.prefs.profVoice === false || R.tts.engine() !== 'kokoro' || Date.now() < SAY.frUntil) return;
     bridge.call('ttsWarm', { accent: 'fr-FR' }, 15000)['catch'](function () { /* redit à la synthèse */ });
   }
   function frVoice() {
@@ -900,7 +906,7 @@
       h.push('<div class="rz-set-help">Le niveau règle la profondeur des explications (de « une idée à la fois » à « explications de linguiste ») et l’anglais qu’il emploie. « Adapté à mon niveau » suit votre niveau estimé.</div>');
       h.push(R.setField('Réponses à voix haute', chips('profVoice', ['true', 'false'], ['Oui', 'Non, à l’écrit seulement'])));
       var st = R.tts.status(), fr = R.tts.ready()
-        ? (st.model && st.model.french ? 'Le français a sa voix naturelle (Siwis, une voix féminine : la seule voix française du modèle).' : 'Sa voix naturelle française (Siwis, 64 Ko de plus) se télécharge d’elle-même à sa première réponse en français.')
+        ? (st.model && st.model.french ? 'Le français a sa voix naturelle (Tom).' : 'Sa voix naturelle française (Tom, 63 Mo) se télécharge depuis la carte Voix ci-dessus, ou d’elle-même à sa première réponse en français.')
         : 'Avec les voix naturelles (ci-dessus), il parle aussi français avec une voix naturelle ; sans elles, avec une voix de l’appareil.';
       h.push('<div class="set-card-foot">L’anglais est lu par les voix naturelles de Révizator (voix britannique masculine). ' + esc(fr) + ' Chaque réponse compte dans le quota Claude Code ; son modèle se règle dans « Agents (Claude Code) » ci-dessus.</div></div>');
       return h.join('');

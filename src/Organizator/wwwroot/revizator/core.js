@@ -136,12 +136,12 @@
   var KOKORO = {
     'en-US': { female: ['af_heart', 'af_bella', 'af_nicole'], male: ['am_michael', 'am_puck', 'am_fenrir'] },
     'en-GB': { female: ['bf_emma', 'bf_isabella'], male: ['bm_george', 'bm_fable'] },
-    /* Une seule voix française dans Kokoro v1.0 (pour le professeur), féminine. */
-    'fr-FR': { female: ['ff_siwis'], male: ['ff_siwis'] }
+    /* La voix française (le professeur) : Tom, une voix Piper, par le même moteur. */
+    'fr-FR': { female: ['fr_tom'], male: ['fr_tom'] }
   };
   var VOICE_LABELS = {
     af_heart: 'Heart', af_bella: 'Bella', af_nicole: 'Nicole', am_michael: 'Michael', am_puck: 'Puck', am_fenrir: 'Fenrir',
-    bf_emma: 'Emma', bf_isabella: 'Isabella', bm_george: 'George', bm_fable: 'Fable', ff_siwis: 'Siwis'
+    bf_emma: 'Emma', bf_isabella: 'Isabella', bm_george: 'George', bm_fable: 'Fable', fr_tom: 'Tom'
   };
   var FEMALE_NAMES = /zira|aria|jenny|hazel|susan|catherine|linda|heera|emma|sonia|libby|natasha|clara|eva|michelle|ana|sara|samantha|karen|moira|tessa|female/i;
 
@@ -1870,7 +1870,11 @@
     var st = TTS.status;
     var dl = R.ui.ttsDl;
     var h = [];
-    if (st && st.ready) {
+    if (st && st.ready && R.tts.downloading()) {
+      /* Voix prêtes, et la voix française qui se télécharge en plus. */
+      var mf = st.model || {};
+      h.push('<div class="rz-voice-dl" data-rz-ttsdl>' + ttsDlInner((dl && dl.received) || mf.received || 0, (dl && dl.total) || mf.total || 0) + '</div>');
+    } else if (st && st.ready) {
       h.push('<div class="rz-voice-ok">' + R.icon('check') + ' Voix naturelles installées — ' + (st.model && st.model.french ? 'américaines, britanniques et française' : 'américaines et britanniques') + ', ' + kokoroWhere() + '.</div>');
     } else if (R.tts.downloading()) {
       var m = st && st.model || {};
@@ -1888,23 +1892,26 @@
   }
   R.h.voiceStatus = voiceStatusHtml;
 
-  /* La voix française (ff_siwis, la seule de Kokoro : le professeur s'en sert pour expliquer en français).
-     Ses deux fichiers (64 Ko) ne comptent pas dans « voix prêtes » : on dit ici s'ils sont là. Un serveur
-     d'avant la voix française ne la liste pas : il faut le mettre à jour, et on le dit. */
+  /* La voix française (Tom, une voix Piper : le professeur s'en sert pour expliquer en français). Ses
+     fichiers (63 Mo) ne comptent pas dans « voix prêtes » : on dit ici s'ils sont là. Un serveur d'avant
+     Tom ne le liste pas (ou propose l'ancienne voix) : il faut le mettre à jour, et on le dit. */
   function frenchVoiceHtml(st) {
-    var fr = arr(st && st.voices).filter(function (v) { return v.accent === 'fr-FR'; })[0];
+    var fr = arr(st && st.voices).filter(function (v) { return v.id === 'fr_tom'; })[0];
     if (!fr) {
       return '<span class="rz-voice-note">' + esc(onServer() || (bridge.remote && bridge.remote())
         ? 'Le serveur Révizator ne connaît pas encore la voix française : mettez-le à jour (git pull, puis Deploy dans Komodo).'
         : 'Mettez Organizator à jour pour avoir la voix française.') + '</span>';
     }
-    var one = '<select class="input set-select" disabled aria-label="Voix française"><option>' + esc((fr.label || fr.id) + ' · femme' + (fr.grade ? ' · ' + fr.grade : '')) + '</option></select>';
+    var one = '<select class="input set-select" disabled aria-label="Voix française"><option>' + esc((fr.label || fr.id) + (fr.gender === 'M' ? ' · homme' : ' · femme')) + '</option></select>';
     if (st.model && st.model.french) return one + '<button type="button" class="btn btn-secondary" data-act="rz-tts-try" data-accent="fr-FR">Essayer</button>';
-    return one + '<button type="button" class="btn btn-secondary" data-act="rz-tts-download"' + (R.tts.downloading() ? ' disabled' : '') + '>Télécharger (64 Ko)</button>';
+    var size = st.model && st.model.frenchSize ? ' (' + A.fmtSize(st.model.frenchSize) + ')' : '';
+    return one + (R.tts.downloading()
+      ? '<button type="button" class="btn btn-secondary" disabled>Téléchargement…</button>'
+      : '<button type="button" class="btn btn-secondary" data-act="rz-tts-download">Télécharger' + esc(size) + '</button>');
   }
 
   function tryFrench() {
-    var pl = R.tts.say('Bonjour ! Je suis Oliver, votre professeur d’anglais. On commence ?', { voice: 'ff_siwis', engine: 'kokoro', key: 'rz-try' });
+    var pl = R.tts.say('Bonjour ! Je suis Oliver, votre professeur d’anglais. On commence ?', { voice: 'fr_tom', engine: 'kokoro', key: 'rz-try' });
     pl.done.then(function (p) {
       if (p && p.state === 'error') R.toast('Voix française indisponible : ' + (p.error || 'synthèse impossible') + '.');
       R.tts.refresh();
