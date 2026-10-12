@@ -284,7 +284,7 @@ Demande-lui de vérifier, dans l'ordre :
 6. le **tuteur** à voix haute (micro autorisé) : il entend, répond, parle ; une interruption fonctionne ;
 7. **générer un exercice** et **un cours du jour** (cours : utilise le menu RSS ; journal :
    `Revizator lesson : …` sans « menu RSS indisponible », sinon vérifier l'accès aux flux depuis le
-   LXC) ; `docker logs revizator | grep -E "Revizator (lesson|exercise|toeic|sw|grade|tutor|cardcheck|cardfix) :"` montre les durées ;
+   LXC) ; `docker logs revizator | grep -E "Revizator (lesson|exercise|toeic|sw|grade|tutor|cardcheck|cardfix|prof) :"` montre les durées ;
    aucune ligne « echec apres » ;
 8. une dictée (Parakeet) reconnue correctement.
 

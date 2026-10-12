@@ -13,7 +13,7 @@ namespace Organizator.Services;
 /// (<c>lesson</c>), series d'exercices (<c>exercise</c>), modules du bilan express (<c>toeic</c>),
 /// bilan oral et ecrit (<c>sw</c>), correction d'une production (<c>grade</c>), tour du tuteur
 /// (<c>tutor</c>), et le correcteur des cartes : une reponse refusee relue (<c>cardcheck</c>), des
-/// cartes floues reecrites (<c>cardfix</c>).
+/// cartes floues reecrites (<c>cardfix</c>) ; et le professeur, une explication a la demande (<c>prof</c>).
 ///
 /// Chaque appel est un <c>claude -p</c> dont le prompt est ecrit sur l'entree standard (en argument,
 /// le cours depasserait la limite de <c>CreateProcess</c>), avec <c>--no-session-persistence</c> (rien
@@ -34,7 +34,7 @@ namespace Organizator.Services;
 /// somme du plan, mots de la lecture, mots manquants d'une dictee a trous), ecarte un item fautif
 /// plutot que de tout refuser, et rend exactement la forme attendue par l'UI. Les documents des
 /// genres <c>lesson</c>, <c>exercise</c>, <c>toeic</c> et <c>sw</c> sont enregistres par
-/// <see cref="LearningStore"/> avant la reponse ; <c>grade</c> et <c>tutor</c> ne le sont pas.
+/// <see cref="LearningStore"/> avant la reponse ; <c>grade</c>, <c>tutor</c> et <c>prof</c> ne le sont pas.
 ///
 /// Concurrence : trois generations au plus, un seul cours a la fois. Les travaux termines restent
 /// consultables quinze minutes (<c>learnJobs</c>, <c>learnWait</c>).
@@ -62,6 +62,7 @@ public sealed class LearningAgent
         ["tutor"] = new("tutor", "Tuteur", "haiku", "", TimeSpan.FromSeconds(60), false),
         ["cardcheck"] = new("cardcheck", "Correcteur des cartes", "haiku", "", TimeSpan.FromSeconds(50), false),
         ["cardfix"] = new("cardfix", "Cartes clarifiées", "haiku", "", TimeSpan.FromSeconds(120), false),
+        ["prof"] = new("prof", "Professeur", "sonnet", "low", TimeSpan.FromSeconds(90), false),
     };
 
     // Vrai si un flux stream-json a rendu un resultat sans fiche structuree : on repasse alors en json.
@@ -513,6 +514,7 @@ public sealed class LearningAgent
         "tutor" => TutorGenre.Compose(r),
         "cardcheck" => CardGenre.ComposeCheck(r),
         "cardfix" => CardGenre.ComposeFix(r),
+        "prof" => ProfGenre.Compose(r),
         _ => throw new InvalidOperationException("Genre inconnu : " + r.Kind),
     };
 
@@ -526,6 +528,7 @@ public sealed class LearningAgent
         "sw" => SwGenre.Sanitize(output, r),
         "grade" => GradeGenre.Sanitize(output, r),
         "tutor" => TutorGenre.Sanitize(output, r),
+        "prof" => ProfGenre.Sanitize(output, r),
         _ => throw new InvalidOperationException("Genre inconnu : " + r.Kind),
     };
 
@@ -4754,6 +4757,248 @@ internal static class TutorGenre
             ["tipFr"] = Speech.Clean(LJ.Str(o, "tipFr", 400), null, 400),
             ["end"] = LJ.Bool(o, "end"),
         };
+    }
+}
+
+// ============================================================================ professeur
+
+/// <summary>
+/// Le professeur de Revizator (<c>prof.js</c>) : un professeur particulier toujours a portee de clic,
+/// a qui l'apprenant demande des explications — sur ce qu'il voit a l'ecran (un exercice, une
+/// correction, un mot selectionne), un point de grammaire ou ce qu'il veut — et avec qui il discute.
+/// Chaque reponse se lit (<c>reply</c>, <c>examples</c>) et se dit (<c>speech</c> : des segments d'une
+/// seule langue, pour que le francais et l'anglais aient chacun leur voix) ; elle peut proposer une
+/// serie d'exercices sur le point discute (<c>exercise</c>), que la page lance par
+/// <c>R.exercise.launch</c>. Langue de la discussion (francais, anglais ou melange) et niveau du
+/// professeur sont choisis par l'apprenant. Rien n'est enregistre.
+/// </summary>
+internal static class ProfGenre
+{
+    /// <summary>Repliques reprises a chaque tour.</summary>
+    internal const int TurnHistory = 16;
+
+    private static readonly string[] Langs = { "fr", "en", "mix" };
+    private static readonly string[] Depths = { "auto", "a2", "b1", "b2", "c1" };
+    private static readonly string[] Skills = { "read", "listen", "write", "speak", "lang", "pron" };
+    private static readonly string[] Minutes = { "5", "10", "15" };
+
+    /// <summary>Types de series de la vue Exercices (<c>TYPES</c> d'exercise.js), avec leur libelle pour le modele.</summary>
+    private static readonly (string Id, string Label)[] Types =
+    {
+        ("read.article", "article et questions"), ("read.speed", "lecture rapide"), ("read.errors", "chasse aux erreurs dans un texte"),
+        ("listen.dialogue", "dialogue à écouter"), ("listen.partial_dictation", "dictée à trous (formes faibles, contractions)"),
+        ("listen.dictation", "dictée de phrases"), ("listen.minimal_pairs", "paires minimales à l'écoute"),
+        ("write.translate", "traduction piège du français"), ("write.pro_message", "message professionnel"), ("write.free", "écriture libre"),
+        ("speak.shadowing", "shadowing"), ("speak.read_aloud", "lecture à voix haute"), ("speak.minute", "parler une minute"),
+        ("speak.tech", "explication technique à l'oral"),
+        ("lang.false_friends", "faux amis"), ("lang.tenses", "les temps"), ("lang.prepositions", "prépositions"),
+        ("lang.collocations", "collocations"), ("lang.weak_points", "points faibles du journal d'erreurs"),
+        ("pron.minimal_pairs", "sons proches à dire"), ("pron.stress", "accent de mot"),
+    };
+
+    /// <summary>Ce que demandent les boutons « Autrement », « Plus simple »… du panneau (<c>params.way</c>).</summary>
+    private static readonly Dictionary<string, string> Ways = new(StringComparer.Ordinal)
+    {
+        ["simpler"] = "L'apprenant n'a pas tout compris : réexplique plus simplement, avec des mots plus courants, une idée à la fois, et un exemple très simple.",
+        ["example"] = "L'apprenant veut des exemples : donne trois ou quatre exemples variés et naturels (examples), chacun commenté en une phrase dans reply.",
+        ["other"] = "L'apprenant demande une autre manière d'expliquer : change vraiment d'angle (une image, une comparaison, un contraste avec le français, une règle pratique) sans répéter l'explication précédente.",
+        ["image"] = "L'apprenant veut une image pour retenir : une analogie concrète, une image mentale ou un moyen mnémotechnique, puis un exemple qui l'applique.",
+        ["deeper"] = "L'apprenant veut aller plus loin : les nuances, les exceptions, le registre, la différence britannique / américaine, ce qui distingue les formes voisines (jusqu'à 350 mots).",
+        ["check"] = "L'apprenant veut vérifier qu'il a compris : pose-lui deux ou trois petites questions (phrases à compléter, choix entre deux formes), sans donner les réponses ; il répondra au tour suivant.",
+        ["exercise"] = "L'apprenant demande des exercices sur ce dont vous avez parlé : propose une série (exercise.offer = vrai) bien ciblée, et dis en une ou deux phrases ce qu'elle fera travailler.",
+    };
+
+    private const string Persona =
+        "Tu es Oliver, le professeur d'anglais particulier de Révizator : un professeur britannique chaleureux, patient et précis, qui accompagne un adulte francophone (développeur) en train de réapprendre l'anglais. L'apprenant t'ouvre d'un clic depuis n'importe quel écran de Révizator pour te demander une explication — sur ce qu'il voit à l'écran (un exercice, une question, une correction, un mot), sur un point de grammaire, de vocabulaire ou de prononciation, ou sur ce qu'il veut — et pour en discuter avec toi. Ton but : qu'il comprenne vraiment, et qu'il retienne. Tu rends uniquement la fiche demandée.";
+
+    private const string Explaining = """
+        Expliquer
+        - Réponds d'abord à la question, en une ou deux phrases (la réponse, la règle, le sens), puis explique.
+        - Explique de plusieurs manières quand c'est utile : la règle dite simplement ; des exemples en anglais (examples) ; le contraste avec le français (ce qui piège un francophone) ; une image, une analogie ou un moyen mnémotechnique ; l'erreur typique et sa correction. Choisis deux ou trois angles, pas tous : la réponse se lit dans un petit panneau (120 à 220 mots dans reply le plus souvent).
+        - « ça », « cette question », « ce mot », « ici » : c'est ce qui est à l'écran ou le passage sélectionné, donnés plus bas. Pour un exercice qui attend encore sa réponse, aide à comprendre et donne des pistes ; ne donne la réponse que si elle est demandée, ou déjà corrigée à l'écran.
+        - C'est une discussion : tiens compte de ce qui a déjà été dit, ne répète pas une explication déjà donnée, et termine souvent (pas toujours) par une courte question qui vérifie la compréhension ou relance — une phrase à compléter, un choix entre deux formes. Quand l'apprenant répond à ta question, dis-lui franchement si c'est juste, et pourquoi.
+        - Sois exact : si l'usage varie (britannique / américain, registre, oral / écrit) ou si la règle a des exceptions, dis-le ; n'invente jamais de règle. Les erreurs typiques d'un francophone (present perfect, for / since, articles, prépositions, faux amis, accent de mot) méritent un mot sur le piège.
+        - Hors de l'anglais et de son apprentissage : réponds en une phrase et ramène gentiment vers l'anglais.
+        """;
+
+    private const string Fields = """
+        La fiche
+        - reply : ta réponse écrite. Paragraphes séparés par une ligne vide ; **gras** pour les mots ou formes clés ; une liste avec « - » en début de ligne si elle aide ; ni titre, ni tableau, ni emoji, ni lien. Les exemples développés vont plutôt dans examples.
+        - speech : ce que tu dis à voix haute — la même réponse, dite plus brièvement et plus simplement (60 à 130 mots en tout), en segments d'une seule langue chacun (lang « fr » ou « en ») dans l'ordre où tu les dis ; texte parlé, sans mise en forme, sans symbole, sans « tiret ». Un mot anglais cité dans une phrase française reste dans le segment français ; une phrase anglaise entière (un exemple à entendre) a son segment « en ».
+        - examples : zéro à quatre phrases d'exemple naturelles, au niveau de l'apprenant (en), avec leur traduction (fr).
+        - followUps : deux ou trois questions courtes que l'apprenant pourrait te poser ensuite, écrites à sa place, à la première personne, en français (en anglais si la langue de la discussion est l'anglais).
+        - exercise : propose une série d'exercices quand l'apprenant la demande, ou quand la discussion a porté sur un point précis qui se travaille (après une vraie explication, ou s'il s'est trompé à ta question) — pas à chaque réponse, et pas de nouveau s'il vient de la laisser de côté. Alors offer = vrai, et propose-la à la fin de reply (« Voulez-vous que je vous prépare quelques exercices sur … ? ») ; skill et type parmi les listes données (type peut rester vide pour une série sur mesure) ; minutes 5, 10 ou 15 ; focus = la consigne pour l'auteur de la série, en français, précise : le point à travailler, les formes à faire pratiquer, les pièges vus dans la discussion, les phrases où l'apprenant a hésité ; titleFr = un titre court. Sinon offer = faux, chaînes vides et minutes = 0.
+        """;
+
+    private static readonly string System = string.Join("\n\n", Persona, Explaining, Fields);
+
+    private static readonly string Schema = ExerciseGenre.Compact("""
+        {"type":"object","additionalProperties":false,"required":["reply","speech","examples","followUps","exercise"],"properties":{
+        "reply":{"type":"string"},
+        "speech":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["lang","text"],"properties":{"lang":{"type":"string","enum":["fr","en"]},"text":{"type":"string"}}}},
+        "examples":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["en","fr"],"properties":{"en":{"type":"string"},"fr":{"type":"string"}}}},
+        "followUps":{"type":"array","items":{"type":"string"}},
+        "exercise":{"type":"object","additionalProperties":false,"required":["offer","skill","type","minutes","focus","titleFr"],"properties":{
+          "offer":{"type":"boolean"},"skill":{"type":"string","enum":["","read","listen","write","speak","lang","pron"]},
+          "type":{"type":"string","enum":@TYPES@},"minutes":{"type":"integer"},"focus":{"type":"string"},"titleFr":{"type":"string"}}}}}
+        """.Replace("@TYPES@", "[\"\"," + string.Join(",", Types.Select(t => "\"" + t.Id + "\"")) + "]"));
+
+    private static List<(string Role, string Text)> History(JsonObject? p)
+        => LJ.Objects(p, "history")
+            .Select(h => (Role: LJ.Pick(LJ.Str(h, "role", 10), new[] { "user", "prof" }, "user"), Text: LJ.Str(h, "text", 2000)))
+            .Where(h => h.Text.Length > 0)
+            .TakeLast(TurnHistory)
+            .ToList();
+
+    private static string LangRule(string lang) => lang switch
+    {
+        "en" => "Langue de la discussion : anglais. Tout est en anglais, à la mesure du niveau indiqué ; un mot de français seulement pour un faux ami ou une traduction indispensable. examples.fr reste la traduction française.",
+        "mix" => "Langue de la discussion : mélange anglais-français. L'idée est dite en anglais simple, puis reprise ou précisée en français quand elle est délicate (la règle, le piège, la nuance) ; les deux langues alternent par phrases entières, jamais au milieu d'une phrase. Les segments de speech suivent cette alternance.",
+        _ => "Langue de la discussion : français, en vouvoyant l'apprenant ; les exemples et les mots étudiés restent en anglais (traduits).",
+    };
+
+    private static string DepthRule(string depth, string level) => depth switch
+    {
+        "a2" => "Niveau du professeur : facile (A2). Phrases courtes, mots très courants, une idée à la fois, aucun terme de grammaire sans l'expliquer ; ton anglais reste au niveau A2.",
+        "b1" => "Niveau du professeur : intermédiaire (B1). Explications claires et concrètes, quelques termes de grammaire courants (sujet, auxiliaire, prétérit…) ; ton anglais au niveau B1.",
+        "b2" => "Niveau du professeur : avancé (B2). Explications plus riches : nuances, registre, exceptions, formes voisines ; ton anglais au niveau B2, naturel et idiomatique.",
+        "c1" => "Niveau du professeur : expert (C1). Explications de linguiste : terminologie exacte (aspect, modalité, collocation, schwa…), distinctions fines, usage réel et variations ; ton anglais au niveau C1.",
+        _ => "Niveau du professeur : adapté à l'apprenant (" + level + ") — la profondeur des explications et ton anglais suivent son niveau estimé.",
+    };
+
+    public static AgentCall Compose(LearnRequest r)
+    {
+        var p = r.Params;
+        var level = Levels.Normalize(LJ.Str(p, "level", 10));
+        var lang = LJ.Pick(LJ.Str(p, "lang", 4), Langs, "fr");
+        var depth = LJ.Pick(LJ.Str(p, "depth", 4), Depths, "auto");
+        var way = LJ.Str(p, "way", 20);
+        var screen = LJ.Obj(p, "screen");
+        var selection = LJ.Str(p, "selection", 600);
+
+        var sb = new StringBuilder();
+        sb.Append(Levels.Line(level, "Niveau estimé de l'apprenant")).Append('\n');
+        sb.Append(LangRule(lang)).Append('\n');
+        sb.Append(DepthRule(depth, level)).Append('\n');
+        if (r.Context.Length > 0)
+        {
+            sb.Append("\nCe que l'on sait de l'apprenant :\n").Append(r.Context.Trim()).Append('\n');
+        }
+
+        sb.Append("\nSéries d'exercices possibles (exercise.type) : ")
+            .Append(string.Join(", ", Types.Select(t => t.Id + " (" + t.Label + ")")))
+            .Append(". Compétences (exercise.skill) : read, listen, write, speak, lang, pron.\n");
+
+        var view = LJ.Str(screen, "view", 80);
+        var shown = LJ.Str(screen, "text", 3000);
+        if (view.Length > 0 || shown.Length > 0)
+        {
+            sb.Append("\nÀ l'écran (Révizator, vue « ").Append(view.Length > 0 ? view : "?").Append(" ») :\n")
+                .Append(shown.Length > 0 ? shown : "(rien de lisible)").Append('\n');
+        }
+
+        if (selection.Length > 0)
+        {
+            sb.Append("\nPassage sélectionné par l'apprenant : « ").Append(selection.Replace('\n', ' ')).Append(" »\n");
+        }
+
+        var history = History(p);
+        sb.Append("\nDiscussion jusqu'ici :\n");
+        if (history.Count == 0)
+        {
+            sb.Append("(aucune)\n");
+        }
+
+        foreach (var (role, text) in history)
+        {
+            sb.Append(role == "prof" ? "Professeur : " : "Apprenant : ").Append(text.Replace("\r", "").Replace("\n", " / ")).Append('\n');
+        }
+
+        if (Ways.TryGetValue(way, out var ask))
+        {
+            sb.Append('\n').Append(ask).Append('\n');
+        }
+
+        sb.Append("\nRédigez votre réponse à la dernière réplique de l'apprenant.");
+        return new AgentCall("", System + Levels.Quotes, Schema, sb.ToString());
+    }
+
+    public static JsonObject Sanitize(JsonObject o, LearnRequest r)
+    {
+        var p = r.Params;
+        var lang = LJ.Pick(LJ.Str(p, "lang", 4), Langs, "fr");
+        var reply = Written(LJ.Str(o, "reply", 6000));
+        if (reply.Length == 0)
+        {
+            throw new InvalidOperationException("Le professeur n’a rien répondu.");
+        }
+
+        var speech = new JsonArray();
+        foreach (var s in LJ.Objects(o, "speech"))
+        {
+            // Les astérisques d'abord : Speech.Clean prendrait « *word* » pour une didascalie et l'effacerait.
+            var text = Speech.Clean(LJ.Str(s, "text", 800).Replace("*", ""), null, 800);
+            if (text.Length > 0 && speech.Count < 10)
+            {
+                speech.Add(new JsonObject { ["lang"] = LJ.Pick(LJ.Str(s, "lang", 4), new[] { "fr", "en" }, lang == "en" ? "en" : "fr"), ["text"] = text });
+            }
+        }
+
+        if (speech.Count == 0)
+        {
+            speech.Add(new JsonObject { ["lang"] = lang == "en" ? "en" : "fr", ["text"] = Speech.Clean(reply.Replace("*", "").Replace("\n- ", "\n"), null, 1200) });
+        }
+
+        var examples = new JsonArray();
+        foreach (var e in LJ.Objects(o, "examples"))
+        {
+            var en = LJ.Str(e, "en", 300);
+            if (en.Length > 0 && examples.Count < 4)
+            {
+                examples.Add(new JsonObject { ["en"] = en, ["fr"] = LJ.Str(e, "fr", 300) });
+            }
+        }
+
+        return new JsonObject
+        {
+            ["reply"] = reply,
+            ["speech"] = speech,
+            ["examples"] = examples,
+            ["followUps"] = LJ.Array(LJ.Strings(o, "followUps", 3, 160)),
+            ["exercise"] = Exercise(LJ.Obj(o, "exercise"), LJ.Str(p, "way", 20) == "exercise"),
+        };
+    }
+
+    /// <summary>La serie proposee, bornee aux types et competences de la vue Exercices ; sans consigne, pas de proposition.</summary>
+    private static JsonObject Exercise(JsonObject? x, bool asked)
+    {
+        var focus = LJ.Str(x, "focus", 600);
+        var offer = (LJ.Bool(x, "offer") || asked) && focus.Length > 0;
+        if (!offer)
+        {
+            return new JsonObject { ["offer"] = false, ["skill"] = "", ["type"] = "", ["minutes"] = 0, ["focus"] = "", ["titleFr"] = "" };
+        }
+
+        var type = LJ.Pick(LJ.Str(x, "type", 40), Types.Select(t => t.Id), "");
+        var skill = type.Length > 0 ? type[..type.IndexOf('.')] : LJ.Pick(LJ.Str(x, "skill", 10), Skills, "lang");
+        return new JsonObject
+        {
+            ["offer"] = true,
+            ["skill"] = skill,
+            ["type"] = type,
+            ["minutes"] = int.Parse(LJ.Pick(LJ.Str(x, "minutes", 4), Minutes, "10"), CultureInfo.InvariantCulture),
+            ["focus"] = focus,
+            ["titleFr"] = LJ.Str(x, "titleFr", 120),
+        };
+    }
+
+    /// <summary>Texte ecrit : retours a la ligne gardes (paragraphes, listes), trois au plus a la suite.</summary>
+    private static string Written(string text)
+    {
+        var value = Regex.Replace(text.Replace("\r", ""), @"[ \t]+\n", "\n");
+        value = Regex.Replace(value, @"\n{3,}", "\n\n");
+        value = Regex.Replace(value, @"^#{1,6}\s*", "", RegexOptions.Multiline);
+        return value.Trim();
     }
 }
 

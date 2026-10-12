@@ -20,7 +20,8 @@
      R.shim(type, fn(p, emit)), R.fixture(kind, fn(params) | doc | 'revizator/fixtures/x.json')   simulation hors WebView2
      R.on(name, fn) → off, R.emit(name, payload)
        événements : 'loaded', 'saved', 'job' (avancement), 'jobDone' ({ kind, job, params, result, error }),
-       'tts' (événement hôte), 'view' (changement de vue), 'pagehide' (on quitte la page Révizator)
+       'tts' (événement hôte), 'view' (changement de vue), 'pagehide' (on quitte la page Révizator),
+       'render' (la page Révizator vient d'être dessinée : rendu complet, vue affichée)
    État et persistance
      R.data       sujet « en » de learning.json (objet vivant : le modifier puis R.save())
      R.prefs, R.profile   raccourcis vers R.data.prefs / R.data.profile
@@ -114,20 +115,21 @@
   var DEFAULT_PREFS = {
     lessonModel: 'sonnet', lessonEffort: 'medium', genModel: 'sonnet', genEffort: 'low', gradeModel: 'sonnet', gradeEffort: 'medium',
     tutorModel: 'haiku', cardModel: 'haiku', engine: 'auto', voiceUs: 'af_heart', voiceGb: 'bf_emma', speed: 1, retention: 0.9,
-    whisperModel: 'small', tutorLive: true, tutorSensitivity: 40, tutorBargeIn: 'words'
+    whisperModel: 'small', tutorLive: true, tutorSensitivity: 40, tutorBargeIn: 'words',
+    profEnabled: true, profLang: 'auto', profLevel: 'auto', profVoice: true, profModel: 'sonnet', profEffort: 'low'
   };
   var DEFAULT_PROFILE = { onboarded: false, goal: '', interests: '', startLevel: 'B1', weeklyGoal: 4, defaultMinutes: 20, explain: 'auto' };
 
   /* Délais d'attente de l'UI par genre (l'hôte abandonne avant, spec §4.2). */
-  var GEN_WAIT = { lesson: 330000, exercise: 180000, toeic: 600000, sw: 180000, grade: 600000, tutor: 90000, cardcheck: 70000, cardfix: 160000 };
+  var GEN_WAIT = { lesson: 330000, exercise: 180000, toeic: 600000, sw: 180000, grade: 600000, tutor: 90000, cardcheck: 70000, cardfix: 160000, prof: 120000 };
   var GEN_MODEL = {
     lesson: ['lessonModel', 'lessonEffort'], exercise: ['genModel', 'genEffort'], toeic: ['genModel', 'genEffort'],
     sw: ['genModel', 'genEffort'], grade: ['gradeModel', 'gradeEffort'], tutor: ['tutorModel', ''],
-    cardcheck: ['cardModel', ''], cardfix: ['cardModel', '']
+    cardcheck: ['cardModel', ''], cardfix: ['cardModel', ''], prof: ['profModel', 'profEffort']
   };
   /* Générations qui se font sans bruit : pas de ligne « en préparation » dans la barre, pas de rendu
      à leur départ ni à leur fin (la vue qui les attend se met à jour elle-même), pas de document. */
-  var QUIET_KINDS = { grade: 1, tutor: 1, cardcheck: 1, cardfix: 1 };
+  var QUIET_KINDS = { grade: 1, tutor: 1, cardcheck: 1, cardfix: 1, prof: 1 };
   /* Générations qui jugent l'apprenant : leur contexte ne dit pas son niveau supposé (R.context). */
   var BLIND_KINDS = { grade: 1, cardcheck: 1 };
 
@@ -1907,7 +1909,8 @@
     { key: 'genModel', effort: 'genEffort', label: 'Exercices et bilans', help: 'Écrit les séries d’exercices et les bilans, sans recherche web : une à deux minutes.' },
     { key: 'gradeModel', effort: 'gradeEffort', label: 'Correction', help: 'Corrige l’écrit et l’oral et note les bilans : sonnet avec un effort moyen. C’est là que réfléchir paie : une note juste plutôt qu’une note rapide.' },
     { key: 'tutorModel', effort: '', label: 'Tuteur', help: 'Répond pendant la conversation : un modèle rapide garde l’échange fluide.' },
-    { key: 'cardModel', effort: '', label: 'Correcteur des cartes', help: 'Relit une réponse refusée pendant les révisions et réécrit les cartes floues : un modèle rapide suffit.' }
+    { key: 'cardModel', effort: '', label: 'Correcteur des cartes', help: 'Relit une réponse refusée pendant les révisions et réécrit les cartes floues : un modèle rapide suffit.' },
+    { key: 'profModel', effort: 'profEffort', label: 'Professeur', help: 'Explique à la demande, de plusieurs manières, et propose des exercices : sonnet avec un effort bas, une réponse en 10 à 20 secondes.' }
   ];
 
   /* Serveur Révizator, dans Organizator seulement (la page du serveur n'a pas de serveur à régler).
@@ -2462,7 +2465,7 @@
   A = O.registerPage({
     id: 'revizator', label: 'Révizator', title: 'Révizator — apprendre et réviser (anglais)', icon: ICONS.book,
     badge: function () { if (!loaded || !BADGE) return ''; try { return BADGE() || ''; } catch (e) { return ''; } },
-    render: renderPage,
+    render: function (host, enter) { renderPage(host, enter); R.emit('render'); },
     renderBar: function (bar) { if (A) renderBar(bar); },
     onBoot: function () {
       try { var v = localStorage.getItem('organizator.revizator.view'); if (v && v !== 'session') R.ui.view = v; } catch (e) { /* stockage refusé */ }

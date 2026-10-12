@@ -1,0 +1,241 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Révizator — le professeur (prof.js) · préfixe .rzf-
+   Un bouton rond dans le coin (le visage du professeur), un panneau compact ancré au même coin :
+   380 px sur PC (agrandissable), une feuille à mi-hauteur sur un petit écran, qui laisse voir la page.
+   Le panneau vit dans <body>, hors de #page-host : il se place au-dessus de la page, sous les dialogues
+   (60), le micro de la dictée (70) et les toasts (80).
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.rzf, .rzf-tip {
+  --rzf-skin: #f1c9a5; --rzf-skin-shade: #e2ad86; --rzf-hair: #8d8478; --rzf-hair-dark: #6f675d;
+  --rzf-jacket: #8a5a3c; --rzf-lapel: #6f4630; --rzf-tie: var(--color-accent, #c4673f); --rzf-shirt: #fbf7f1;
+  --rzf-ink: #2e2b25; --rzf-glass: #3b3630;
+  --rzf-right: 20px; --rzf-bottom: 20px;
+}
+.rzf[hidden], .rzf [hidden], .rzf-tip[hidden] { display: none !important; }
+
+/* ── L'avatar ───────────────────────────────────────────────────────────── */
+.rzf-face { display: block; width: 100%; height: 100%; overflow: visible; }
+.rzf-face .rzf-bg { fill: var(--color-accent-100, #f6e3d8); stroke: color-mix(in srgb, var(--color-accent, #c4673f) 22%, transparent); stroke-width: 1.5; }
+.rzf-face .rzf-jacket { fill: var(--rzf-jacket); }
+.rzf-face .rzf-lapel { fill: var(--rzf-lapel); }
+.rzf-face .rzf-shirt { fill: var(--rzf-shirt); }
+.rzf-face .rzf-tie { fill: var(--rzf-tie); }
+.rzf-face .rzf-neck { fill: var(--rzf-skin-shade); }
+.rzf-face .rzf-ear { fill: var(--rzf-skin-shade); }
+.rzf-face .rzf-skin { fill: var(--rzf-skin); }
+.rzf-face .rzf-hair { fill: var(--rzf-hair); }
+.rzf-face .rzf-temple { fill: var(--rzf-hair-dark); opacity: 0.55; }
+.rzf-face .rzf-eye ellipse { fill: var(--rzf-ink); }
+.rzf-face .rzf-glint { fill: #fff; }
+.rzf-face .rzf-brow { fill: none; stroke: var(--rzf-hair-dark); stroke-width: 2.4; stroke-linecap: round; }
+.rzf-face .rzf-glasses circle { fill: rgba(255, 255, 255, 0.18); stroke: var(--rzf-glass); stroke-width: 1.8; }
+.rzf-face .rzf-glasses path { fill: none; stroke: var(--rzf-glass); stroke-width: 1.8; stroke-linecap: round; }
+.rzf-face .rzf-nose { fill: none; stroke: var(--rzf-skin-shade); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.rzf-face .rzf-cheek { fill: #e8927a; opacity: 0.28; }
+.rzf-face .rzf-mouth { fill: #7a3b2e; stroke: #7a3b2e; stroke-width: 1.2; stroke-linejoin: round; }
+.rzf-face .rzf-moustache { fill: var(--rzf-hair-dark); }
+/* Le visage du bouton cligne seul (CSS) ; celui du panneau est animé par prof.js. */
+.rzf-face.is-mini .rzf-eye, .rzf-face.is-tiny .rzf-eye { transform-box: fill-box; transform-origin: center; animation: rzf-blink 5.2s infinite; }
+@keyframes rzf-blink { 0%, 95%, 100% { transform: scaleY(1); } 97% { transform: scaleY(0.1); } }
+
+/* ── Le bouton rond ─────────────────────────────────────────────────────── */
+.rzf-fab {
+  position: fixed; right: var(--rzf-right); bottom: var(--rzf-bottom); z-index: 45;
+  width: 62px; height: 62px; padding: 3px; border-radius: 50%; cursor: pointer;
+  border: 2px solid var(--color-surface, #fff); background: var(--color-accent-100, #f6e3d8);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgba(46, 43, 37, 0.22));
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  animation: rzf-pop 0.32s cubic-bezier(.2, 1.4, .4, 1) both;
+}
+.rzf-fab:hover { transform: translateY(-2px) scale(1.04); }
+.rzf-fab:focus-visible { outline: 3px solid var(--color-accent-300, #e7a98b); outline-offset: 2px; }
+.rzf-fab-dot {
+  position: absolute; top: 2px; right: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--color-accent, #c4673f); border: 2px solid var(--color-surface, #fff);
+}
+.rzf-fab::after {
+  content: '?'; position: absolute; left: -4px; top: -4px; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center; font: 700 13px/1 var(--font-body, sans-serif);
+  background: var(--color-surface, #fff); color: var(--color-accent-700, #8c3f20); box-shadow: var(--shadow-md, 0 3px 10px rgba(0, 0, 0, 0.16));
+}
+@keyframes rzf-pop { from { transform: scale(0.4); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* ── Le panneau ─────────────────────────────────────────────────────────── */
+.rzf-panel {
+  position: fixed; right: var(--rzf-right); bottom: var(--rzf-bottom); z-index: 46;
+  width: min(390px, calc(100vw - 32px)); height: min(600px, calc(100vh - 120px)); min-height: 320px;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--color-surface, #fff); color: var(--color-text, #2e2b25);
+  border: 1px solid var(--color-divider, rgba(0, 0, 0, 0.1)); border-radius: 20px;
+  box-shadow: 0 18px 48px rgba(46, 43, 37, 0.24), 0 2px 6px rgba(46, 43, 37, 0.08);
+  animation: rzf-open 0.22s ease both; transform-origin: bottom right;
+}
+.rzf.is-big .rzf-panel { width: min(600px, calc(100vw - 32px)); height: calc(100vh - 96px); }
+@keyframes rzf-open { from { opacity: 0; transform: translateY(10px) scale(0.97); } to { opacity: 1; transform: none; } }
+.rzf-grab { display: none; }
+
+.rzf-head {
+  display: flex; align-items: center; gap: 10px; padding: 10px 10px 8px 12px; flex: none;
+  background: linear-gradient(180deg, var(--color-accent-100, #f6e3d8), color-mix(in srgb, var(--color-accent-100, #f6e3d8) 30%, var(--color-surface, #fff)));
+  border-bottom: 1px solid var(--rz-line, rgba(0, 0, 0, 0.08));
+}
+.rzf-avatar { width: 58px; height: 58px; flex: none; }
+.rzf-who { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.2; }
+.rzf-who b { font-family: var(--font-heading, inherit); font-weight: 400; font-size: 19px; }
+.rzf-status { font-size: 12.5px; color: var(--rz-ink-soft, #6b665e); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rzf[data-mood="think"] .rzf-status, .rzf[data-mood="listen"] .rzf-status { color: var(--color-accent-700, #8c3f20); }
+.rzf-head-btns { display: flex; gap: 2px; flex: none; }
+.rzf-ibtn {
+  width: 32px; height: 32px; border-radius: 10px; border: 0; background: transparent; cursor: pointer;
+  display: grid; place-items: center; color: var(--color-neutral-700, #4a463f);
+}
+.rzf-ibtn:hover { background: color-mix(in srgb, var(--color-text, #000) 7%, transparent); }
+.rzf-ibtn.on { color: var(--color-accent-700, #8c3f20); }
+
+.rzf-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; flex: none; border-bottom: 1px solid var(--rz-line, rgba(0, 0, 0, 0.08)); }
+.rzf-seg { display: inline-flex; padding: 2px; border-radius: 999px; background: color-mix(in srgb, var(--color-text, #000) 6%, transparent); }
+.rzf-seg button {
+  border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 700;
+  padding: 4px 11px; border-radius: 999px; color: var(--color-neutral-600, #6b665e);
+}
+.rzf-seg button.on { background: var(--color-surface, #fff); color: var(--color-accent-700, #8c3f20); box-shadow: var(--shadow-sm); }
+.rzf-level { margin-left: auto; font-size: 12px; color: var(--rz-ink-soft, #6b665e); }
+.rzf-gear { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; padding-top: 4px; }
+.rzf-gear-k { font-size: 12px; font-weight: 700; color: var(--rz-ink-soft, #6b665e); }
+.rzf-gear-help { font-size: 12px; color: var(--rz-ink-soft, #6b665e); }
+.rzf-gear-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.rzf-chips, .rzf-follow, .rzf-ways, .rzf-ctxs { display: flex; flex-wrap: wrap; gap: 6px; }
+.rzf-chip {
+  border: 1px solid var(--color-divider, rgba(0, 0, 0, 0.12)); background: var(--color-surface, #fff); cursor: pointer;
+  font: inherit; font-size: 12.5px; line-height: 1.25; padding: 5px 10px; border-radius: 999px; color: var(--color-text, #2e2b25); text-align: left;
+}
+.rzf-chip:hover { border-color: var(--color-accent-300, #e7a98b); background: var(--color-accent-100, #f6e3d8); }
+.rzf-chip.on, .rzf-chip[aria-pressed="true"] { border-color: var(--color-accent-400, #d98a64); background: var(--color-accent-100, #f6e3d8); color: var(--color-accent-800, #6e3016); font-weight: 600; }
+.rzf-chip:disabled { opacity: 0.5; cursor: default; }
+.rzf-link { border: 0; background: none; padding: 0; cursor: pointer; font: inherit; font-size: 12.5px; color: var(--color-accent-700, #8c3f20); text-decoration: underline; text-underline-offset: 2px; }
+
+/* ── La discussion ──────────────────────────────────────────────────────── */
+.rzf-log { position: relative; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 12px 6px; display: flex; flex-direction: column; gap: 10px; }
+.rzf-msg { display: flex; flex-direction: column; gap: 6px; max-width: 100%; animation: rz-rise 0.2s ease both; }
+.rzf-msg.is-user { align-items: flex-end; }
+.rzf-bubble { padding: 9px 12px; border-radius: 16px; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.rzf-msg.is-prof .rzf-bubble { background: color-mix(in srgb, var(--color-accent-100, #f6e3d8) 55%, var(--color-surface, #fff)); border: 1px solid color-mix(in srgb, var(--color-accent, #c4673f) 14%, transparent); border-top-left-radius: 6px; }
+.rzf-msg.is-user .rzf-bubble { max-width: 86%; background: var(--color-neutral-100, #f1ede6); border-top-right-radius: 6px; }
+.rzf-bubble p { margin: 0 0 8px; }
+.rzf-bubble p:last-child { margin-bottom: 0; }
+.rzf-bubble ul { margin: 0 0 8px; padding-left: 18px; }
+.rzf-bubble li { margin: 2px 0; }
+.rzf-bubble strong { color: var(--color-accent-800, #6e3016); }
+.rzf-bubble code { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; }
+.rzf-quote { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 4px; font-size: 12.5px; font-style: italic; color: var(--rz-ink-soft, #6b665e); }
+.rzf-quote svg { flex: none; margin-top: 1px; }
+.rzf-ex { list-style: none; margin: 8px 0 0 !important; padding: 8px 10px !important; border-radius: 12px; background: var(--color-surface, #fff); border: 1px dashed color-mix(in srgb, var(--color-accent, #c4673f) 28%, transparent); }
+.rzf-ex li { display: flex; flex-direction: column; margin: 0 0 6px; }
+.rzf-ex li:last-child { margin-bottom: 0; }
+.rzf-ex span { font-weight: 600; }
+.rzf-ex small { font-size: 12.5px; color: var(--rz-ink-soft, #6b665e); }
+.rzf-tools { display: flex; gap: 6px; margin-top: 6px; }
+.rzf-say {
+  display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; cursor: pointer; padding: 3px 8px 3px 6px;
+  border-radius: 999px; font: inherit; font-size: 12px; font-weight: 600; color: var(--color-accent-700, #8c3f20);
+}
+.rzf-say:hover, .rzf-say.on { background: color-mix(in srgb, var(--color-accent, #c4673f) 12%, transparent); }
+.rzf-msg.is-welcome .rzf-bubble { font-size: 13.5px; }
+.rzf-follow .rzf-chip { font-size: 12px; }
+
+.rzf-dots { display: inline-flex; gap: 4px; margin-right: 8px; vertical-align: middle; }
+.rzf-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent, #c4673f); animation: rzf-dot 1.1s ease-in-out infinite; }
+.rzf-dots i:nth-child(2) { animation-delay: 0.15s; }
+.rzf-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes rzf-dot { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+.rzf-typing-t { font-size: 13px; color: var(--rz-ink-soft, #6b665e); margin-right: 10px; }
+.rzf-err { font-size: 13px; padding: 8px 10px; border-radius: 12px; background: var(--rz-bad-bg, #fbe9e4); color: var(--rz-bad, #a8402a); }
+
+/* La série proposée */
+.rzf-offer { border-radius: 14px; padding: 10px 12px; background: var(--color-surface, #fff); border: 1px solid var(--color-accent-300, #e7a98b); box-shadow: var(--shadow-sm); display: flex; flex-direction: column; gap: 3px; }
+.rzf-offer-k { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--color-accent-700, #8c3f20); }
+.rzf-offer-t { font-weight: 700; font-size: 14.5px; }
+.rzf-offer-meta { font-size: 12.5px; color: var(--rz-ink-soft, #6b665e); }
+.rzf-offer-focus { font-size: 12.5px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.rzf-offer-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.rzf-offer-btns .btn { height: 32px; font-size: 13px; }
+.rzf-offer-done { font-size: 12.5px; margin-top: 4px; color: var(--rz-good, #3c7d4f); }
+.rzf-offer.is-declined { opacity: 0.75; border-style: dashed; }
+.rzf-offer.is-declined .rzf-offer-done { color: var(--rz-ink-soft, #6b665e); }
+
+/* ── Le pied : contexte, autres manières, saisie ───────────────────────── */
+.rzf-foot { flex: none; padding: 8px 10px 10px; border-top: 1px solid var(--rz-line, rgba(0, 0, 0, 0.08)); display: flex; flex-direction: column; gap: 7px; background: var(--color-surface, #fff); }
+.rzf-foot [data-rzf-chips] { display: flex; flex-direction: column; gap: 7px; }
+.rzf-foot [data-rzf-chips]:empty { display: none; }
+.rzf-ways { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 1px; }
+.rzf-ways::-webkit-scrollbar { display: none; }
+.rzf-ways .rzf-chip { flex: none; }
+.rzf-ctx {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%; border: 1px dashed var(--color-divider, rgba(0, 0, 0, 0.15));
+  background: transparent; border-radius: 999px; padding: 3px 9px; font: inherit; font-size: 12px; color: var(--rz-ink-soft, #6b665e); cursor: pointer;
+}
+.rzf-ctx span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rzf-ctx.on { border-style: solid; border-color: var(--color-accent-300, #e7a98b); color: var(--color-accent-800, #6e3016); background: color-mix(in srgb, var(--color-accent-100, #f6e3d8) 60%, transparent); }
+.rzf-ctx.is-sel { cursor: default; }
+.rzf-ctx.is-sel button { border: 0; background: none; cursor: pointer; font-size: 15px; line-height: 1; padding: 0 0 0 2px; color: inherit; }
+.rzf-input { display: flex; align-items: flex-end; gap: 6px; }
+.rzf-text {
+  flex: 1; min-width: 0; resize: none; min-height: 40px; max-height: 132px; padding: 9px 12px; border-radius: 14px;
+  border: 1px solid var(--color-divider, rgba(0, 0, 0, 0.14)); background: var(--color-bg, #faf6ef); color: inherit; font: inherit; font-size: 14px; line-height: 1.4;
+}
+.rzf-text:focus { outline: none; border-color: var(--color-accent-400, #d98a64); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent, #c4673f) 16%, transparent); }
+.rzf-mic, .rzf-send {
+  width: 40px; height: 40px; flex: none; border-radius: 50%; border: 0; cursor: pointer; display: grid; place-items: center; position: relative;
+}
+.rzf-mic { background: color-mix(in srgb, var(--color-text, #000) 6%, transparent); color: var(--color-neutral-800, #3a362f); }
+.rzf-mic:hover { background: color-mix(in srgb, var(--color-text, #000) 11%, transparent); }
+.rzf-mic.on { background: var(--rz-bad, #a8402a); color: #fff; animation: rzf-rec 1.4s ease-in-out infinite; }
+.rzf-mic.is-busy { color: var(--color-accent-700, #8c3f20); }
+.rzf-mic-lvl { position: absolute; right: 5px; bottom: 9px; width: 3px; height: 20px; border-radius: 2px; background: rgba(255, 255, 255, 0.3); overflow: hidden; }
+.rzf-mic-lvl i { position: absolute; inset: 0; background: #fff; transform-origin: bottom; transition: transform 0.08s linear; }
+@keyframes rzf-rec { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--rz-bad, #a8402a) 40%, transparent); } 50% { box-shadow: 0 0 0 6px transparent; } }
+.rzf-send { background: var(--color-accent, #c4673f); color: #fff; }
+.rzf-send:hover { filter: brightness(1.06); }
+.rzf-mic:disabled, .rzf-send:disabled { opacity: 0.45; cursor: default; animation: none; }
+
+/* ── L'info-bulle d'une sélection ───────────────────────────────────────── */
+.rzf-tip {
+  position: fixed; z-index: 47; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px 0 4px;
+  border-radius: 999px; border: 1px solid var(--color-accent-300, #e7a98b); background: var(--color-surface, #fff); cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--color-accent-800, #6e3016); box-shadow: var(--shadow-lg, 0 12px 32px rgba(0, 0, 0, 0.2));
+  animation: rzf-open 0.16s ease both; white-space: nowrap;
+}
+.rzf-tip .rzf-face { width: 28px; height: 28px; }
+.rzf-tip:hover { background: var(--color-accent-100, #f6e3d8); }
+
+/* ── Petit écran : une feuille en bas, qui laisse voir la page ─────────── */
+@media (max-width: 600px) {
+  .rzf { --rzf-right: 14px; --rzf-bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+  /* Révizator seul (téléphone) : au-dessus des onglets du bas, sauf dans les vues plein écran. */
+  .rz-only .rzf { --rzf-bottom: calc(var(--mb-tabbar, 62px) + 12px + env(safe-area-inset-bottom, 0px)); }
+  body:has(.rz-view-session, .rzx-play-head, .rzx-srs-end) .rzf { --rzf-bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+  .rzf-fab { width: 54px; height: 54px; }
+  .rzf-fab::after { width: 20px; height: 20px; font-size: 12px; }
+  .rzf-panel, .rzf.is-big .rzf-panel {
+    left: 0; right: 0; bottom: 0; width: auto; min-height: 0; border-radius: 22px 22px 0 0; border-bottom: 0;
+    height: min(66vh, 560px); height: min(66dvh, 560px); padding-bottom: env(safe-area-inset-bottom, 0px);
+    transform-origin: bottom center; animation-name: rzf-sheet;
+  }
+  .rzf.is-big .rzf-panel { height: calc(100vh - 56px); height: calc(100dvh - 56px); }
+  @keyframes rzf-sheet { from { transform: translateY(40px); opacity: 0.4; } to { transform: none; opacity: 1; } }
+  .rzf-grab { display: block; flex: none; height: 18px; cursor: pointer; position: relative; background: var(--color-accent-100, #f6e3d8); }
+  .rzf-grab::before { content: ''; position: absolute; left: 50%; top: 7px; width: 40px; height: 4px; margin-left: -20px; border-radius: 2px; background: color-mix(in srgb, var(--color-text, #000) 22%, transparent); }
+  .rzf-head { padding-top: 2px; }
+  .rzf-avatar { width: 48px; height: 48px; }
+  .rzf-ibtn { width: 38px; height: 38px; }
+  .rzf-ibtn.is-desk { display: none; }
+  .rzf-text { font-size: 16px; }
+  .rzf-mic, .rzf-send { width: 44px; height: 44px; }
+  .rzf-chip { padding: 7px 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rzf-fab, .rzf-panel, .rzf-tip, .rzf-msg { animation: none; }
+  .rzf-face.is-mini .rzf-eye, .rzf-face.is-tiny .rzf-eye { animation: none; }
+}
