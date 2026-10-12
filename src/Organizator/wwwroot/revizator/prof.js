@@ -546,6 +546,7 @@
     };
     var job = P.job = R.uid('rzprof');
     P.busy = true; P.error = '';
+    warmFr();
     setMood('think');
     if (ROOT) { renderLog(); renderChips(); renderMic(); scrollLog(true); }
     R.gen('prof', params, { job: job }).then(function (r) {
@@ -625,9 +626,13 @@
     if (window.innerWidth <= 600) close(true);
   }
 
-  /* ══ Voix : l'anglais par les voix de Révizator, le français par celles de l'appareil ══════ */
+  /* ══ Voix : les voix naturelles de Révizator (Kokoro) pour l'anglais et le français ══════════
+     Le français a sa voix naturelle (ff_siwis, la seule de Kokoro) : l'hôte télécharge de lui-même son
+     complément (64 Ko) à la première phrase française. Sans voix naturelles, ou si ce complément ne
+     vient pas, le français passe par une voix de l'appareil (speechSynthesis). */
 
-  var SAY = { token: 0, utter: null };
+  var FR_VOICE = 'ff_siwis';
+  var SAY = { token: 0, utter: null, frFailed: false };
   function plain(text) { return String(text || '').replace(/\*\*?|`/g, '').replace(/^\s*[-•]\s+/gm, '').replace(/\n+/g, ' ').trim(); }
 
   function speak(m) {
@@ -642,7 +647,7 @@
       if (token !== SAY.token) return;
       if (i >= segs.length) { finish(); return; }
       var s = segs[i++];
-      (s.lang === 'en' ? sayEn(s.text) : sayFr(s.text)).then(next, next);
+      (s.lang === 'en' ? sayEn(s.text) : sayFr(s.text, token)).then(next, next);
     })();
     function finish() {
       if (token !== SAY.token) return;
@@ -657,6 +662,23 @@
       return pl && pl.done ? pl.done : Promise.resolve();
     } catch (e) { return Promise.resolve(); }
   }
+  function sayFr(text, token) {
+    if (R.tts.engine() !== 'kokoro' || SAY.frFailed) return sayFrDevice(text);
+    try {
+      var pl = R.tts.say(text, { key: 'rzf-say', voice: FR_VOICE, engine: 'kokoro' });
+      return pl.done.then(function (p) {
+        if (!p || p.state !== 'error' || token !== SAY.token) return null;
+        /* Voix française indisponible (complément pas téléchargé) : l'appareil, et pour toute la séance. */
+        SAY.frFailed = true;
+        return sayFrDevice(text);
+      });
+    } catch (e) { return sayFrDevice(text); }
+  }
+  /* Pendant que le professeur réfléchit, l'hôte prépare la voix française (et son complément au besoin). */
+  function warmFr() {
+    if (lang() === 'en' || R.prefs.profVoice === false || R.tts.engine() !== 'kokoro' || SAY.frFailed) return;
+    bridge.call('ttsWarm', { accent: 'fr-FR' }, 15000)['catch'](function () { /* redit à la synthèse */ });
+  }
   function frVoice() {
     var ss = window.speechSynthesis;
     if (!ss) return null;
@@ -670,7 +692,7 @@
     };
     return list.sort(function (a, b) { return score(b) - score(a); })[0];
   }
-  function sayFr(text) {
+  function sayFrDevice(text) {
     return new Promise(function (res) {
       var ss = window.speechSynthesis;
       if (!ss || typeof SpeechSynthesisUtterance === 'undefined') { res(); return; }
@@ -875,7 +897,10 @@
       h.push(R.setField('Niveau du professeur', chips('profLevel', DEPTHS.map(function (x) { return x[0]; }), DEPTHS.map(function (x) { return x[1]; }))));
       h.push('<div class="rz-set-help">Le niveau règle la profondeur des explications (de « une idée à la fois » à « explications de linguiste ») et l’anglais qu’il emploie. « Adapté à mon niveau » suit votre niveau estimé.</div>');
       h.push(R.setField('Réponses à voix haute', chips('profVoice', ['true', 'false'], ['Oui', 'Non, à l’écrit seulement'])));
-      h.push('<div class="set-card-foot">L’anglais est lu par les voix de Révizator (voix britannique masculine), le français par une voix de l’appareil. Chaque réponse compte dans le quota Claude Code ; son modèle se règle dans « Agents (Claude Code) » ci-dessus.</div></div>');
+      var st = R.tts.status(), fr = R.tts.ready()
+        ? (st.model && st.model.french ? 'Le français a sa voix naturelle (Siwis, une voix féminine : la seule voix française du modèle).' : 'Sa voix naturelle française (Siwis, 64 Ko de plus) se télécharge d’elle-même à sa première réponse en français.')
+        : 'Avec les voix naturelles (ci-dessus), il parle aussi français avec une voix naturelle ; sans elles, avec une voix de l’appareil.';
+      h.push('<div class="set-card-foot">L’anglais est lu par les voix naturelles de Révizator (voix britannique masculine). ' + esc(fr) + ' Chaque réponse compte dans le quota Claude Code ; son modèle se règle dans « Agents (Claude Code) » ci-dessus.</div></div>');
       return h.join('');
     }
   });
@@ -904,7 +929,8 @@
     return {
       reply: reply,
       speech: en ? [{ lang: 'en', text: plain(reply).slice(0, 400) }]
-        : [{ lang: 'fr', text: plain(reply).split('.').slice(0, 2).join('.') + '.' }, { lang: 'en', text: 'I’ve lost my keys. I lost my keys yesterday.' }],
+        : (mix ? [{ lang: 'en', text: 'Use the present perfect when the past still matters now.' }, { lang: 'fr', text: 'Autrement dit, c’est le résultat présent qui compte.' }, { lang: 'en', text: 'I’ve lost my keys.' }]
+          : [{ lang: 'fr', text: plain(reply).split('.').slice(0, 2).join('.') + '.' }, { lang: 'en', text: 'I’ve lost my keys. I lost my keys yesterday.' }]),
       examples: wantEx ? [] : [{ en: 'I’ve finished the report.', fr: 'J’ai fini le rapport (il est prêt).' }, { en: 'I finished the report on Monday.', fr: 'J’ai fini le rapport lundi.' }],
       followUps: en ? ['What about “for” and “since”?', 'Why “I’ve been” and not “I was”?'] : ['Et avec « for » et « since » ?', 'Pourquoi « I’ve been » et pas « I was » ?', 'Donnez-moi un exemple au travail.'],
       exercise: wantEx

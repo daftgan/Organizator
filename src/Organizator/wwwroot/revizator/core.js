@@ -135,11 +135,13 @@
 
   var KOKORO = {
     'en-US': { female: ['af_heart', 'af_bella', 'af_nicole'], male: ['am_michael', 'am_puck', 'am_fenrir'] },
-    'en-GB': { female: ['bf_emma', 'bf_isabella'], male: ['bm_george', 'bm_fable'] }
+    'en-GB': { female: ['bf_emma', 'bf_isabella'], male: ['bm_george', 'bm_fable'] },
+    /* Une seule voix française dans Kokoro v1.0 (pour le professeur), féminine. */
+    'fr-FR': { female: ['ff_siwis'], male: ['ff_siwis'] }
   };
   var VOICE_LABELS = {
     af_heart: 'Heart', af_bella: 'Bella', af_nicole: 'Nicole', am_michael: 'Michael', am_puck: 'Puck', am_fenrir: 'Fenrir',
-    bf_emma: 'Emma', bf_isabella: 'Isabella', bm_george: 'George', bm_fable: 'Fable'
+    bf_emma: 'Emma', bf_isabella: 'Isabella', bm_george: 'George', bm_fable: 'Fable', ff_siwis: 'Siwis'
   };
   var FEMALE_NAMES = /zira|aria|jenny|hazel|susan|catherine|linda|heera|emma|sonia|libby|natasha|clara|eva|michelle|ana|sara|samantha|karen|moira|tessa|female/i;
 

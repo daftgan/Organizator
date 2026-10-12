@@ -20,8 +20,9 @@ public sealed record TtsVoice(string Id, int Sid, string Accent, string Gender, 
 public sealed record TtsLine(string Id, string Voice, string Text);
 
 /// <summary>
-/// Synthese vocale anglaise neuronale, en local, sur le processeur : sherpa-onnx 1.13.8 et le modele
-/// Kokoro v1.0 (fp32), voix americaines et britanniques. Rien ne sort du poste.
+/// Synthese vocale neuronale, en local, sur le processeur : sherpa-onnx 1.13.8 et le modele
+/// Kokoro v1.0 (fp32), voix americaines et britanniques, et une voix francaise (le professeur de
+/// Revizator explique aussi en francais). Rien ne sort du poste.
 ///
 /// <list type="bullet">
 /// <item><description>Rien n'est embarque dans l'exe : les deux DLL natives (onnxruntime 1.28.2 et
@@ -34,8 +35,12 @@ public sealed record TtsLine(string Id, string Voice, string Text);
 /// reglage invalide ne leve rien a la construction : le premier appel tue alors le processus
 /// (<see cref="AccessViolationException"/>). Chaque fichier est donc verifie avant
 /// <c>new OfflineTts</c>, et les chemins passent par leur nom court 8.3.</description></item>
-/// <item><description>Une instance par accent (lexique US ou GB, choisi a la creation), chargee a la
-/// demande, liberee apres cinq minutes sans usage (pres de 1 Go chacune). Une synthese a la fois.</description></item>
+/// <item><description>Une instance par accent (lexique US ou GB, choisi a la creation ; le francais n'a pas
+/// de lexique, espeak-ng le phonetise), chargee a la demande, liberee apres cinq minutes sans usage
+/// (pres de 1 Go chacune). Une synthese a la fois.</description></item>
+/// <item><description>Le francais ne demande que deux petits fichiers d'espeak-ng de plus (<see cref="FrenchFiles"/>,
+/// 64 Ko) : ils ne comptent pas dans « voix pretes » — des voix installees avant eux restent pretes — et
+/// se telechargent d'eux-memes a la premiere phrase francaise, ou avec le reste du modele.</description></item>
 /// <item><description>Le texte est decoupe en phrases ; chacune est synthetisee, ecrite dans le cache
 /// (<c>cache\ab\&lt;cle&gt;.wav</c>, servi sous <see cref="Host"/>) et annoncee aussitot : la page commence
 /// la lecture a la premiere. Une phrase deja dite ne coute plus rien.</description></item>
@@ -61,6 +66,7 @@ public sealed class TextToSpeech
 
     public const string AccentUs = "en-US";
     public const string AccentGb = "en-GB";
+    public const string AccentFr = "fr-FR";
 
     /// <summary>Voix proposees : les mieux notees de chaque accent et de chaque sexe.</summary>
     public static readonly IReadOnlyList<TtsVoice> Voices =
@@ -75,6 +81,8 @@ public sealed class TextToSpeech
         new("bf_isabella", 22, AccentGb, "F", "C", "Isabella"),
         new("bm_george", 26, AccentGb, "M", "C", "George"),
         new("bm_fable", 25, AccentGb, "M", "C", "Fable"),
+        // La seule voix francaise de Kokoro v1.0.
+        new("ff_siwis", 30, AccentFr, "F", "B-", "Siwis"),
     ];
 
     // Revision du depot csukuangfj/kokoro-multi-lang-v1_0 (2026-09-08) : un depot personnel, les
@@ -107,7 +115,18 @@ public sealed class TextToSpeech
         new("model.onnx", 325_560_556, "b40f62b166ac8164b0627ef48a0b358eda0985e272fb03ef5252e7206305da11"),
     ];
 
-    private static readonly long ModelSize = ModelFiles.Sum(f => f.Size);
+    /// <summary>
+    /// Le francais (voix ff_siwis) : dictionnaire et langue d'espeak-ng, de la meme revision. Verifies le
+    /// 12 octobre 2026 : identiques a ceux de espeak-ng-data.tar.bz2 des modeles de sherpa-onnx, dont les
+    /// neuf fichiers anglais ci-dessus ont les memes empreintes.
+    /// </summary>
+    private static readonly Asset[] FrenchFiles =
+    [
+        new("espeak-ng-data/fr_dict", 63_727, "e399ab924c4d10beef1fc310b30ea56e4ddfd8b4b64b8ed978e9c65394d49b2d"),
+        new("espeak-ng-data/lang/roa/fr", 79, "95f44834b48c075dad13eace54d2c98ff79b81aa0074dd67eebaf66c2909eef8"),
+    ];
+
+    private static readonly long ModelSize = ModelFiles.Sum(f => f.Size) + FrenchFiles.Sum(f => f.Size);
 
     // Le code natif (espeak-ng) borne ses chemins : on garde de la marge sous MAX_PATH.
     private const int NativePathLimit = SherpaRuntime.NativePathLimit;
@@ -206,7 +225,12 @@ public sealed class TextToSpeech
             return AccentGb;
         }
 
-        throw new InvalidOperationException($"Accent inconnu : {accent} (en-US ou en-GB attendu).");
+        if (string.Equals(value, AccentFr, StringComparison.OrdinalIgnoreCase))
+        {
+            return AccentFr;
+        }
+
+        throw new InvalidOperationException($"Accent inconnu : {accent} (en-US, en-GB ou fr-FR attendu).");
     }
 
     /// <summary>Vitesse de synthese bornee, au centieme (elle entre dans la cle du cache).</summary>
@@ -284,6 +308,7 @@ public sealed class TextToSpeech
                 ["revision"] = ModelRevision,
                 ["size"] = ModelSize,
                 ["downloaded"] = model,
+                ["french"] = model && FrenchPresent(),
                 ["downloading"] = downloading,
                 ["received"] = downloading ? Interlocked.Read(ref download!.Received) : 0,
                 ["total"] = downloading ? download!.Total : 0,
@@ -304,6 +329,8 @@ public sealed class TextToSpeech
     private bool RuntimePresent() => _runtime.Present;
 
     private bool ModelPresent() => AllPresent(ModelFiles, _modelDir);
+
+    private bool FrenchPresent() => AllPresent(FrenchFiles, _modelDir);
 
     private static bool AllPresent(IEnumerable<Asset> assets, string dir)
         => assets.All(asset => Present(asset, dir));
@@ -332,7 +359,7 @@ public sealed class TextToSpeech
     /// </summary>
     public Task EnsureModelAsync(CancellationToken ct)
     {
-        if (IsReady)
+        if (IsReady && FrenchPresent())
         {
             return Task.CompletedTask;
         }
@@ -375,7 +402,7 @@ public sealed class TextToSpeech
             // Runtime supprime dans cette session (DLL chargees, donc restees) : il resert tel quel
             // (SherpaRuntime.EnsureAsync leve la marque d'effacement).
             var runtimeMissing = !_runtime.FilesPresent;
-            var missing = ModelFiles.Where(f => !Present(f, _modelDir)).ToList();
+            var missing = ModelFiles.Concat(FrenchFiles).Where(f => !Present(f, _modelDir)).ToList();
             download.Total = (runtimeMissing ? RuntimeSize : 0) + missing.Sum(f => f.Size);
             _log.Info($"TTS : telechargement des voix ({download.Total / 1_000_000} Mo : "
                 + (runtimeMissing ? "runtime sherpa-onnx " + RuntimeVersion + ", " : "")
@@ -527,6 +554,24 @@ public sealed class TextToSpeech
         accent = SanitizeAccent(accent);
         if (!IsReady)
         {
+            return;
+        }
+
+        if (accent == AccentFr && !FrenchPresent())
+        {
+            // Voix installees avant le francais : son complement (64 Ko) vient d'abord.
+            _ = EnsureModelAsync(CancellationToken.None).ContinueWith(t =>
+            {
+                if (t.IsCompletedSuccessfully)
+                {
+                    Warm(AccentFr);
+                }
+                else
+                {
+                    // L'echec est redit par la synthese elle-meme ; observe ici pour ne pas finir en exception non vue.
+                    _ = t.Exception;
+                }
+            }, TaskScheduler.Default);
             return;
         }
 
@@ -684,6 +729,12 @@ public sealed class TextToSpeech
                 var piece = pieces[p];
                 if (!TryCached(piece))
                 {
+                    if (piece.Voice.Accent == AccentFr && IsReady && !FrenchPresent())
+                    {
+                        // Voix installees avant le francais : son complement (64 Ko), en quelques secondes au plus.
+                        await EnsureModelAsync(ct).ConfigureAwait(false);
+                    }
+
                     if (!gateHeld)
                     {
                         if (!IsReady)
@@ -736,7 +787,8 @@ public sealed class TextToSpeech
                     foreach (var accent in pieces.Skip(p + 1).Select(x => x.Voice.Accent).Distinct())
                     {
                         ct.ThrowIfCancellationRequested();
-                        if (pieces.Skip(p + 1).Any(x => x.Voice.Accent == accent && !File.Exists(CachePath(x.Key))))
+                        // Le francais sans son complement attend sa phrase, qui le telechargera.
+                        if ((accent != AccentFr || FrenchPresent()) && pieces.Skip(p + 1).Any(x => x.Voice.Accent == accent && !File.Exists(CachePath(x.Key))))
                         {
                             EngineFor(accent, job);
                             used.Add(accent);
@@ -935,7 +987,8 @@ public sealed class TextToSpeech
 
     private Engine LoadEngine(string accent)
     {
-        var paths = NativeModelPaths();
+        var french = accent == AccentFr;
+        var paths = NativeModelPaths(french);
         _runtime.PrepareNative("Moteur de synthèse absent ou incomplet : supprimez puis retéléchargez les voix.", "TTS");
         var before = PrivateBytes();
         var watch = Stopwatch.StartNew();
@@ -947,8 +1000,9 @@ public sealed class TextToSpeech
         config.Model.Kokoro.Tokens = paths.Tokens;
         config.Model.Kokoro.DataDir = paths.Espeak;
         // Lexique choisi a la creation ; « en-gb » est refuse par espeak-ng (son nul) : l'anglais britannique est « en ».
-        config.Model.Kokoro.Lexicon = us ? paths.LexiconUs : paths.LexiconGb;
-        config.Model.Kokoro.Lang = us ? "en-us" : "en";
+        // Le francais n'a pas de lexique : espeak-ng (fr_dict) phonetise tout.
+        config.Model.Kokoro.Lexicon = french ? "" : (us ? paths.LexiconUs : paths.LexiconGb);
+        config.Model.Kokoro.Lang = french ? "fr" : (us ? "en-us" : "en");
         config.Model.NumThreads = Threads;
         config.Model.Provider = "cpu";
         config.Model.Debug = 0;
@@ -973,7 +1027,7 @@ public sealed class TextToSpeech
             engine = new Engine { Tts = tts, SampleRate = tts.SampleRate, LastUse = Environment.TickCount64 };
             var loadMs = watch.ElapsedMilliseconds;
             // Le tout premier appel coute 0,3 a 2 s de plus (chauffe) : on le fait a blanc.
-            Generate(engine, "Hello.", us ? 3 : 21, 1f, CancellationToken.None);
+            Generate(engine, french ? "Bonjour." : "Hello.", french ? 30 : (us ? 3 : 21), 1f, CancellationToken.None);
             _log.Info($"TTS : {accent} charge en {loadMs} ms, pret en {watch.ElapsedMilliseconds} ms ({Threads} fils, +{(PrivateBytes() - before) / 1024 / 1024} Mo)");
         }
         catch
@@ -1077,9 +1131,10 @@ public sealed class TextToSpeech
     /// Chemins remis au code natif : chaque fichier present et entier, chemins ASCII et courts (nom
     /// court 8.3 au besoin). Tout manquement est dit ici, en clair, au lieu de tuer le processus.
     /// </summary>
-    private ModelPaths NativeModelPaths()
+    private ModelPaths NativeModelPaths(bool french)
     {
-        foreach (var asset in ModelFiles)
+        var assets = french ? ModelFiles.Concat(FrenchFiles).ToArray() : ModelFiles;
+        foreach (var asset in assets)
         {
             if (!Present(asset, _modelDir))
             {
@@ -1105,7 +1160,7 @@ public sealed class TextToSpeech
                 + @"lancez Organizator avec un dossier de données plus court (par exemple --data C:\OrganizatorData).");
         }
 
-        foreach (var asset in ModelFiles)
+        foreach (var asset in assets)
         {
             if (!File.Exists(Path.Combine(dir, asset.Path.Replace('/', Path.DirectorySeparatorChar))))
             {
