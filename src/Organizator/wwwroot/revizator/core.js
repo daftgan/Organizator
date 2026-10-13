@@ -121,15 +121,15 @@
   var DEFAULT_PROFILE = { onboarded: false, goal: '', interests: '', startLevel: 'B1', weeklyGoal: 4, defaultMinutes: 20, explain: 'auto' };
 
   /* Délais d'attente de l'UI par genre (l'hôte abandonne avant, spec §4.2). */
-  var GEN_WAIT = { lesson: 330000, exercise: 180000, toeic: 600000, sw: 180000, grade: 600000, tutor: 90000, cardcheck: 70000, cardfix: 160000, prof: 120000 };
+  var GEN_WAIT = { lesson: 450000, cortex: 170000, exercise: 180000, toeic: 600000, sw: 180000, grade: 600000, tutor: 90000, cardcheck: 70000, cardfix: 160000, prof: 120000 };
   var GEN_MODEL = {
     lesson: ['lessonModel', 'lessonEffort'], exercise: ['genModel', 'genEffort'], toeic: ['genModel', 'genEffort'],
     sw: ['genModel', 'genEffort'], grade: ['gradeModel', 'gradeEffort'], tutor: ['tutorModel', ''],
-    cardcheck: ['cardModel', ''], cardfix: ['cardModel', ''], prof: ['profModel', 'profEffort']
+    cardcheck: ['cardModel', ''], cardfix: ['cardModel', ''], prof: ['profModel', 'profEffort'], cortex: ['genModel', 'genEffort']
   };
   /* Générations qui se font sans bruit : pas de ligne « en préparation » dans la barre, pas de rendu
      à leur départ ni à leur fin (la vue qui les attend se met à jour elle-même), pas de document. */
-  var QUIET_KINDS = { grade: 1, tutor: 1, cardcheck: 1, cardfix: 1, prof: 1 };
+  var QUIET_KINDS = { grade: 1, tutor: 1, cardcheck: 1, cardfix: 1, prof: 1, cortex: 1 };
   /* Générations qui jugent l'apprenant : leur contexte ne dit pas son niveau supposé (R.context). */
   var BLIND_KINDS = { grade: 1, cardcheck: 1 };
 
@@ -172,6 +172,7 @@
     arrow: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>',
     back: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"></path></svg>',
     flag: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4.5M5 4.5c4-2 7 2 14 0v9c-7 2-10-2-14 0"></path></svg>',
+    node: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><circle cx="4.5" cy="5.5" r="2"></circle><circle cx="19.5" cy="5.5" r="2"></circle><circle cx="5" cy="19" r="2"></circle><circle cx="19" cy="19" r="2"></circle><path d="M6 7l3.7 3M18 7l-3.7 3M6.5 17.6l3.3-3.4M17.5 17.6l-3.3-3.4"></path></svg>',
     globe: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12h17M12 3.5c2.5 2.6 3.6 5.4 3.6 8.5S14.5 17.9 12 20.5c-2.5-2.6-3.6-5.4-3.6-8.5S9.5 6.1 12 3.5z"></path></svg>'
   };
 
@@ -1938,7 +1939,7 @@
 
   var MODEL_FIELDS = [
     { key: 'lessonModel', effort: 'lessonEffort', label: 'Cours du jour', help: 'Cherche l’actualité, lit les articles et écrit le cours : sonnet avec un effort moyen. Deux à quatre minutes, et un peu de votre quota Claude Code.' },
-    { key: 'genModel', effort: 'genEffort', label: 'Exercices et bilans', help: 'Écrit les séries d’exercices et les bilans, sans recherche web : une à deux minutes.' },
+    { key: 'genModel', effort: 'genEffort', label: 'Exercices, bilans et cortex', help: 'Écrit les séries d’exercices et les bilans, et tient les cartes du cortex, sans recherche web : une à deux minutes.' },
     { key: 'gradeModel', effort: 'gradeEffort', label: 'Correction', help: 'Corrige l’écrit et l’oral et note les bilans : sonnet avec un effort moyen. C’est là que réfléchir paie : une note juste plutôt qu’une note rapide.' },
     { key: 'tutorModel', effort: '', label: 'Tuteur', help: 'Répond pendant la conversation : un modèle rapide garde l’échange fluide.' },
     { key: 'cardModel', effort: '', label: 'Correcteur des cartes', help: 'Relit une réponse refusée pendant les révisions et réécrit les cartes floues : un modèle rapide suffit.' },

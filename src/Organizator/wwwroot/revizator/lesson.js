@@ -32,7 +32,7 @@
   var esc = R.esc;
 
   var U = R.ui.lesson = {
-    minutes: null, topicMode: null, topicOpen: false, custom: '', newsPick: null,
+    minutes: null, topicMode: null, topicOpen: false, custom: '', newsPick: null, source: 'news', cortexPick: null, cortexOpen: false,
     error: null, cancelled: {}, menu: '', news: null, newsAt: 0, newsBusy: false,
     prepSrs: false, prepSrsDone: false, docWait: {}, docMissing: {},
     gloss: null, confirmQuit: false, drafts: {}, show: {}, grading: {}, gradeError: {},
@@ -287,7 +287,22 @@
     if (U.topicMode === 'teacher') return 'teacher';
     return R.data.nextTopic && R.data.nextTopic.title ? 'next' : 'teacher';
   }
+  /* Le nœud du cortex retenu pour le cours : choisi (vue Cortex, suggestions), sinon le premier suggéré. */
+  function cortexPick() {
+    if (!R.cortex) return null;
+    var p = U.cortexPick, g = p && R.cortex.get(p.map, p.node);
+    if (g && g.node && g.node.parent) return p;
+    var s = R.cortex.suggest(1)[0];
+    return s ? { map: s.map.id, node: s.node.id, depth: null, auto: true } : null;
+  }
+  function cortexNode(p) { var g = p && R.cortex && R.cortex.get(p.map, p.node); return g && g.node ? g : null; }
+  function cortexMode() { return U.source === 'cortex' && !!R.cortex; }
+
   function chosenTopic() {
+    if (cortexMode()) {
+      var g = cortexNode(cortexPick());
+      return g ? { title: str(g.node.title), query: str(g.node.query || g.node.title), rubric: '' } : null;
+    }
     var m = topicMode();
     if (m === 'custom') { var t = U.custom.trim().slice(0, 160); return { title: t, query: t, rubric: '' }; }
     if (m === 'next') { var n = R.data.nextTopic; return { title: str(n.title), query: str(n.query || n.title), rubric: str(n.rubric) }; }
@@ -301,14 +316,23 @@
     var minutes = [10, 20, 30, 45].indexOf(+opts.minutes) >= 0 ? +opts.minutes : (U.minutes || R.profile.defaultMinutes || 20);
     var topic = opts.timeless || opts.anotherTopic ? null : chosenTopic();
     if (opts.topic !== undefined) topic = opts.topic;
+    /* Cours du cortex : le nœud, son chemin et ce qui l'entoure ; l'agent fait sa recherche sans le menu du jour. */
+    var cortex = null;
+    if (opts.cortex !== undefined) cortex = opts.timeless ? null : opts.cortex;
+    else if (cortexMode() && !opts.timeless && !opts.anotherTopic && opts.topic === undefined) {
+      var cp = cortexPick();
+      cortex = cp ? R.cortex.lessonParams(cp.map, cp.node, cp.depth) : null;
+      if (!cortex) { R.toast('Votre cortex n’a aucun nœud à étudier : ajoutez-en un, ou débloquez-en un.'); R.go('cortex'); return; }
+    }
     var params = {
       minutes: minutes, level: clampLevel(R.globalBand()), topic: topic, voices: voices(),
       avoidRubrics: avoidRubrics(), timeless: !!opts.timeless
     };
+    if (cortex) params.cortex = cortex;
     var job = R.uid('rzlesson');
     U.error = null; U.menu = ''; U.forceIdle = false; U.lastParams = params;
-    if (topic && topicMode() === 'next' && R.data.nextTopic) { R.data.nextTopic.usedBy = job; R.save(); }
-    loadNews();
+    if (topic && !cortex && topicMode() === 'next' && R.data.nextTopic) { R.data.nextTopic.usedBy = job; R.save(); }
+    if (!cortex) loadNews();
     if (opts.srs && srsOk()) {
       U.prepSrs = true; U.prepSrsDone = false;
       startPrepSrs();
@@ -330,7 +354,7 @@
   }
 
   /* Un cours prêt (génération de cette page, ou travail réattaché après un rechargement) : intégré une fois. */
-  function integrate(id, doc, job) {
+  function integrate(id, doc, job, params) {
     if (!id || !doc) return null;
     var e = entry(id);
     var L = shape(Object.assign({ id: id }, doc));
@@ -340,6 +364,8 @@
         keywords: L.keywords.slice(0, 6), grammar: L.grammar.point, genre: L.writing.genre, level: L.level, status: 'ready',
         createdAt: num(doc.createdAt, Date.now()), doneAt: 0
       };
+      var cx = obj(doc.cortex) || (params && obj(params.cortex));
+      if (cx && cx.map && cx.node) e.cortex = { map: str(cx.map), node: str(cx.node), depth: str(cx.depth) === 'deepen' ? 'deepen' : 'intro' };
       R.data.lessons.push(e);
       var nt = R.data.nextTopic;
       if (nt && nt.usedBy && nt.usedBy === job) R.data.nextTopic = null;
@@ -367,7 +393,7 @@
       return;
     }
     var r = ev.result || {};
-    var e = integrate(r.id, r.doc, ev.job);
+    var e = integrate(r.id, r.doc, ev.job, ev.params);
     if (e && !ev.reattached) R.notify('Le cours du jour est prêt : « ' + e.title + ' ».', 'home');
     else if (e && ev.reattached) R.toast('Le cours du jour est prêt : « ' + e.title + ' ».');
   });
@@ -426,23 +452,51 @@
     var steps = PREVIEW[mins].map(function (p) { return { step: p[0], minutes: p[1] }; });
     var h = ['<section class="rz-card rzl-hero" data-state="idle"><div class="rzl-hero-main">'];
     h.push('<div class="rz-kicker">' + icon('sun') + ' Le cours d’aujourd’hui</div>');
+    var cxm = cortexMode();
     h.push('<h2 class="rzl-hero-title">Quel est le cours d’aujourd’hui ?</h2>');
-    h.push('<p class="rzl-hero-lead">Votre professeur lit l’actualité du jour et écrit un cours à votre niveau ' + R.h.level(lv) + ' : un article, une conversation à écouter, du vocabulaire, un écrit et un oral corrigés — puis trois idées pour le suivant.</p>');
+    h.push('<p class="rzl-hero-lead">' + (cxm
+      ? 'Votre professeur fait une recherche approfondie sur un nœud de votre cortex et en tire un cours à votre niveau ' + R.h.level(lv) + ' : un texte, une conversation à écouter, du vocabulaire, un écrit et un oral corrigés — puis de nouveaux sous-thèmes pour la carte.'
+      : 'Votre professeur lit l’actualité du jour et écrit un cours à votre niveau ' + R.h.level(lv) + ' : un article, une conversation à écouter, du vocabulaire, un écrit et un oral corrigés — puis trois idées pour le suivant.') + '</p>');
     if (U.error) h.push(errorHtml(U.error));
     h.push('<div class="rzl-form">');
+    if (R.cortex) h.push('<div class="rzl-form-row"><span class="rzl-k">Source</span>' + R.h.chips('rzl-source', ['news', 'cortex'], cxm ? 'cortex' : 'news', ['Actualité du jour', 'Mon cortex'], 'rz-lesson-source') + '</div>');
     h.push('<div class="rzl-form-row"><span class="rzl-k">Durée</span>' + R.h.chips('rzl-minutes', [10, 20, 30, 45], mins, ['10 min', '20 min', '30 min', '45 min'], 'rz-lesson-minutes') + '</div>');
-    h.push('<div class="rzl-form-row is-topic"><span class="rzl-k">Sujet</span>' + topicHtml() + '</div>');
+    h.push('<div class="rzl-form-row is-topic"><span class="rzl-k">' + (cxm ? 'Nœud' : 'Sujet') + '</span>' + (cxm ? cortexTopicHtml() : topicHtml()) + '</div>');
     h.push('</div>');
     var due = dueCount();
-    h.push('<div class="rzl-hero-actions"><button type="button" class="btn btn-primary rz-big rzl-cta" data-act="rz-lesson-prepare">' + icon('spark') + ' Préparer le cours <span class="rzl-cta-sub">≈ 2 min</span></button>');
+    h.push('<div class="rzl-hero-actions"><button type="button" class="btn btn-primary rz-big rzl-cta" data-act="rz-lesson-prepare">' + icon('spark') + ' Préparer le cours <span class="rzl-cta-sub">' + (cxm ? '≈ 3 min' : '≈ 2 min') + '</span></button>');
     if (srsOk() && due) h.push('<button type="button" class="btn btn-secondary" data-act="rz-lesson-prepare" data-srs="1">' + icon('cards') + ' Commencer par les révisions pendant la préparation · ' + esc(plural(due, 'carte')) + '</button>');
     h.push('</div>');
     var last = sorted().filter(function (l) { return l.status !== 'done' && l.day !== R.today() && num(l.createdAt, 0) > Date.now() - 3 * 86400000; }).pop();
     if (last && !U.error) h.push('<div class="rzl-hero-note">Un cours prêt vous attend depuis le ' + esc(R.fmtDayShort(last.day)) + ' : « <span lang="en">' + esc(last.title) + '</span> ». <button type="button" class="btn btn-ghost" data-act="rz-lesson-start" data-id="' + esc(last.id) + '">Le commencer</button></div>');
     if (t && t.status === 'done' && U.forceIdle) h.push('<div class="rzl-hero-note">Le cours du jour est déjà fait. Un deuxième ? Excellente idée. <button type="button" class="btn btn-ghost" data-act="rz-lesson-unforce">Revenir au bilan du jour</button></div>');
-    h.push('<div class="rzl-hero-foot">Rédigé par Claude à partir de France 24, Euronews, NPR, The Conversation… — chaque préparation compte dans votre quota Claude Code.</div>');
+    h.push('<div class="rzl-hero-foot">' + (cxm ? 'Rédigé par Claude à partir de sources de référence (encyclopédies, universités, musées, guides pratiques…)' : 'Rédigé par Claude à partir de France 24, Euronews, NPR, The Conversation…') + ' — chaque préparation compte dans votre quota Claude Code.</div>');
     h.push('</div><div class="rzl-hero-side">' + menuHtml(steps, mins, 'À peu près') + '</div></section>');
     return h.join('');
+  }
+
+  /* Le nœud du cortex à étudier : celui retenu, ou des suggestions (à approfondir, puis à étudier). */
+  function cortexTopicHtml() {
+    var p = cortexPick(), g = cortexNode(p);
+    var h = '<div class="rzl-topic">';
+    if (g) {
+      var path = R.cortex.path(p.map, p.node), st = R.cortex.status(p.map, p.node);
+      var deep = p.depth === 'deepen' || (p.depth == null && (st === 'studied' || st === 'deepen'));
+      h += '<div class="rzl-topic-cur"><span class="rzl-topic-k">' + icon('node') + ' ' + esc(path.slice(0, -1).join(' › ')) + (p.auto ? ' · suggéré' : '') + '</span><b>' + esc(g.node.title) + '</b>'
+        + '<span class="rzl-topic-pitch">' + esc((deep ? 'Approfondissement' : 'Découverte') + (R.cortex.statusLabel(st) ? ' · ' + R.cortex.statusLabel(st).toLowerCase() : '') + (g.node.summaryFr ? ' — ' + g.node.summaryFr : '')) + '</span></div>';
+    } else h += '<div class="rzl-topic-cur"><b>Aucun nœud à étudier</b><span class="rzl-topic-pitch">Ajoutez des thèmes à votre cortex, ou débloquez-en un.</span></div>';
+    if (!U.cortexOpen) return h + '<button type="button" class="btn btn-ghost rzl-topic-change" data-act="rz-lesson-cortex-open">changer</button></div>';
+    var list = R.cortex.suggest(8);
+    h += '<div class="rzl-topic-pick"><div class="rzl-npick-head"><span class="rzl-topic-k">Suggestions de vos cartes</span><button type="button" class="btn btn-ghost rzl-npick-refresh" data-act="rz-go" data-view="cortex">' + icon('node') + ' Ouvrir le cortex</button></div>';
+    if (list.length) h += '<ul class="rzl-npick-list">' + list.map(function (x) {
+      var on = g && x.map.id === p.map && x.node.id === p.node;
+      var path = R.cortex.path(x.map.id, x.node.id);
+      return '<li><button type="button" class="rzl-npick-item' + (on ? ' on' : '') + '" data-act="rz-lesson-cortex-pick" data-map="' + esc(x.map.id) + '" data-id="' + esc(x.node.id) + '" aria-pressed="' + !!on + '">'
+        + '<span class="rzl-news-src">' + esc(path.slice(0, -1).join(' › ')) + ' · ' + esc(R.cortex.statusLabel(x.s)) + (on ? ' · ' + icon('check') + ' retenu' : '') + '</span>'
+        + '<span class="rzl-npick-t">' + esc(x.node.title) + '</span></button></li>';
+    }).join('') + '</ul>';
+    else h += '<div class="rz-muted">Rien à suggérer : tout est étudié ou à débloquer. Ouvrez le cortex pour choisir.</div>';
+    return h + '</div></div>';
   }
 
   function topicHtml() {
@@ -519,7 +573,9 @@
     var h = ['<section class="rz-card rzl-hero" data-state="preparing"><div class="rzl-hero-main">'];
     h.push('<div class="rz-kicker">' + icon('sun') + ' Le cours d’aujourd’hui · en préparation</div>');
     h.push('<h2 class="rzl-hero-title">Votre professeur prépare le cours…</h2>');
-    h.push('<p class="rzl-hero-lead">' + esc((topic && topic.title ? 'Sur « ' + topic.title + ' » : il' : (j.params && j.params.timeless ? 'Un cours hors actualité : il' : 'Il choisit un sujet dans l’actualité,')) + ' lit les articles et écrit votre cours de ' + mins + ' minutes. Deux à trois minutes : vous pouvez faire autre chose, une notification vous préviendra.') + '</p>');
+    var jcx = j.params && obj(j.params.cortex);
+    h.push('<p class="rzl-hero-lead">' + esc(jcx && topic ? 'Sur « ' + topic.title + ' », de votre cortex : il cherche des sources de référence, les lit et écrit votre cours de ' + mins + ' minutes. Trois à quatre minutes : vous pouvez faire autre chose, une notification vous préviendra.'
+      : (topic && topic.title ? 'Sur « ' + topic.title + ' » : il' : (j.params && j.params.timeless ? 'Un cours hors actualité : il' : 'Il choisit un sujet dans l’actualité,')) + ' lit les articles et écrit votre cours de ' + mins + ' minutes. Deux à trois minutes : vous pouvez faire autre chose, une notification vous préviendra.') + '</p>');
     h.push(R.h.jobLine(j));
     h.push('<div class="rzl-prepbar" data-rzl-prepbar>' + R.h.progress(prepRatio(j), 'Préparation du cours') + '</div>');
     h.push('<ul class="rzl-psteps" data-rzl-steps>' + stepsInner(j) + '</ul>');
@@ -527,8 +583,17 @@
     h.push('<div class="rzl-hero-actions"><button type="button" class="btn btn-secondary" data-act="rz-lesson-cancel" data-job="' + esc(j.job) + '">' + icon('cross') + ' Annuler</button>');
     if (srsOk() && due && !U.prepSrs) h.push('<button type="button" class="btn btn-ghost" data-act="rz-lesson-prep-srs">' + icon('cards') + ' Réviser en attendant · ' + esc(plural(due, 'carte')) + '</button>');
     h.push('</div></div>');
-    h.push('<div class="rzl-hero-side">' + (U.prepSrs && srsOk() && !U.prepSrsDone ? '<div class="rzl-side-srs">' + srsHtml('lesson-prep') + '</div>' : newsHtml()) + '</div></section>');
+    h.push('<div class="rzl-hero-side">' + (U.prepSrs && srsOk() && !U.prepSrsDone ? '<div class="rzl-side-srs">' + srsHtml('lesson-prep') + '</div>' : (jcx ? cortexSideHtml(jcx) : newsHtml())) + '</div></section>');
     return h.join('');
+  }
+
+  function cortexSideHtml(c) {
+    var path = arr(c.path);
+    return '<div class="rzl-news"><div class="rzl-menu-k">' + icon('node') + ' Dans votre cortex</div>'
+      + '<div class="rzl-cx-path">' + path.map(function (t, i) { return '<span' + (i === path.length - 1 ? ' class="on"' : '') + '>' + esc(t) + '</span>'; }).join('<i>›</i>') + '</div>'
+      + (c.summary ? '<div class="rz-muted">' + esc(c.summary) + '</div>' : '')
+      + (arr(c.children).length ? '<div class="rzl-menu-k">Sous-thèmes, pour les cours suivants</div><ul class="rzl-news-list">' + arr(c.children).slice(0, 6).map(function (t) { return '<li class="rzl-news-row"><span class="rzl-news-t">' + esc(t) + '</span></li>'; }).join('') + '</ul>' : '')
+      + '</div>';
   }
 
   function srsHtml(key) { try { return R.srs.html(key) || ''; } catch (e) { return '<div class="rz-error">' + esc(e && e.message) + '</div>'; } }
@@ -555,6 +620,8 @@
 
   function metaChips(L, e) {
     var rub = (L && L.rubric) || (e && e.rubric), tone = (L && L.tone) || (e && e.tone), lv = (L && L.level) || (e && e.level);
+    var cx = e && obj(e.cortex), cp = cx && R.cortex ? R.cortex.path(cx.map, cx.node) : [];
+    if (cp.length) return '<span class="rzl-chip-rub is-cortex">' + icon('node') + ' ' + esc(cp.slice(-2).join(' › ')) + (cx.depth === 'deepen' ? ' · approfondissement' : '') + '</span>' + (lv ? R.h.level(lv) : '');
     return (rub ? '<span class="rzl-chip-rub">' + esc(rubricLabel(rub)) + (tone && TONES[tone] ? ' · ' + esc(TONES[tone]) : '') + '</span>' : '') + (lv ? R.h.level(lv) : '');
   }
 
@@ -1598,6 +1665,7 @@
       e.result = { score: sum.score, right: sum.right, total: sum.total, minutes: sum.minutes, cards: sum.cards, self: rv.self || '',
         skills: { read: sum.by.read, listen: sum.by.listen, lang: sum.by.lang }, write: sum.write || '', speak: sum.speak || '' };
       if (rv.recall) e.result.recall = str(rv.recall).slice(0, 600);
+      if (e.cortex && R.cortex) R.cortex.lessonDone(e, L);
     }
     var nt = null;
     if (rv.next === 'custom' && str(rv.custom).trim()) { var c = str(rv.custom).trim().slice(0, 160); nt = { title: c, query: c, rubric: '', pitchFr: '', tone: '', at: now }; }
@@ -1605,7 +1673,7 @@
     if (rv.next != null || nt) R.data.nextTopic = nt;
     R.tts.stopAll();
     R.setActive(null);
-    U.acc = 0; U.confirmQuit = false; U.prepUntil = {}; U.drafts = {}; U.show = {}; U.topicMode = null; U.topicOpen = false; U.custom = ''; U.newsPick = null;
+    U.acc = 0; U.confirmQuit = false; U.prepUntil = {}; U.drafts = {}; U.show = {}; U.topicMode = null; U.topicOpen = false; U.custom = ''; U.newsPick = null; U.cortexPick = null; U.cortexOpen = false;
     R.save(true);
     R.go('home');
     R.toast('Séance terminée — ' + Math.max(1, Math.round(sum.minutes)) + ' min' + (sum.score != null ? ', ' + pct(sum.score) + ' de bonnes réponses' : '') + '. À demain !');
@@ -1686,6 +1754,21 @@
     U.topicMode = 'news'; U.custom = ''; U.topicOpen = false; R.render();
   });
   R.act('rz-lesson-news-refresh', function () { loadNews(true); R.render(); });
+  R.act('rz-lesson-source', function (el) { U.source = attr(el, 'data-value') === 'cortex' ? 'cortex' : 'news'; U.topicOpen = false; U.cortexOpen = false; R.render(); });
+  R.act('rz-lesson-cortex-open', function () { U.cortexOpen = !U.cortexOpen; R.render(); });
+  R.act('rz-lesson-cortex-pick', function (el) { U.cortexPick = { map: attr(el, 'data-map'), node: attr(el, 'data-id'), depth: null }; U.cortexOpen = false; R.render(); });
+  /* Depuis la vue Cortex ou la carte de l'accueil : ce nœud, pour le cours d'aujourd'hui. */
+  R.lessonApi = {
+    pickCortex: function (mapId, nodeId, depth) {
+      U.source = 'cortex'; U.cortexPick = { map: mapId, node: nodeId, depth: depth || null }; U.cortexOpen = false; U.error = null;
+      var t = todayEntry();
+      if (t && !act() && !R.jobOf('lesson')) U.forceIdle = true;
+      R.go('home');
+      if (R.jobOf('lesson')) R.toast('Un cours est déjà en préparation : ce nœud sera proposé pour le suivant.');
+      else if (act()) R.toast('Une séance est en cours : terminez-la, puis préparez le cours sur ce nœud.');
+      R.render();
+    }
+  };
   R.input('rz-lesson-custom', function (el) { U.custom = el.value.slice(0, 160); U.topicMode = U.custom.trim() ? 'custom' : (U.newsPick ? 'news' : null); });
   R.act('rz-lesson-prepare', function (el) { prepare({ srs: attr(el, 'data-srs') === '1' }); });
   R.act('rz-lesson-prep-srs', function () {
@@ -1698,7 +1781,7 @@
   R.act('rz-lesson-retry', function () {
     var p = U.error && U.error.params;
     U.error = null;
-    prepare(p ? { minutes: p.minutes, topic: p.topic || null, timeless: !!p.timeless } : {});
+    prepare(p ? { minutes: p.minutes, topic: p.topic || null, timeless: !!p.timeless, cortex: p.cortex || null } : {});
   });
   R.act('rz-lesson-timeless', function () { var p = U.error && U.error.params; U.error = null; prepare({ minutes: p && p.minutes, timeless: true }); });
   R.act('rz-lesson-error-close', function () { U.error = null; R.render(); });
