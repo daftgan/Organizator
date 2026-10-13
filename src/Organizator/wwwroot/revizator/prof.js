@@ -9,12 +9,17 @@
    paraître une info-bulle « Demander à Oliver ». Masqué pendant un bilan (conditions d'examen) et une
    conversation avec le tuteur.
 
-   Génération : R.gen('prof', { lang, depth, level, way, screen: { view, text }, selection, history })
+   Génération : R.gen('prof', { lang, depth, level, tone, length, chat, address, way, screen: { view, text }, selection, history })
    → { reply, speech: [{ lang, text }], examples: [{ en, fr }], followUps, exercise: { offer, skill, type,
    minutes, focus, titleFr } } (hôte : ProfGenre de LearningAgent.cs ; modèle profModel / profEffort).
    Préférences (R.prefs) : profEnabled (le professeur existe ou non), profLang (auto | fr | mix | en),
-   profLevel (auto | a2 | b1 | b2 | c1 : profondeur des explications et anglais du professeur), profVoice
-   (réponses lues à voix haute). Discussion gardée dans R.data.prof.chat (60 messages au plus).
+   profLevel (auto | a2 | b1 | b2 | c1 : profondeur des explications et anglais du professeur), profTone
+   (warm | casual | direct | funny | strict), profLength (short | normal | long), profChat (none | some | lots :
+   la part de small talk), profAddress (vous | tu), profVoice (réponses lues à voix haute), profVoices (two :
+   l'anglais a sa propre voix | one : Tom dit tout), profVoiceEn (la voix anglaise, '' = britannique masculine),
+   profFresh (une question partie d'un passage sélectionné ouvre une nouvelle discussion). Tous se règlent
+   dans Réglages › Révizator › Professeur, et dans le tiroir de la roue dentée du panneau.
+   Discussion gardée dans R.data.prof.chat (60 messages au plus).
    Le panneau vit hors de #page-host (dans <body>) : le rendu de la page ne le réécrit jamais ; ses
    parties se mettent à jour sur place. Styles : prof.css (préfixe .rzf-).
    ═══════════════════════════════════════════════════════════════════════ */
@@ -37,8 +42,20 @@
   /* Vues où il se retire : un bilan en cours (conditions d'examen), une conversation avec le tuteur. */
   var HIDE_WHEN = '.rzt-exam, .rzv-chathead';
 
-  var LANGS = [['fr', 'FR', 'En français'], ['mix', 'Mix', 'Anglais et français mêlés'], ['en', 'EN', 'In English']];
   var DEPTHS = [['auto', 'Adapté à mon niveau'], ['a2', 'Facile · A2'], ['b1', 'Intermédiaire · B1'], ['b2', 'Avancé · B2'], ['c1', 'Expert · C1']];
+  /* Les réglages du professeur : [ préférence, libellé, [ [valeur, libellé], … ] ] (valeurs en chaînes ; vrai / faux
+     redeviennent des booléens). Les mêmes dans le tiroir du panneau et dans Réglages › Révizator. */
+  var SETTINGS = [
+    ['profLang', 'Langue', [['auto', 'Selon mon niveau'], ['fr', 'Français'], ['mix', 'Mix'], ['en', 'English']]],
+    ['profTone', 'Ton', [['warm', 'Chaleureux'], ['casual', 'Copain'], ['direct', 'Direct'], ['funny', 'Blagueur'], ['strict', 'Exigeant']]],
+    ['profLength', 'Longueur', [['short', 'Court'], ['normal', 'Moyen'], ['long', 'Détaillé']]],
+    ['profChat', 'Small talk', [['none', 'Droit au but'], ['some', 'Un peu'], ['lots', 'Bavard']]],
+    ['profAddress', 'Il vous parle', [['vous', 'Vouvoiement'], ['tu', 'Tutoiement']]],
+    ['profLevel', 'Niveau', DEPTHS],
+    ['profVoices', 'Voix', [['two', 'Deux voix (FR / EN)'], ['one', 'Une seule voix']]],
+    ['profFresh', 'Texte sélectionné', [['true', 'Nouvelle discussion'], ['false', 'Dans la discussion']]]
+  ];
+  var PREF_RE = /^prof(Enabled|Voice|Lang|Level|Tone|Length|Chat|Address|Voices|VoiceEn|Fresh)$/;
   var WAYS = [
     /* [ id, bouton (fr), bouton (en), ce que dit l'apprenant (fr), (en) ] */
     ['simpler', 'Plus simple', 'Simpler', 'Plus simple, s’il vous plaît.', 'Simpler, please.'],
@@ -68,6 +85,8 @@
     return e === 'en' ? 'en' : (e === 'mixed' ? 'mix' : 'fr');
   }
   function t(fr, en) { return lang() === 'en' ? en : fr; }
+  function tu() { return R.isLoaded() && R.prefs.profAddress === 'tu'; }
+  function pref(name, fallback) { var v = R.isLoaded() ? R.prefs[name] : null; return v == null || v === '' ? fallback : String(v); }
   function wayDef(id) { for (var i = 0; i < WAYS.length; i++) if (WAYS[i][0] === id) return WAYS[i]; return null; }
 
   /* ══ Avatar : un professeur dessiné (cheveux grisonnants, lunettes, moustache, veste) ══════════ */
@@ -302,38 +321,30 @@
     var el = ROOT.querySelector('[data-rzf-headbtns]');
     var voice = R.prefs.profVoice !== false;
     el.innerHTML = '<button type="button" class="rzf-ibtn' + (voice ? ' on' : '') + '" data-act="rz-prof-voice" aria-pressed="' + voice + '" title="' + (voice ? 'Réponses lues à voix haute (couper)' : 'Réponses écrites seulement (lire à voix haute)') + '">' + speakerIcon(voice) + '</button>'
-      + '<button type="button" class="rzf-ibtn' + (P.gear ? ' on' : '') + '" data-act="rz-prof-gear" aria-expanded="' + !!P.gear + '" title="Niveau et réglages du professeur">' + ICON.gear + '</button>'
+      + '<button type="button" class="rzf-ibtn' + (P.gear ? ' on' : '') + '" data-act="rz-prof-gear" aria-expanded="' + !!P.gear + '" title="Réglages du professeur : langue, ton, longueur, voix…">' + ICON.gear + '</button>'
       + '<button type="button" class="rzf-ibtn" data-act="rz-prof-new" title="Nouvelle discussion">' + ICON.fresh + '</button>'
       + '<button type="button" class="rzf-ibtn is-desk" data-act="rz-prof-big" title="' + (P.big ? 'Réduire le panneau' : 'Agrandir le panneau') + '">' + (P.big ? ICON.small : ICON.big) + '</button>'
       + '<button type="button" class="rzf-ibtn" data-act="rz-prof-close" title="Fermer (Échap)">' + ICON.close + '</button>';
   }
 
+  /* Le tiroir de la roue dentée : les réglages du professeur, rien d'affiché quand il est fermé. */
   function renderBar() {
     var el = ROOT.querySelector('[data-rzf-bar]');
-    var l = lang(), auto = !/^(fr|en|mix)$/.test(R.prefs.profLang || '');
-    var h = '<div class="rzf-seg" role="radiogroup" aria-label="Langue des explications">' + LANGS.map(function (x) {
-      var on = x[0] === l;
-      return '<button type="button" role="radio" aria-checked="' + on + '" class="' + (on ? 'on' : '') + '" data-act="rz-prof-lang" data-value="' + x[0] + '" title="' + esc(x[2]) + '">' + esc(x[1]) + '</button>';
-    }).join('') + '</div>';
-    h += '<span class="rzf-level" title="Niveau du professeur">' + esc(depthLabel()) + '</span>';
-    if (P.gear) {
-      h += '<div class="rzf-gear">'
-        + '<div class="rzf-gear-k">Niveau du professeur</div>'
-        + '<div class="rzf-chips">' + DEPTHS.map(function (x) {
-          var on = (R.prefs.profLevel || 'auto') === x[0];
-          return '<button type="button" class="rzf-chip' + (on ? ' on' : '') + '" data-act="rz-prof-depth" data-value="' + x[0] + '" aria-pressed="' + on + '">' + esc(x[1]) + '</button>';
-        }).join('') + '</div>'
-        + '<div class="rzf-gear-help">Plus le niveau monte, plus les explications vont loin (nuances, exceptions, termes exacts) et plus son anglais est riche.</div>'
-        + '<div class="rzf-gear-row"><button type="button" class="rzf-chip" data-act="rz-prof-lang" data-value="auto"' + (auto ? ' aria-pressed="true"' : '') + '>Langue selon mon niveau</button>'
-        + '<button type="button" class="rzf-link" data-act="rz-settings">Tous les réglages…</button></div>'
-        + '</div>';
-    }
-    el.innerHTML = h;
+    if (!P.gear) { el.innerHTML = ''; return; }
+    el.innerHTML = '<div class="rzf-gear">' + SETTINGS.map(function (x) {
+      return '<div class="rzf-gear-k">' + esc(x[1]) + '</div>' + prefChips(x[0], x[2], 'rzf-chips', 'rzf-chip');
+    }).join('')
+      + '<div class="rzf-gear-row"><button type="button" class="rzf-link" data-act="rz-settings">Tous les réglages…</button></div>'
+      + '</div>';
   }
-  function depthLabel() {
-    var v = R.prefs.profLevel || 'auto';
-    for (var i = 0; i < DEPTHS.length; i++) if (DEPTHS[i][0] === v) return v === 'auto' ? 'Niveau ' + R.globalBand() : DEPTHS[i][1];
-    return '';
+  /* Une rangée de choix pour une préférence (le tiroir et Réglages s'en servent). */
+  function prefChips(name, opts, wrap, cls) {
+    var cur = R.prefs[name] == null ? '' : String(R.prefs[name]);
+    if (name === 'profLevel' || name === 'profLang') cur = cur || 'auto';
+    return '<div class="' + wrap + '" role="radiogroup">' + opts.map(function (o) {
+      var on = String(o[0]) === cur;
+      return '<button type="button" role="radio" aria-checked="' + on + '" class="' + cls + (on ? ' on' : '') + '" data-act="rz-prof-pref" data-name="' + name + '" data-value="' + esc(String(o[0])) + '">' + esc(o[1]) + '</button>';
+    }).join('') + '</div>';
   }
 
   function md(text) {
@@ -354,8 +365,10 @@
       ? ['Can you explain what’s on my screen?', 'Present perfect or simple past?', 'What are my weak points?', 'Suggest some exercises for me.']
       : ['Expliquez-moi ce qui est à l’écran.', 'Present perfect ou prétérit ?', 'Quels sont mes points faibles ?', 'Proposez-moi des exercices.'];
     return '<div class="rzf-msg is-prof is-welcome"><div class="rzf-bubble">'
-      + md(t('Bonjour ! Je suis **' + NAME + '**, votre professeur d’anglais. Demandez-moi d’expliquer ce que vous voyez à l’écran, un mot, une règle — ce que vous voulez. Je peux l’expliquer de plusieurs manières, et vous préparer des exercices là-dessus.\n\nAstuce : sélectionnez un passage de la page, puis « Demander à ' + NAME + ' ».',
-        'Hello! I’m **' + NAME + '**, your English teacher. Ask me to explain what’s on your screen, a word, a rule — anything you like. I can explain it in several ways, and prepare exercises on it.\n\nTip: select some text on the page, then “Demander à ' + NAME + '”.'))
+      + md(t(tu()
+        ? 'Salut ! Moi c’est **' + NAME + '**. Une question sur ce qui est à l’écran, un mot, une règle, ou juste envie de papoter en anglais ? Je suis là.\n\nAstuce : sélectionne un passage de la page, puis « Demander à ' + NAME + ' ».'
+        : 'Bonjour ! Je suis **' + NAME + '**. Une question sur ce qui est à l’écran, un mot, une règle, ou simplement envie de discuter en anglais ? Je suis là.\n\nAstuce : sélectionnez un passage de la page, puis « Demander à ' + NAME + ' ».',
+        'Hi! I’m **' + NAME + '**. A question about what’s on your screen, a word, a rule — or just fancy a chat in English? I’m all ears.\n\nTip: select some text on the page, then “Demander à ' + NAME + '”.'))
       + '</div><div class="rzf-follow">' + starters.map(function (s) {
         return '<button type="button" class="rzf-chip" data-act="rz-prof-ask" data-text="' + esc(s) + '">' + esc(s) + '</button>';
       }).join('') + '</div></div>';
@@ -540,6 +553,7 @@
     var c = chat();
     var params = {
       lang: lang(), depth: R.prefs.profLevel || 'auto', level: R.globalBand(), way: way,
+      tone: pref('profTone', 'warm'), length: pref('profLength', 'short'), chat: pref('profChat', 'some'), address: pref('profAddress', 'vous'),
       screen: P.screen ? { view: viewLabel(), text: screenText() } : null,
       selection: sel || '',
       history: c.slice(-16).map(function (m) { return { role: m.role, text: m.role === 'user' && m.sel ? m.text + ' [passage : « ' + m.sel + ' »]' : m.text }; })
@@ -590,9 +604,17 @@
   function explainSelection(text) {
     text = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 400);
     if (!text) return;
+    /* Un passage sélectionné : une nouvelle question, sur ce texte seulement (sauf réglage contraire). */
+    if (R.prefs.profFresh !== false && chat().length) {
+      cancel();
+      stopSpeaking();
+      store().chat = [];
+      P.error = '';
+      R.save();
+    }
     P.selection = text;
     open(false);
-    var q = lang() === 'en' ? 'Can you explain this?' : 'Pouvez-vous m’expliquer ce passage ?';
+    var q = lang() === 'en' ? 'Can you explain this?' : (tu() ? 'Tu peux m’expliquer ce passage ?' : 'Pouvez-vous m’expliquer ce passage ?');
     if (text.split(' ').length <= 3) q = lang() === 'en' ? 'What does “' + text + '” mean, and how do I use it?' : 'Que veut dire « ' + text + ' », et comment l’employer ?';
     ask(q, '');
   }
@@ -640,6 +662,10 @@
     stopSpeaking();
     var segs = arr(m.speech).filter(function (s) { return s && s.text; });
     if (!segs.length) segs = [{ lang: lang() === 'en' ? 'en' : 'fr', text: plain(m.text).slice(0, 1200) }];
+    /* Une seule voix : tout est dit d'une traite, par la voix de la langue de la discussion. */
+    if (R.prefs.profVoices === 'one' && segs.length > 1) {
+      segs = [{ lang: lang() === 'en' ? 'en' : 'fr', text: segs.map(function (s) { return s.text; }).join(' ') }];
+    }
     var token = ++SAY.token, i = 0;
     P.speakingId = m.id;
     setMood('speak');
@@ -659,7 +685,8 @@
   }
   function sayEn(text) {
     try {
-      var pl = R.tts.say(text, { key: 'rzf-say', accent: 'en-GB', gender: 'male' });
+      var v = R.prefs.profVoiceEn;
+      var pl = v && R.tts.engine() === 'kokoro' ? R.tts.say(text, { key: 'rzf-say', voice: v }) : R.tts.say(text, { key: 'rzf-say', accent: 'en-GB', gender: 'male' });
       return pl && pl.done ? pl.done : Promise.resolve();
     } catch (e) { return Promise.resolve(); }
   }
@@ -851,16 +878,6 @@
     if (!R.prefs.profVoice) stopSpeaking();
     renderHeadBtns();
   });
-  R.act('rz-prof-lang', function (el) {
-    R.prefs.profLang = el.getAttribute('data-value') || 'auto';
-    R.save();
-    renderAll();
-  });
-  R.act('rz-prof-depth', function (el) {
-    R.prefs.profLevel = el.getAttribute('data-value') || 'auto';
-    R.save();
-    renderBar();
-  });
   R.act('rz-prof-say', function (el) {
     var id = el.getAttribute('data-id');
     if (P.speakingId === id) { stopSpeaking(); return; }
@@ -875,7 +892,7 @@
   /* Réglages › Révizator › Professeur : les valeurs vrai / faux restent des booléens. */
   R.act('rz-prof-pref', function (el) {
     var f = el.getAttribute('data-name'), v = el.getAttribute('data-value');
-    if (!/^prof(Enabled|Voice|Lang|Level)$/.test(f)) return;
+    if (!PREF_RE.test(f)) return;
     R.prefs[f] = v === 'true' ? true : (v === 'false' ? false : v);
     R.save();
     if (f === 'profVoice' && v === 'false') stopSpeaking();
@@ -890,25 +907,30 @@
   R.settingsSection({
     id: 'prof', order: 20,
     html: function () {
-      var p = R.prefs;
-      var chips = function (name, values, labels) {
-        var cur = String(p[name] == null ? '' : p[name]);
-        return '<div class="rz-chips" role="radiogroup">' + values.map(function (v, i) {
-          var on = String(v) === cur;
-          return '<button type="button" role="radio" aria-checked="' + on + '" class="rz-chip' + (on ? ' on' : '') + '" data-act="rz-prof-pref" data-name="' + name + '" data-value="' + esc(String(v)) + '">' + esc(labels[i]) + '</button>';
-        }).join('') + '</div>';
-      };
+      var chips = function (name, opts) { return prefChips(name, opts, 'rz-chips', 'rz-chip'); };
+      var def = function (name) { for (var i = 0; i < SETTINGS.length; i++) if (SETTINGS[i][0] === name) return SETTINGS[i][2]; return []; };
       var h = ['<div class="set-card"><div class="set-card-head"><span class="set-card-title">Professeur</span></div>'];
-      h.push('<div class="rz-set-help">' + esc(NAME + ', un professeur toujours à portée de clic, dans le coin de la page : il explique ce qui est à l’écran ou ce que vous voulez, de plusieurs manières, à l’écrit et à voix haute, et vous propose des exercices sur ce dont vous avez parlé.') + '</div>');
-      h.push(R.setField('Afficher le professeur', chips('profEnabled', ['true', 'false'], ['Oui', 'Non'])));
-      h.push(R.setField('Langue des explications', chips('profLang', ['auto', 'fr', 'mix', 'en'], ['Selon mon niveau', 'Français', 'Mélange anglais-français', 'Anglais'])));
-      h.push(R.setField('Niveau du professeur', chips('profLevel', DEPTHS.map(function (x) { return x[0]; }), DEPTHS.map(function (x) { return x[1]; }))));
+      h.push('<div class="rz-set-help">' + esc(NAME + ', un professeur toujours à portée de clic, dans le coin de la page : il explique ce qui est à l’écran ou ce que vous voulez, discute avec vous, à l’écrit et à voix haute, et vous propose des exercices sur ce dont vous avez parlé. Ces réglages sont aussi sous la roue dentée de son panneau.') + '</div>');
+      h.push(R.setField('Afficher le professeur', chips('profEnabled', [['true', 'Oui'], ['false', 'Non']])));
+      h.push(R.setField('Langue des explications', chips('profLang', [['auto', 'Selon mon niveau'], ['fr', 'Français'], ['mix', 'Mélange anglais-français'], ['en', 'Anglais']])));
+      h.push(R.setField('Ton', chips('profTone', def('profTone'))));
+      h.push(R.setField('Longueur des réponses', chips('profLength', def('profLength'))));
+      h.push(R.setField('Small talk', chips('profChat', def('profChat'))));
+      h.push('<div class="rz-set-help">« Droit au but » : l’explication seule. « Un peu » : une phrase de conversation autour. « Bavard » : la discussion d’abord, l’explication glissée dedans.</div>');
+      h.push(R.setField('Il vous parle en', chips('profAddress', def('profAddress'))));
+      h.push(R.setField('Niveau du professeur', chips('profLevel', DEPTHS)));
       h.push('<div class="rz-set-help">Le niveau règle la profondeur des explications (de « une idée à la fois » à « explications de linguiste ») et l’anglais qu’il emploie. « Adapté à mon niveau » suit votre niveau estimé.</div>');
-      h.push(R.setField('Réponses à voix haute', chips('profVoice', ['true', 'false'], ['Oui', 'Non, à l’écrit seulement'])));
+      h.push(R.setField('Passage sélectionné', chips('profFresh', [['true', 'Ouvre une nouvelle discussion'], ['false', 'S’ajoute à la discussion']])));
+      h.push(R.setField('Réponses à voix haute', chips('profVoice', [['true', 'Oui'], ['false', 'Non, à l’écrit seulement']])));
+      h.push(R.setField('Voix', chips('profVoices', [['two', 'Deux voix : l’anglais dit par une autre voix'], ['one', 'Une seule voix (Tom dit tout, anglais compris)']])));
+      if (R.tts.engine() === 'kokoro') {
+        var en = arr(R.tts.status() && R.tts.status().voices).filter(function (v) { return /^en-/.test(v.accent || ''); });
+        if (en.length) h.push(R.setField('Sa voix anglaise', chips('profVoiceEn', [['', 'Par défaut (britannique, homme)']].concat(en.map(function (v) { return [v.id, (v.label || v.id) + (v.accent === 'en-GB' ? ' · GB' : ' · US')]; })))));
+      }
       var st = R.tts.status(), fr = R.tts.ready()
         ? (st.model && st.model.french ? 'Le français a sa voix naturelle (Tom).' : 'Sa voix naturelle française (Tom, 67 Mo) se télécharge depuis la carte Voix ci-dessus, ou d’elle-même à sa première réponse en français.')
         : 'Avec les voix naturelles (ci-dessus), il parle aussi français avec une voix naturelle ; sans elles, avec une voix de l’appareil.';
-      h.push('<div class="set-card-foot">L’anglais est lu par les voix naturelles de Révizator (voix britannique masculine). ' + esc(fr) + ' Chaque réponse compte dans le quota Claude Code ; son modèle se règle dans « Agents (Claude Code) » ci-dessus.</div></div>');
+      h.push('<div class="set-card-foot">Avec « Deux voix », l’anglais est lu par une voix anglaise naturelle (britannique masculine par défaut) et le français par Tom ; avec « Une seule voix », Tom lit tout, l’anglais avec un accent français. ' + esc(fr) + ' Chaque réponse compte dans le quota Claude Code ; son modèle se règle dans « Agents (Claude Code) » ci-dessus.</div></div>');
       return h.join('');
     }
   });

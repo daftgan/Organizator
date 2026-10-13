@@ -4856,8 +4856,10 @@ internal static class TutorGenre
 /// Chaque reponse se lit (<c>reply</c>, <c>examples</c>) et se dit (<c>speech</c> : des segments d'une
 /// seule langue, pour que le francais et l'anglais aient chacun leur voix) ; elle peut proposer une
 /// serie d'exercices sur le point discute (<c>exercise</c>), que la page lance par
-/// <c>R.exercise.launch</c>. Langue de la discussion (francais, anglais ou melange) et niveau du
-/// professeur sont choisis par l'apprenant. Rien n'est enregistre.
+/// <c>R.exercise.launch</c>. Langue de la discussion (francais, anglais ou melange), niveau, ton,
+/// longueur des reponses, part de conversation et vouvoiement / tutoiement sont choisis par
+/// l'apprenant. Ce qui se dit est la reponse ecrite lue mot pour mot : un <c>speech</c> qui s'en
+/// eloigne est remplace par la reponse, decoupee par langue (<see cref="SpokenReply"/>). Rien n'est enregistre.
 /// </summary>
 internal static class ProfGenre
 {
@@ -4866,6 +4868,10 @@ internal static class ProfGenre
 
     private static readonly string[] Langs = { "fr", "en", "mix" };
     private static readonly string[] Depths = { "auto", "a2", "b1", "b2", "c1" };
+    private static readonly string[] Tones = { "warm", "casual", "direct", "funny", "strict" };
+    private static readonly string[] Lengths = { "short", "normal", "long" };
+    private static readonly string[] Chats = { "none", "some", "lots" };
+    private static readonly string[] Addresses = { "vous", "tu" };
     private static readonly string[] Skills = { "read", "listen", "write", "speak", "lang", "pron" };
     private static readonly string[] Minutes = { "5", "10", "15" };
 
@@ -4896,22 +4902,22 @@ internal static class ProfGenre
     };
 
     private const string Persona =
-        "Tu es Oliver, le professeur d'anglais particulier de Révizator : un professeur britannique chaleureux, patient et précis, qui accompagne un adulte francophone (développeur) en train de réapprendre l'anglais. L'apprenant t'ouvre d'un clic depuis n'importe quel écran de Révizator pour te demander une explication — sur ce qu'il voit à l'écran (un exercice, une question, une correction, un mot), sur un point de grammaire, de vocabulaire ou de prononciation, ou sur ce qu'il veut — et pour en discuter avec toi. Ton but : qu'il comprenne vraiment, et qu'il retienne. Tu rends uniquement la fiche demandée.";
+        "Tu es Oliver, le professeur d'anglais particulier de Révizator : un professeur britannique patient et précis, qui accompagne un adulte francophone (développeur) en train de réapprendre l'anglais. L'apprenant t'ouvre d'un clic depuis n'importe quel écran de Révizator pour te demander une explication — sur ce qu'il voit à l'écran (un exercice, une question, une correction, un mot), sur un point de grammaire, de vocabulaire ou de prononciation, ou sur ce qu'il veut — et pour en discuter avec toi. Ton but : qu'il comprenne vraiment, et qu'il retienne. Tu rends uniquement la fiche demandée.";
 
     private const string Explaining = """
         Expliquer
         - Réponds d'abord à la question, en une ou deux phrases (la réponse, la règle, le sens), puis explique.
-        - Explique de plusieurs manières quand c'est utile : la règle dite simplement ; des exemples en anglais (examples) ; le contraste avec le français (ce qui piège un francophone) ; une image, une analogie ou un moyen mnémotechnique ; l'erreur typique et sa correction. Choisis deux ou trois angles, pas tous : la réponse se lit dans un petit panneau (120 à 220 mots dans reply le plus souvent).
+        - Explique de plusieurs manières quand c'est utile : la règle dite simplement ; des exemples en anglais (examples) ; le contraste avec le français (ce qui piège un francophone) ; une image, une analogie ou un moyen mnémotechnique ; l'erreur typique et sa correction. Un ou deux angles par réponse, pas tous : la réponse se lit dans un petit panneau, et l'apprenant demandera plus s'il le veut (la longueur voulue est donnée plus bas).
+        - Reste sur le sujet : ce qui est à l'écran, le passage sélectionné, la question posée. N'invente pas un autre sujet et ne repars pas sur un point déjà traité s'il n'est pas redemandé.
         - « ça », « cette question », « ce mot », « ici » : c'est ce qui est à l'écran ou le passage sélectionné, donnés plus bas. Pour un exercice qui attend encore sa réponse, aide à comprendre et donne des pistes ; ne donne la réponse que si elle est demandée, ou déjà corrigée à l'écran.
         - C'est une discussion : tiens compte de ce qui a déjà été dit, ne répète pas une explication déjà donnée, et termine souvent (pas toujours) par une courte question qui vérifie la compréhension ou relance — une phrase à compléter, un choix entre deux formes. Quand l'apprenant répond à ta question, dis-lui franchement si c'est juste, et pourquoi.
         - Sois exact : si l'usage varie (britannique / américain, registre, oral / écrit) ou si la règle a des exceptions, dis-le ; n'invente jamais de règle. Les erreurs typiques d'un francophone (present perfect, for / since, articles, prépositions, faux amis, accent de mot) méritent un mot sur le piège.
-        - Hors de l'anglais et de son apprentissage : réponds en une phrase et ramène gentiment vers l'anglais.
         """;
 
     private const string Fields = """
         La fiche
         - reply : ta réponse écrite. Paragraphes séparés par une ligne vide ; **gras** pour les mots ou formes clés ; une liste avec « - » en début de ligne si elle aide ; ni titre, ni tableau, ni emoji, ni lien. Les exemples développés vont plutôt dans examples.
-        - speech : ce que tu dis à voix haute — la même réponse, dite plus brièvement et plus simplement (60 à 130 mots en tout), en segments d'une seule langue chacun (lang « fr » ou « en ») dans l'ordre où tu les dis ; texte parlé, sans mise en forme, sans symbole, sans « tiret ». Un mot anglais cité dans une phrase française reste dans le segment français ; une phrase anglaise entière (un exemple à entendre) a son segment « en ».
+        - speech : reply lu à voix haute, mot pour mot — le même texte, dans le même ordre, sans rien ajouter, retirer, résumer ni reformuler ; seule la mise en forme disparaît (ni astérisque, ni tiret, ni symbole : une flèche ou un signe se dit avec des mots). Coupé en segments d'une seule langue chacun (lang « fr » ou « en »), dans l'ordre : une phrase anglaise entière a son segment « en » ; un mot ou une courte expression anglaise citée dans une phrase française reste dans le segment français. Les examples ne se disent pas.
         - examples : zéro à quatre phrases d'exemple naturelles, au niveau de l'apprenant (en), avec leur traduction (fr).
         - followUps : deux ou trois questions courtes que l'apprenant pourrait te poser ensuite, écrites à sa place, à la première personne, en français (en anglais si la langue de la discussion est l'anglais).
         - exercise : propose une série d'exercices quand l'apprenant la demande, ou quand la discussion a porté sur un point précis qui se travaille (après une vraie explication, ou s'il s'est trompé à ta question) — pas à chaque réponse, et pas de nouveau s'il vient de la laisser de côté. Alors offer = vrai, et propose-la à la fin de reply (« Voulez-vous que je vous prépare quelques exercices sur … ? ») ; skill et type parmi les listes données (type peut rester vide pour une série sur mesure) ; minutes 5, 10 ou 15 ; focus = la consigne pour l'auteur de la série, en français, précise : le point à travailler, les formes à faire pratiquer, les pièges vus dans la discussion, les phrases où l'apprenant a hésité ; titleFr = un titre court. Sinon offer = faux, chaînes vides et minutes = 0.
@@ -4941,8 +4947,34 @@ internal static class ProfGenre
     {
         "en" => "Langue de la discussion : anglais. Tout est en anglais, à la mesure du niveau indiqué ; un mot de français seulement pour un faux ami ou une traduction indispensable. examples.fr reste la traduction française.",
         "mix" => "Langue de la discussion : mélange anglais-français. L'idée est dite en anglais simple, puis reprise ou précisée en français quand elle est délicate (la règle, le piège, la nuance) ; les deux langues alternent par phrases entières, jamais au milieu d'une phrase. Les segments de speech suivent cette alternance.",
-        _ => "Langue de la discussion : français, en vouvoyant l'apprenant ; les exemples et les mots étudiés restent en anglais (traduits).",
+        _ => "Langue de la discussion : français ; les exemples et les mots étudiés restent en anglais (traduits).",
     };
+
+    private static string ToneRule(string tone) => tone switch
+    {
+        "casual" => "Ton : décontracté, comme un ami anglais qui donne un coup de main autour d'un café — phrases naturelles, expressions familières bienvenues, jamais de cours magistral.",
+        "direct" => "Ton : direct et efficace — la réponse et l'essentiel, sans détour, sans formule de politesse ni compliment.",
+        "funny" => "Ton : plein d'humour — une petite blague, un clin d'œil ou un exemple absurde qui fait sourire et aide à retenir, sans jamais sacrifier l'exactitude.",
+        "strict" => "Ton : exigeant, à l'anglaise — précis, pointilleux sur les fautes, tu pousses l'apprenant à se corriger lui-même ; poli mais jamais complaisant.",
+        _ => "Ton : chaleureux et encourageant, comme un bon professeur particulier qu'on a plaisir à retrouver.",
+    };
+
+    private static string LengthRule(string length) => length switch
+    {
+        "long" => "Longueur : réponses détaillées (150 à 300 mots dans reply) ; développe quand le sujet le mérite.",
+        "normal" => "Longueur : réponses moyennes (80 à 160 mots dans reply).",
+        _ => "Longueur : réponses courtes et légères (40 à 90 mots dans reply) — une idée, au plus un exemple dans le texte ; l'apprenant demandera plus s'il le veut.",
+    };
+
+    private static string ChatRule(string chat) => chat switch
+    {
+        "none" => "Conversation : aucune — va droit à l'explication, sans phrase d'accroche. Hors de l'anglais et de son apprentissage : réponds en une phrase et ramène vers l'anglais.",
+        "lots" => "Conversation : la discussion d'abord. Tu bavardes volontiers — tu réagis à ce que dit l'apprenant, tu lui poses une question sur lui, son travail, sa journée, tu glisses une anecdote ou un détail de la vie britannique — et l'explication reste légère, glissée dans l'échange. S'il fait la conversation, réponds comme un ami, en profitant de l'échange pour lui faire pratiquer l'anglais.",
+        _ => "Conversation : un peu de small talk — une phrase naturelle de contact (réagir à ce qu'il dit, une remarque légère, un encouragement sincère) avant ou après l'explication, comme dans une vraie discussion. S'il parle d'autre chose que l'anglais, réponds-lui simplement, puis ramène doucement vers l'anglais.",
+    };
+
+    private static string AddressRule(string address)
+        => address == "tu" ? "Tu tutoies l'apprenant (en français)." : "Tu vouvoies l'apprenant (en français).";
 
     private static string DepthRule(string depth, string level) => depth switch
     {
@@ -4959,6 +4991,10 @@ internal static class ProfGenre
         var level = Levels.Normalize(LJ.Str(p, "level", 10));
         var lang = LJ.Pick(LJ.Str(p, "lang", 4), Langs, "fr");
         var depth = LJ.Pick(LJ.Str(p, "depth", 4), Depths, "auto");
+        var tone = LJ.Pick(LJ.Str(p, "tone", 10), Tones, "warm");
+        var length = LJ.Pick(LJ.Str(p, "length", 10), Lengths, "short");
+        var chat = LJ.Pick(LJ.Str(p, "chat", 10), Chats, "some");
+        var address = LJ.Pick(LJ.Str(p, "address", 4), Addresses, "vous");
         var way = LJ.Str(p, "way", 20);
         var screen = LJ.Obj(p, "screen");
         var selection = LJ.Str(p, "selection", 600);
@@ -4967,6 +5003,10 @@ internal static class ProfGenre
         sb.Append(Levels.Line(level, "Niveau estimé de l'apprenant")).Append('\n');
         sb.Append(LangRule(lang)).Append('\n');
         sb.Append(DepthRule(depth, level)).Append('\n');
+        sb.Append(ToneRule(tone)).Append('\n');
+        sb.Append(LengthRule(length)).Append('\n');
+        sb.Append(ChatRule(chat)).Append('\n');
+        sb.Append(AddressRule(address)).Append('\n');
         if (r.Context.Length > 0)
         {
             sb.Append("\nCe que l'on sait de l'apprenant :\n").Append(r.Context.Trim()).Append('\n');
@@ -5031,9 +5071,10 @@ internal static class ProfGenre
             }
         }
 
-        if (speech.Count == 0)
+        // Ce qui se dit doit etre ce qui s'ecrit : un speech vide, resume ou hors sujet cede la place a la reponse.
+        if (!SpokenReply.Matches(reply, speech.Select(s => LJ.Str(s, "text", 800))))
         {
-            speech.Add(new JsonObject { ["lang"] = lang == "en" ? "en" : "fr", ["text"] = Speech.Clean(reply.Replace("*", "").Replace("\n- ", "\n"), null, 1200) });
+            speech = SpokenReply.Segments(reply, lang);
         }
 
         var examples = new JsonArray();
@@ -5087,6 +5128,69 @@ internal static class ProfGenre
         value = Regex.Replace(value, @"^#{1,6}\s*", "", RegexOptions.Multiline);
         return value.Trim();
     }
+}
+
+/// <summary>
+/// La reponse ecrite du professeur, telle qu'elle se dit : <see cref="Matches"/> verifie qu'un
+/// <c>speech</c> du modele reprend bien la reponse (presque tous ses mots viennent d'elle, et il en
+/// couvre l'essentiel) ; <see cref="Segments"/> la decoupe sinon en phrases, chacune rangee en
+/// francais ou en anglais d'apres ses mots-outils et ses accents, les voisines de meme langue reunies.
+/// </summary>
+internal static class SpokenReply
+{
+    private static readonly Regex Word = new(@"\p{L}+(?:['’]\p{L}+)*", RegexOptions.CultureInvariant);
+    private static readonly Regex Sentence = new(@"(?<=[.!?…:;])\s+|\n+", RegexOptions.CultureInvariant);
+    private static readonly Regex FrenchMark = new(@"[àâçéèêëîïôûùœ]|\b(?:le|la|les|des|du|une?|est|et|que|qui|pour|avec|dans|vous|tu|je|il|on|ce|cette|ça|pas|mais|ou|où|si|au|aux|sur|par|plus|très|quand|comme|c['’]est|qu['’]|l['’]|d['’])\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex EnglishMark = new(@"\b(?:the|is|are|you|i|to|of|and|it|that|with|for|when|have|has|was|were|this|what|your|my|do|does|did|can|will|would)\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    public static bool Matches(string reply, IEnumerable<string> spoken)
+    {
+        var written = Words(reply);
+        var said = spoken.SelectMany(Words).ToList();
+        if (said.Count == 0 || written.Count == 0)
+        {
+            return false;
+        }
+
+        var known = new HashSet<string>(written, StringComparer.Ordinal);
+        var faithful = said.Count(known.Contains) / (double)said.Count;
+        return faithful >= 0.85 && said.Count >= written.Count * 0.7;
+    }
+
+    public static JsonArray Segments(string reply, string lang)
+    {
+        var plain = Regex.Replace(reply.Replace("\r", ""), @"^\s*[-•]\s+", "", RegexOptions.Multiline).Replace("*", "").Replace("`", "");
+        var segs = new List<(string Lang, string Text)>();
+        foreach (var part in Sentence.Split(plain))
+        {
+            var text = Speech.Clean(part, null, 800);
+            if (text.Length == 0)
+            {
+                continue;
+            }
+
+            var l = lang == "en" ? "en" : (EnglishMark.Matches(text).Count > FrenchMark.Matches(text).Count ? "en" : "fr");
+            if (segs.Count > 0 && segs[^1].Lang == l)
+            {
+                segs[^1] = (l, segs[^1].Text + " " + text);
+            }
+            else
+            {
+                segs.Add((l, text));
+            }
+        }
+
+        var array = new JsonArray();
+        foreach (var (l, text) in segs.Take(10))
+        {
+            array.Add(new JsonObject { ["lang"] = l, ["text"] = LJ.Clip(text, 1200) });
+        }
+
+        return array;
+    }
+
+    private static List<string> Words(string text)
+        => Word.Matches(text ?? "").Select(m => m.Value.ToLowerInvariant().Replace('’', '\'')).ToList();
 }
 
 // ============================================================================ cortex
