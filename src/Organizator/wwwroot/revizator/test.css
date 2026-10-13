@@ -6,6 +6,7 @@
 .rzt-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .rzt-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rzt-sm { padding: 6px 12px; font-size: 13px; }
+.rzt-delete { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; padding: 4px 2px 8px; }
 .rzt-h2 { font-family: var(--font-heading); font-size: clamp(24px, 2.6vw, 30px); margin: 0; line-height: 1.1; }
 .rzt-lead { margin: 0; font-size: 15px; line-height: 1.55; max-width: 760px; }
 .rzt-mention { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--rz-ink-soft); }

@@ -1179,10 +1179,9 @@
   function rescoreHistory() {
     var t = TD();
     if (num(t.estimator, 1) >= ESTIMATOR_VERSION) return;
-    t.estimator = ESTIMATOR_VERSION;
     var express = t.history.filter(function (e) { return e && e.kind === 'express' && e.L && e.R; })
       .sort(function (a, b) { return a.at - b.at; });
-    if (!express.length) { R.save(); return; }
+    if (!express.length) { t.estimator = ESTIMATOR_VERSION; return; }
     refreshLearned();
     var redo = function (e, s, off) {
       var resp = arr(e.items).filter(function (r) { return r && r.s === s; }).map(function (r) {
@@ -1193,7 +1192,6 @@
       });
       return resp.length ? estimateSection(s, resp, { modelSd: modelSdFor(s) }) : null;
     };
-    var state = { L: null, R: null, T: null }, last = null;
     express.forEach(function (e) {
       ['L', 'R'].forEach(function (s) {
         var off = num(e[s].offset, 0), est = redo(e, s, off);
@@ -1204,20 +1202,74 @@
       });
       var total = combineTotal(e.L, e.R);
       e.total = { score: total.score, sd: total.sd, ci90: total.ci90, cefr: total.cefr, cefrProb: total.cefrProb };
-      var meas = { L: e.L, R: e.R, T: total }, trend = {};
-      ['L', 'R', 'T'].forEach(function (k) {
-        var st = state[k], k2 = kalman(st, meas[k], st ? (e.at - st.at) / 86400000 : 0);
-        state[k] = { mean: k2.mean, sd: k2.sd, at: e.at };
-        trend[k] = { mean: k2.mean, sd: k2.sd };
-      });
-      e.trend = trend;
-      last = e;
     });
-    t.L = state.L; t.R = state.R; t.T = state.T;
-    R.calibrate('listen', thetaOfScore('L', last.L.score), 0.7);
-    R.calibrate('read', thetaOfScore('R', last.R.score), 0.7);
+    replayTrends();
+    recalibrateFromHistory('express');
     LEARNED_KEY = '';
-    R.save();
+    /* Marqué une fois le recalcul fait : une erreur en route le laisse à refaire au prochain chargement. */
+    t.estimator = ESTIMATOR_VERSION;
+    R.save(true);
+  }
+
+  /* Tendances (filtre de Kalman) rejouées depuis les bilans gardés, dans l'ordre : après un recalcul ou la
+     suppression d'un bilan, elles ne gardent rien de ce qui a changé ou disparu. Mêmes règles qu'à la fin
+     d'un bilan (finishExpress, swFinalize). */
+  function replayTrends() {
+    var t = TD(), st = { L: null, R: null, T: null, S: null, W: null };
+    var step = function (k, meas, at, drift) {
+      var k2 = kalman(st[k], meas, st[k] ? (at - st[k].at) / 86400000 : 0, drift);
+      st[k] = { mean: k2.mean, sd: k2.sd, at: at };
+    };
+    var trendOf = function (k) { return st[k] ? { mean: st[k].mean, sd: st[k].sd } : null; };
+    t.history.slice().sort(function (a, b) { return a.at - b.at; }).forEach(function (e) {
+      if (!e) return;
+      if (e.kind === 'express' && e.L && e.R && e.total) {
+        step('L', e.L, e.at); step('R', e.R, e.at); step('T', e.total, e.at);
+        e.trend = { L: trendOf('L'), R: trendOf('R'), T: trendOf('T') };
+      } else if (e.kind === 'sw') {
+        if (e.S) step('S', { score: e.S.score, sd: 20 }, e.at, 1.5);
+        if (e.W && (!e.W.capped || !st.W || st.W.mean < e.W.score)) step('W', { score: e.W.score, sd: e.W.noEssay ? 30 : 20 }, e.at, 1.5);
+        e.trend = { S: trendOf('S'), W: trendOf('W') };
+      }
+    });
+    t.L = st.L; t.R = st.R; t.T = st.T; t.S = st.S; t.W = st.W;
+  }
+
+  /* Le niveau de l'apprenant recalé sur le dernier bilan gardé de chaque compétence (kind : 'express' ou
+     'sw', les deux sinon ; sans bilan restant, le niveau garde sa valeur : les exercices le font vivre). */
+  function recalibrateFromHistory(kind) {
+    var ex = null, sp = null, wr = null;
+    TD().history.forEach(function (e) {
+      if (!e) return;
+      if (e.kind === 'express' && e.L && e.R && (!ex || e.at > ex.at)) ex = e;
+      if (e.kind === 'sw' && e.S && (!sp || e.at > sp.at)) sp = e;
+      if (e.kind === 'sw' && e.W && (!wr || e.at > wr.at)) wr = e;
+    });
+    if (kind !== 'sw' && ex) { R.calibrate('listen', thetaOfScore('L', ex.L.score), 0.7); R.calibrate('read', thetaOfScore('R', ex.R.score), 0.7); }
+    if (kind !== 'express' && sp) R.calibrate('speak', thetaOfScore('S', sp.S.score), 0.7);
+    if (kind !== 'express' && wr) R.calibrate('write', thetaOfScore('W', wr.W.score), 0.7);
+  }
+
+  /* Supprimer un bilan (raté, interrompu, mal mesuré) : il sort de l'historique, des tendances et de
+     l'apprentissage des difficultés ; le niveau est recalé sur les bilans qui restent. */
+  function deleteBilan(id) {
+    var t = TD(), e = historyById(id);
+    if (!e) return;
+    t.history = t.history.filter(function (x) { return x !== e; });
+    replayTrends();
+    recalibrateFromHistory(e.kind);
+    LEARNED_KEY = '';
+    U.screen = 'home';
+    U.resultId = null;
+    R.save(true);
+    R.toast('Bilan du ' + frShort(e.at) + ' supprimé.');
+    R.render();
+    window.scrollTo(0, 0);
+  }
+
+  function deleteRowHtml(e) {
+    return '<div class="rzt-delete">' + btn('rz-test-delete', esc(U.arm.del === e.id ? 'Confirmer la suppression' : 'Supprimer ce bilan'), 'btn-ghost rz-danger', ' data-id="' + esc(e.id) + '"')
+      + '<span class="rz-muted">' + (U.arm.del === e.id ? 'Il disparaît de l’historique et des tendances ; votre niveau est recalé sur les bilans qui restent.' : 'Un bilan raté ou interrompu fausse vos tendances : vous pouvez le retirer.') + '</span></div>';
   }
 
   function runAbandon() {
@@ -2433,6 +2485,7 @@
     h.push('<div class="rz-grid2 rzt-details"><section class="rz-card"><div class="rz-card-head"><span class="rz-card-title">Par partie</span></div>' + partsTableHtml(e) + '</section>'
       + '<section class="rz-card"><div class="rz-card-head"><span class="rz-card-title">Par capacité</span></div>' + abilitiesHtml(e) + '</section></div>');
     h.push('<section class="rz-card rzt-review"><div class="rz-card-head"><span class="rz-card-title">Correction détaillée</span><span class="rz-card-meta">transcriptions et audio, maintenant visibles</span></div>' + reviewHtml(e) + '</section>');
+    h.push(deleteRowHtml(e));
     return h.join('');
   }
 
@@ -2601,6 +2654,7 @@
       h.push('</details>');
     });
     h.push('</section>');
+    h.push(deleteRowHtml(e));
     return h.join('');
   }
 
@@ -2791,6 +2845,12 @@
   R.act('rz-test-home', function () { examPause(); U.screen = 'home'; U.flash = ''; R.render(); });
   R.act('rz-test-progress', function () { R.go('progress'); });
   R.act('rz-test-result', function (el) { U.screen = 'result'; U.resultId = el.getAttribute('data-id'); U.rvOpen = {}; R.render(); window.scrollTo(0, 0); });
+  R.act('rz-test-delete', function (el) {
+    var id = el.getAttribute('data-id');
+    if (U.arm.del !== id) { U.arm.del = id; R.render(); setTimeout(function () { if (U.arm.del === id) { U.arm.del = null; R.render(); } }, 5000); return; }
+    U.arm.del = null;
+    deleteBilan(id);
+  });
   R.act('rz-test-hist-more', function () { U.histAll = !U.histAll; R.render(); });
   R.act('rz-test-ans', function (el, ev) {
     if (ev && ev.stopPropagation) ev.stopPropagation();
@@ -2863,7 +2923,7 @@
   /* ══ Événements ═════════════════════════════════════════════════════════ */
 
   R.on('loaded', function () {
-    rescoreHistory();
+    try { rescoreHistory(); } catch (e) { if (window.console) console.error('[revizator] recalcul des bilans', e); }
     var t = TD();
     /* Un rechargement interrompt l'examen : il reprend en pause, au début de l'ensemble d'écoute en cours. */
     if (t.run) {
