@@ -30,8 +30,10 @@
 .rzc-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; }
 .rzc-tools-l, .rzc-tools-r { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
 .rzc-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--rz-ink-soft); cursor: pointer; }
-.rzc-zoom { display: inline-flex; align-items: center; border: 1px solid var(--rz-line); border-radius: 999px; overflow: hidden; }
-.rzc-zoom .btn { border-radius: 0; min-width: 34px; padding: 0 8px; font-variant-numeric: tabular-nums; }
+.rzc-seg { display: inline-flex; align-items: center; border: 1px solid var(--rz-line); border-radius: 999px; overflow: hidden; }
+.rzc-seg .btn { border-radius: 0; min-width: 34px; padding: 0 8px; font-variant-numeric: tabular-nums; font-size: 15px; }
+.rzc-seg .btn:disabled { opacity: 0.35; }
+.rzc-zoom .btn { font-size: 13px; }
 .rzc-status { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px; font-size: 13px; background: var(--rz-good-bg); color: var(--rz-good); }
 .rzc-status svg { width: 14px; height: 14px; flex: none; }
 .rzc-status.is-busy { background: var(--color-accent-100); color: var(--color-accent-700); }
@@ -39,13 +41,14 @@
 
 /* La carte mentale */
 .rzc-canvas {
+  display: grid;
   position: relative; height: 600px; overflow: auto; border-radius: 16px; border: 1px solid var(--rz-line); overscroll-behavior: contain;
   background:
     radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--color-text) 9%, transparent) 1px, transparent 0) 0 0 / 22px 22px,
     color-mix(in srgb, var(--color-surface) 70%, transparent);
 }
 @media (max-width: 700px) { .rzc-canvas { height: 460px; } }
-.rzc-stage { position: relative; }
+.rzc-stage { position: relative; margin: auto; }
 .rzc-links { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
 .rzc-links path { fill: none; stroke: var(--rzc-c, var(--rz-line)); stroke-width: 2.2; stroke-linecap: round; opacity: 0.55; }
 .rzc-links path.is-locked { stroke-dasharray: 4 5; opacity: 0.35; }
@@ -101,7 +104,11 @@
 .rzc-dot.is-locked { border-style: dashed; border-color: var(--rz-ink-soft); }
 
 /* Le panneau du nœud */
-.rzc-side { position: sticky; top: 12px; }
+.rzc-side { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.rzc-tabs { display: flex; gap: 4px; padding: 4px; border-radius: 999px; background: color-mix(in srgb, var(--color-surface) 80%, transparent); border: 1px solid var(--rz-line); }
+.rzc-tab { flex: 1; height: 32px; border: 0; border-radius: 999px; background: none; cursor: pointer; font: inherit; font-size: 13.5px; font-weight: 700; color: var(--rz-ink-soft); display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.rzc-tab:hover { color: var(--color-text); }
+.rzc-tab.on { background: var(--color-accent); color: #fff; }
 .rzc-panel { display: flex; flex-direction: column; gap: 10px; }
 .rzc-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: var(--rz-ink-soft); }
 .rzc-crumb { border: 0; background: none; padding: 0; font: inherit; color: var(--color-accent-700); cursor: pointer; }
@@ -150,3 +157,87 @@
 .rzl-cx-path { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 13px; color: var(--rz-ink-soft); }
 .rzl-cx-path span.on { color: var(--color-text); font-weight: 700; }
 .rzl-cx-path i { font-style: normal; opacity: 0.6; }
+
+/* ── Carte vide ─────────────────────────────────────────────────────── */
+.rzc-canvas { position: relative; }
+.rzc-empty {
+  position: absolute; left: 50%; top: calc(50% + 48px); transform: translateX(-50%); width: min(520px, calc(100% - 32px));
+  display: flex; flex-direction: column; gap: 10px; padding: 18px 20px; border-radius: 18px; text-align: center;
+  background: color-mix(in srgb, var(--color-surface) 94%, transparent); border: 1px solid var(--rz-line); box-shadow: 0 8px 30px color-mix(in srgb, var(--color-text) 10%, transparent);
+}
+.rzc-empty-t { font-family: var(--font-heading); font-size: 22px; }
+.rzc-empty p { margin: 0; font-size: 14px; line-height: 1.5; color: var(--rz-ink-soft); }
+.rzc-examples { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.rzc-chat .rzc-examples { justify-content: flex-start; }
+.rzc-ex {
+  border: 1px solid var(--color-accent-300); background: var(--color-accent-100); color: var(--color-accent-800); border-radius: 999px; padding: 6px 12px;
+  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; text-align: left;
+}
+.rzc-ex:hover { border-color: var(--color-accent); }
+
+/* ── Programmes sur la carte ────────────────────────────────────────── */
+.rzc-node.is-program { flex-direction: column; gap: 1px; border-width: 2.5px; padding: 8px 14px; }
+.rzc-prog-k { font-size: 9.5px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--rzc-c, var(--color-accent-700)); }
+.rzc-tag { flex: none; font-size: 10.5px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; background: var(--color-accent-100); color: var(--color-accent-700); }
+.rzc-prog { display: flex; flex-direction: column; gap: 4px; }
+.rzc-kids.is-steps { counter-reset: step; }
+.rzc-kids.is-steps .rzc-kid > span:first-of-type::before { counter-increment: step; content: counter(step) ". "; color: var(--rz-ink-soft); font-variant-numeric: tabular-nums; }
+.rzc-confirm { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 13px; }
+.rzc-foot-note { font-size: 12px; }
+.rzc-trash-row { flex-direction: row !important; align-items: center; gap: 10px !important; flex-wrap: wrap; }
+.rzc-trash-row b { flex: 1; }
+
+/* ── Discussion avec l'agent ────────────────────────────────────────── */
+.rzc-chat { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.rzc-chat-log { display: flex; flex-direction: column; gap: 10px; max-height: 520px; min-height: 220px; overflow-y: auto; padding-right: 4px; overscroll-behavior: contain; }
+.rzc-msg { display: flex; }
+.rzc-msg.is-user { justify-content: flex-end; }
+.rzc-bubble { max-width: 92%; padding: 9px 12px; border-radius: 14px; font-size: 13.5px; line-height: 1.5; }
+.rzc-bubble p { margin: 0; }
+.rzc-bubble p + p { margin-top: 6px; }
+.rzc-msg.is-user .rzc-bubble { background: var(--color-accent); color: #fff; border-bottom-right-radius: 4px; }
+.rzc-msg.is-agent .rzc-bubble { background: color-mix(in srgb, var(--color-text) 5%, var(--color-surface)); border: 1px solid var(--rz-line); border-bottom-left-radius: 4px; }
+.rzc-typing { display: inline-flex; align-items: center; gap: 8px; color: var(--rz-ink-soft); }
+.rzc-proposal { margin-top: 8px; padding: 10px 12px; border-radius: 12px; background: var(--color-surface); border: 1.5px solid var(--color-accent-300); display: flex; flex-direction: column; gap: 6px; }
+.rzc-proposal.is-applied { border-color: var(--rz-good); }
+.rzc-proposal.is-dismissed { opacity: 0.55; }
+.rzc-proposal-k { font-size: 10.5px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-accent-700); }
+.rzc-proposal-t { font-family: var(--font-heading); font-size: 17px; line-height: 1.2; }
+.rzc-proposal ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 3px; }
+.rzc-proposal ol ol { margin-top: 3px; padding-left: 16px; list-style: lower-alpha; }
+.rzc-proposal li { font-size: 13px; }
+.rzc-proposal li > span { display: block; font-size: 12px; color: var(--rz-ink-soft); }
+.rzc-proposal-done { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; color: var(--rz-good); }
+.rzc-proposal-done svg { width: 14px; height: 14px; }
+.rzc-chat-foot { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--rz-line); padding-top: 10px; }
+.rzc-focus { font-size: 12.5px; color: var(--rz-ink-soft); }
+.rzc-chat-in { display: flex; gap: 6px; align-items: flex-end; }
+.rzc-chat-in textarea { flex: 1; min-width: 0; resize: vertical; min-height: 44px; }
+.rzc-chat-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 11.5px; }
+.rzc-chat-meta .rz-muted { font-size: 11.5px; }
+
+/* ── Versions ───────────────────────────────────────────────────────── */
+.rzc-versions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; max-height: 560px; overflow-y: auto; }
+.rzc-versions li { display: flex; align-items: center; gap: 8px; padding: 7px 4px; border-top: 1px solid var(--rz-line); }
+.rzc-versions li.on { background: var(--color-accent-100); border-radius: 10px; }
+.rzc-versions li.is-after { opacity: 0.6; }
+.rzc-v-l { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 13px; }
+.rzc-v-l .rz-muted { font-size: 11.5px; }
+
+/* ── Grand écran ────────────────────────────────────────────────────── */
+html.rzc-noscroll, html.rzc-noscroll body { overflow: hidden; }
+.rzc.is-full {
+  position: fixed; inset: 0; z-index: 50; margin: 0; max-width: none; padding: 12px 16px 16px; gap: 10px;
+  display: flex; flex-direction: column; background: var(--color-bg); overflow: hidden;
+}
+.rzc.is-full .rzc-body { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) 380px; align-items: stretch; }
+.rzc.is-full .rzc-board { min-height: 0; }
+.rzc.is-full .rzc-canvas { flex: 1; height: auto; min-height: 0; }
+.rzc.is-full .rzc-side { position: static; min-height: 0; overflow-y: auto; }
+.rzc.is-full .rzc-chat-log { max-height: none; flex: 1; }
+.rzc.is-full .rzc-chat { flex: 1; min-height: 0; }
+@media (max-width: 1000px) {
+  .rzc.is-full { overflow-y: auto; }
+  .rzc.is-full .rzc-body { grid-template-columns: minmax(0, 1fr); }
+  .rzc.is-full .rzc-canvas { height: 62vh; flex: none; }
+}

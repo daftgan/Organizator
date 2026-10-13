@@ -322,7 +322,7 @@
     else if (cortexMode() && !opts.timeless && !opts.anotherTopic && opts.topic === undefined) {
       var cp = cortexPick();
       cortex = cp ? R.cortex.lessonParams(cp.map, cp.node, cp.depth) : null;
-      if (!cortex) { R.toast('Votre cortex n’a aucun nœud à étudier : ajoutez-en un, ou débloquez-en un.'); R.go('cortex'); return; }
+      if (!cortex) { R.toast('Votre cortex n’a rien à étudier pour l’instant : demandez un programme à l’agent, ou ajoutez un nœud.'); R.go('cortex'); return; }
     }
     var params = {
       minutes: minutes, level: clampLevel(R.globalBand()), topic: topic, voices: voices(),
@@ -484,7 +484,7 @@
       var deep = p.depth === 'deepen' || (p.depth == null && (st === 'studied' || st === 'deepen'));
       h += '<div class="rzl-topic-cur"><span class="rzl-topic-k">' + icon('node') + ' ' + esc(path.slice(0, -1).join(' › ')) + (p.auto ? ' · suggéré' : '') + '</span><b>' + esc(g.node.title) + '</b>'
         + '<span class="rzl-topic-pitch">' + esc((deep ? 'Approfondissement' : 'Découverte') + (R.cortex.statusLabel(st) ? ' · ' + R.cortex.statusLabel(st).toLowerCase() : '') + (g.node.summaryFr ? ' — ' + g.node.summaryFr : '')) + '</span></div>';
-    } else h += '<div class="rzl-topic-cur"><b>Aucun nœud à étudier</b><span class="rzl-topic-pitch">Ajoutez des thèmes à votre cortex, ou débloquez-en un.</span></div>';
+    } else return h + '<div class="rzl-topic-cur"><b>Rien à étudier pour l’instant</b><span class="rzl-topic-pitch">Votre cortex se remplit au fil de l’eau : demandez un programme à l’agent (« du début de l’humanité à la fin »), ou ajoutez un nœud.</span></div><button type="button" class="btn btn-ghost rzl-topic-change" data-act="rz-go" data-view="cortex">Ouvrir le cortex</button></div>';
     if (!U.cortexOpen) return h + '<button type="button" class="btn btn-ghost rzl-topic-change" data-act="rz-lesson-cortex-open">changer</button></div>';
     var list = R.cortex.suggest(8);
     h += '<div class="rzl-topic-pick"><div class="rzl-npick-head"><span class="rzl-topic-k">Suggestions de vos cartes</span><button type="button" class="btn btn-ghost rzl-npick-refresh" data-act="rz-go" data-view="cortex">' + icon('node') + ' Ouvrir le cortex</button></div>';

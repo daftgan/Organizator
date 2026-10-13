@@ -1732,6 +1732,25 @@ internal static class LessonGenre
             sb.Append("Ce que recouvre le nœud : ").Append(summary).Append('\n');
         }
 
+        var program = LJ.Str(c, "program", 120);
+        if (program.Length > 0)
+        {
+            sb.Append("Étape ").Append(LJ.Int(c, "step")).Append(" sur ").Append(LJ.Int(c, "steps")).Append(" du programme « ").Append(program).Append(" »");
+            var before = LJ.Str(c, "prevStep", 120);
+            var after = LJ.Str(c, "nextStep", 120);
+            if (before.Length > 0)
+            {
+                sb.Append(" ; étape précédente : « ").Append(before).Append(" » (faites le lien en une phrase)");
+            }
+
+            if (after.Length > 0)
+            {
+                sb.Append(" ; étape suivante : « ").Append(after).Append(" » (ne l'anticipez pas)");
+            }
+
+            sb.Append(".\n");
+        }
+
         var deepen = LJ.Str(c, "depth", 20) == "deepen";
         sb.Append("Profondeur : ").Append(deepen ? "approfondissement (le nœud a déjà été étudié)" : "découverte").Append(".\n");
         var previous = LJ.Str(c, "previous", 300);
@@ -5326,8 +5345,11 @@ internal static class SpokenReply
 internal static class CortexGenre
 {
     private const int MaxNodes = 160;
-    private static readonly string[] Modes = { "create", "expand", "organize" };
+    private static readonly string[] Modes = { "create", "expand", "organize", "chat" };
+    private static readonly string[] Actions = { "none", "new", "revise" };
     private static readonly Regex Ref = new("^[A-Za-z0-9_-]{1,40}$", RegexOptions.CultureInvariant);
+    private const int MaxSteps = 80;
+    private const int ChatHistory = 12;
 
     private const string System = "Tu tiens le « cortex » d'un adulte francophone qui apprend l'anglais avec Organizator : des cartes mentales de ce qu'il veut savoir. Chaque carte a un nœud racine (le domaine, ex. « Mon cortex », « Bricolage », « Informatique ») et des nœuds de plus en plus précis ; chaque nœud deviendra un cours d'anglais d'une vingtaine de minutes, préparé à partir de sources de référence. Tu rends uniquement la fiche demandée.\n\n"
         + "Règles des nœuds\n"
@@ -5340,15 +5362,37 @@ internal static class CortexGenre
         + "Selon le mode\n"
         + "- create : la carte n'a que sa racine. Dresse un plan de départ : 5 à 8 grands thèmes sous la racine, puis 2 à 4 sous-thèmes pour chacun, progressifs. Tiens compte de la description et des centres d'intérêt. N'inclus pas la racine.\n"
         + "- expand : propose 3 à 5 sous-thèmes du nœud indiqué (parent = sa ref), qui ne répètent ni ses enfants existants ni d'autres nœuds de la carte. Rends seulement les nouveaux nœuds.\n"
-        + "- organize : rends la carte entière, chaque nœud existant une fois (sa ref), racine comprise (parent vide). Corrige ce qui cloche : doublons et quasi-doublons fusionnés (merged : from = le nœud absorbé, into = celui qui reste), nœuds mal placés déplacés sous le bon parent, intitulés harmonisés (garde le sens et les mots de l'utilisateur, corrige l'orthographe), nœud trop large découpé, groupe trop nombreux regroupé. Tu peux ajouter au plus 4 nouveaux nœuds pour combler un vide évident ou créer un regroupement. Ne change pas l'intitulé de la racine. Ne supprime rien sans le fusionner.\n\n"
+        + "- organize : rends la carte entière, chaque nœud existant une fois (sa ref), racine comprise (parent vide). Corrige ce qui cloche : doublons et quasi-doublons fusionnés (merged : from = le nœud absorbé, into = celui qui reste), nœuds mal placés déplacés sous le bon parent, intitulés harmonisés (garde le sens et les mots de l'utilisateur, corrige l'orthographe), nœud trop large découpé, groupe trop nombreux regroupé. Tu peux ajouter au plus 4 nouveaux nœuds pour combler un vide évident ou créer un regroupement. Ne change pas l'intitulé de la racine. Ne supprime rien sans le fusionner. Un programme (type program) garde ses étapes et leur ordre : n'y touche que pour corriger un intitulé ou fusionner un doublon évident.\n\n"
         + "noteFr : une ou deux phrases pour l'utilisateur, en français, qui disent ce que tu as fait.\n\nRéponds uniquement par la fiche demandée.\n";
 
     private const string Schema = "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"nodes\",\"merged\",\"noteFr\"],\"properties\":{\"nodes\":{\"type\":\"array\",\"description\":\"Noeuds, parents avant enfants, freres dans l'ordre d'affichage\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"ref\",\"parent\",\"title\",\"summaryFr\",\"query\"],\"properties\":{\"ref\":{\"type\":\"string\",\"description\":\"Identifiant existant, ou new1, new2... pour un nouveau noeud\"},\"parent\":{\"type\":\"string\",\"description\":\"ref du parent ; vide pour la racine\"},\"title\":{\"type\":\"string\",\"description\":\"En francais, 2 a 6 mots\"},\"summaryFr\":{\"type\":\"string\",\"description\":\"Une phrase\"},\"query\":{\"type\":\"string\",\"description\":\"Mots-cles de recherche en anglais\"}}}},\"merged\":{\"type\":\"array\",\"description\":\"organize : noeuds fusionnes\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"from\",\"into\"],\"properties\":{\"from\":{\"type\":\"string\"},\"into\":{\"type\":\"string\"}}}},\"noteFr\":{\"type\":\"string\"}}}";
+
+    // Mode chat : la conversation ou l'utilisateur concoit ses programmes avec l'agent.
+    private const string ChatSystem = "Tu es le conseiller de programmes du « cortex » d'un adulte francophone qui apprend l'anglais avec Organizator. Le cortex est une carte mentale de ce qu'il veut savoir ; il la remplit au fil de l'eau, en discutant avec toi. Un programme est une branche de la carte : une suite ordonnée d'étapes, chacune donnant un cours d'anglais d'une vingtaine de minutes, préparé à partir de sources de référence (encyclopédies, universités, musées, guides pratiques). Tu rends uniquement la fiche demandée.\n\n"
+        + "La conversation\n"
+        + "- reply : en français, en vouvoyant, bref (2 à 6 phrases), chaleureux et concret : ce que tu proposes et pourquoi cet ordre, ou la réponse à sa question. Pas de liste des étapes dans reply : elles sont dans proposal.\n"
+        + "- Quand la demande est assez claire, propose tout de suite un programme complet plutôt que de poser des questions ; pose au plus une question, seulement si la demande est vraiment ambiguë (et alors action = none).\n"
+        + "- followUps : 2 ou 3 relances courtes, à la première personne, que l'utilisateur pourrait envoyer (« Ajoute plus sur l'Égypte », « Fais-le plus court »).\n\n"
+        + "Le programme (proposal)\n"
+        + "- action : new pour un nouveau programme (ou pour réviser le brouillon en discussion, pas encore ajouté à la carte) ; revise pour modifier un programme déjà dans la carte (target = sa ref) ; none quand tu ne fais que répondre.\n"
+        + "- title : le nom du programme, en français (ex. « L'histoire de l'humanité », « Bricoler chez soi », « De l'ordinateur à l'IA ») ; summaryFr : une phrase ; query : mots-clés anglais.\n"
+        + "- steps : les étapes dans l'ordre où les étudier — chronologique pour l'histoire (ex. de la Préhistoire à aujourd'hui, puis les futurs possibles), du fondamental à l'avancé sinon. 6 à 14 étapes principales (parent vide), chacune avec 0 à 5 sous-étapes (parent = la ref de l'étape) quand elle est trop vaste pour un seul cours ; 60 étapes au plus en tout. Chaque étape : title en français, court (2 à 6 mots), summaryFr d'une phrase, query de 3 à 8 mots-clés anglais.\n"
+        + "- ref : pour une étape existante (programme de la carte ou brouillon), sa ref telle que fournie, pour la garder ; new1, new2… pour une nouvelle. Une révision rend le programme entier : une étape absente est retirée.\n"
+        + "- attach : pour un nouveau programme, la ref du nœud de la carte sous lequel le placer (un grand thème existant s'il s'y rattache clairement), sinon vide (sous la racine).\n"
+        + "- Tiens compte de la carte existante : ne refais pas un programme qui existe déjà (propose plutôt de le réviser), et des centres d'intérêt de l'utilisateur.\n"
+        + "- action = none : target, attach, title, summaryFr et query vides, steps vide.\n\nRéponds uniquement par la fiche demandée.\n";
+
+    private const string ChatSchema = "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"reply\",\"proposal\",\"followUps\"],\"properties\":{\"reply\":{\"type\":\"string\",\"description\":\"En francais, 2 a 6 phrases\"},\"proposal\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"action\",\"target\",\"attach\",\"title\",\"summaryFr\",\"query\",\"steps\"],\"properties\":{\"action\":{\"type\":\"string\",\"enum\":[\"none\",\"new\",\"revise\"]},\"target\":{\"type\":\"string\",\"description\":\"revise : ref du programme existant\"},\"attach\":{\"type\":\"string\",\"description\":\"new : ref du noeud parent, vide pour la racine\"},\"title\":{\"type\":\"string\"},\"summaryFr\":{\"type\":\"string\"},\"query\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"description\":\"Dans l'ordre d'etude, parents avant enfants\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"ref\",\"parent\",\"title\",\"summaryFr\",\"query\"],\"properties\":{\"ref\":{\"type\":\"string\"},\"parent\":{\"type\":\"string\",\"description\":\"Vide pour une etape principale, sinon la ref de l'etape\"},\"title\":{\"type\":\"string\"},\"summaryFr\":{\"type\":\"string\"},\"query\":{\"type\":\"string\"}}}}}},\"followUps\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}";
 
     public static AgentCall Compose(LearnRequest r)
     {
         var p = r.Params;
         var mode = LJ.Pick(LJ.Str(p, "mode", 20), Modes, "organize");
+        if (mode == "chat")
+        {
+            return new AgentCall("", ChatSystem, ChatSchema, ChatPrompt(r));
+        }
+
         var map = LJ.Obj(p, "map");
         var sb = new StringBuilder();
         if (r.Context.Length > 0)
@@ -5381,7 +5425,7 @@ internal static class CortexGenre
         var nodes = LJ.Objects(p, "nodes").Take(MaxNodes).ToList();
         var byParent = nodes.GroupBy(n => LJ.Str(n, "parent", 40)).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
         var ids = new HashSet<string>(nodes.Select(n => LJ.Str(n, "id", 40)), StringComparer.Ordinal);
-        sb.Append("\nCarte actuelle (ref | intitulé | état | origine) :\n");
+        sb.Append("\nCarte actuelle (ref | intitulé | état | origine | type) :\n");
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var root in nodes.Where(n => !ids.Contains(LJ.Str(n, "parent", 40))))
         {
@@ -5397,6 +5441,129 @@ internal static class CortexGenre
         return new AgentCall("", System, Schema, sb.ToString());
     }
 
+    private static string ChatPrompt(LearnRequest r)
+    {
+        var p = r.Params;
+        var map = LJ.Obj(p, "map");
+        var sb = new StringBuilder();
+        if (r.Context.Length > 0)
+        {
+            sb.Append(r.Context.Trim()).Append("\n\n");
+        }
+
+        sb.Append("Carte : « ").Append(LJ.Str(map, "title", 120)).Append(" ».\n");
+        AppendTree(sb, p, "Carte actuelle (ref | intitulé | état | origine | type ; program = un programme, step = une de ses étapes)");
+
+        var focus = LJ.Str(p, "node", 40);
+        if (focus.Length > 0)
+        {
+            sb.Append("\nNœud sélectionné par l'utilisateur (le sujet probable de son message) : ").Append(focus).Append(".\n");
+        }
+
+        var draft = LJ.Obj(p, "draft");
+        var steps = LJ.Objects(draft, "steps").Take(MaxSteps).ToList();
+        if (steps.Count > 0)
+        {
+            sb.Append("\nBrouillon en discussion, pas encore ajouté à la carte : « ").Append(LJ.Str(draft, "title", 120)).Append(" »");
+            var attach = LJ.Str(draft, "attach", 40);
+            if (attach.Length > 0)
+            {
+                sb.Append(", sous ").Append(attach);
+            }
+
+            sb.Append(" (ref | parent | intitulé) :\n");
+            foreach (var s in steps)
+            {
+                sb.Append("- ").Append(LJ.Str(s, "ref", 40)).Append(" | ").Append(LJ.Str(s, "parent", 40)).Append(" | ").Append(LJ.Str(s, "title", 100)).Append('\n');
+            }
+        }
+
+        var history = LJ.Objects(p, "history").ToList();
+        if (history.Count > 0)
+        {
+            sb.Append("\nConversation jusqu'ici :\n");
+            foreach (var m in history.Skip(Math.Max(0, history.Count - ChatHistory)))
+            {
+                sb.Append(LJ.Str(m, "role", 10) == "user" ? "Utilisateur : " : "Toi : ").Append(LJ.Str(m, "text", 1200)).Append('\n');
+            }
+        }
+
+        sb.Append("\nNouveau message de l'utilisateur : ").Append(LJ.Str(p, "message", 2000)).Append('\n');
+        sb.Append("\nRépondez, et proposez ou révisez un programme si c'est ce qu'il demande.");
+        return sb.ToString();
+    }
+
+    private static void AppendTree(StringBuilder sb, JsonObject p, string heading)
+    {
+        var nodes = LJ.Objects(p, "nodes").Take(MaxNodes).ToList();
+        var byParent = nodes.GroupBy(n => LJ.Str(n, "parent", 40)).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+        var ids = new HashSet<string>(nodes.Select(n => LJ.Str(n, "id", 40)), StringComparer.Ordinal);
+        sb.Append('\n').Append(heading).Append(" :\n");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var root in nodes.Where(n => !ids.Contains(LJ.Str(n, "parent", 40))))
+        {
+            Tree(sb, root, byParent, seen, 0);
+        }
+    }
+
+    private static JsonObject SanitizeChat(JsonObject o)
+    {
+        var reply = LJ.Str(o, "reply", 3000);
+        var x = LJ.Obj(o, "proposal");
+        var action = LJ.Pick(LJ.Str(x, "action", 10), Actions, "none");
+        var steps = new JsonArray();
+        var refs = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var s in LJ.Objects(x, "steps"))
+        {
+            var id = LJ.Str(s, "ref", 40);
+            var title = LJ.Str(s, "title", 80).TrimEnd('.', ';', ':');
+            var parent = LJ.Str(s, "parent", 40);
+            if (!Ref.IsMatch(id) || title.Length == 0 || !refs.Add(id) || steps.Count >= MaxSteps)
+            {
+                continue;
+            }
+
+            steps.Add(new JsonObject
+            {
+                ["ref"] = id,
+                ["parent"] = refs.Contains(parent) && parent != id ? parent : "",
+                ["title"] = title,
+                ["summaryFr"] = LJ.Str(s, "summaryFr", 300),
+                ["query"] = LJ.Str(s, "query", 160),
+            });
+        }
+
+        var programTitle = LJ.Str(x, "title", 80).TrimEnd('.');
+        if (action != "none" && (steps.Count == 0 || programTitle.Length == 0))
+        {
+            action = "none";
+        }
+
+        if (reply.Length == 0 && action == "none")
+        {
+            throw new InvalidOperationException("L’agent n’a rien répondu.");
+        }
+
+        var target = LJ.Str(x, "target", 40);
+        var attach = LJ.Str(x, "attach", 40);
+        return new JsonObject
+        {
+            ["mode"] = "chat",
+            ["reply"] = reply,
+            ["proposal"] = new JsonObject
+            {
+                ["action"] = action,
+                ["target"] = action == "revise" && Ref.IsMatch(target) ? target : "",
+                ["attach"] = action == "new" && Ref.IsMatch(attach) ? attach : "",
+                ["title"] = action == "none" ? "" : programTitle,
+                ["summaryFr"] = action == "none" ? "" : LJ.Str(x, "summaryFr", 300),
+                ["query"] = action == "none" ? "" : LJ.Str(x, "query", 160),
+                ["steps"] = action == "none" ? new JsonArray() : steps,
+            },
+            ["followUps"] = LJ.Array(LJ.Strings(o, "followUps", 3, 120)),
+        };
+    }
+
     private static void Tree(StringBuilder sb, JsonObject n, Dictionary<string, List<JsonObject>> byParent, HashSet<string> seen, int depth)
     {
         var id = LJ.Str(n, "id", 40);
@@ -5406,7 +5573,14 @@ internal static class CortexGenre
         }
 
         sb.Append(new string(' ', depth * 2)).Append("- ").Append(id).Append(" | ").Append(LJ.Str(n, "title", 100))
-          .Append(" | ").Append(LJ.Str(n, "status", 20)).Append(" | ").Append(LJ.Str(n, "origin", 20)).Append('\n');
+          .Append(" | ").Append(LJ.Str(n, "status", 20)).Append(" | ").Append(LJ.Str(n, "origin", 20));
+        var kind = LJ.Str(n, "kind", 20);
+        if (kind.Length > 0)
+        {
+            sb.Append(" | ").Append(kind);
+        }
+
+        sb.Append('\n');
         if (byParent.TryGetValue(id, out var children))
         {
             foreach (var c in children)
@@ -5418,6 +5592,11 @@ internal static class CortexGenre
 
     public static JsonObject Sanitize(JsonObject o, LearnRequest r)
     {
+        if (LJ.Pick(LJ.Str(r.Params, "mode", 20), Modes, "organize") == "chat")
+        {
+            return SanitizeChat(o);
+        }
+
         var nodes = new JsonArray();
         var refs = new HashSet<string>(StringComparer.Ordinal);
         foreach (var n in LJ.Objects(o, "nodes"))
