@@ -279,7 +279,11 @@ html.rzc-noscroll, html.rzc-noscroll body { overflow: hidden; }
 .rzc-side { position: sticky; top: 12px; }
 .rzc-chat-head { display: flex; align-items: baseline; gap: 8px; font-family: var(--font-heading); font-size: 18px; }
 .rzc-chat-head svg { width: 16px; height: 16px; align-self: center; }
-.rzc-chat-head .rz-muted { font-family: var(--font-body); font-size: 12.5px; margin-left: auto; }
+.rzc-model {
+  margin-left: auto; align-self: center; border: 1px solid var(--rz-line); border-radius: 999px; background: none; padding: 3px 10px; cursor: pointer;
+  font-family: var(--font-body); font-size: 12px; font-weight: 600; color: var(--rz-ink-soft);
+}
+.rzc-model:hover { border-color: var(--color-accent-400); color: var(--color-accent-700); }
 .rzc-chat-log { max-height: calc(100vh - 330px); min-height: 360px; }
 .rzc.is-full .rzc-side { overflow: hidden; display: flex; }
 .rzc.is-full .rzc-chat-log { max-height: none; }

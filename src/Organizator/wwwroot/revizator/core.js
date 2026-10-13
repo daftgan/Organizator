@@ -117,6 +117,7 @@
     tutorModel: 'haiku', cardModel: 'haiku', engine: 'auto', voiceUs: 'af_heart', voiceGb: 'bf_emma', speed: 1, retention: 0.9,
     whisperModel: 'small', tutorLive: true, tutorSensitivity: 40, tutorBargeIn: 'words',
     profEnabled: true, profLang: 'auto', profLevel: 'auto', profVoice: true, profModel: 'sonnet', profEffort: 'low',
+    cortexModel: 'sonnet', cortexEffort: 'medium',
     profTone: 'warm', profLength: 'short', profChat: 'some', profAddress: 'vous', profVoices: 'two', profVoiceEn: '', profFresh: true
   };
   var DEFAULT_PROFILE = { onboarded: false, goal: '', interests: '', startLevel: 'B1', weeklyGoal: 4, defaultMinutes: 20, explain: 'auto' };
@@ -126,7 +127,7 @@
   var GEN_MODEL = {
     lesson: ['lessonModel', 'lessonEffort'], exercise: ['genModel', 'genEffort'], toeic: ['genModel', 'genEffort'],
     sw: ['genModel', 'genEffort'], grade: ['gradeModel', 'gradeEffort'], tutor: ['tutorModel', ''],
-    cardcheck: ['cardModel', ''], cardfix: ['cardModel', ''], prof: ['profModel', 'profEffort'], cortex: ['genModel', 'genEffort']
+    cardcheck: ['cardModel', ''], cardfix: ['cardModel', ''], prof: ['profModel', 'profEffort'], cortex: ['cortexModel', 'cortexEffort']
   };
   /* Générations qui se font sans bruit : pas de ligne « en préparation » dans la barre, pas de rendu
      à leur départ ni à leur fin (la vue qui les attend se met à jour elle-même), pas de document. */
@@ -1945,7 +1946,8 @@
 
   var MODEL_FIELDS = [
     { key: 'lessonModel', effort: 'lessonEffort', label: 'Cours du jour', help: 'Cherche l’actualité, lit les articles et écrit le cours : sonnet avec un effort moyen. Deux à quatre minutes, et un peu de votre quota Claude Code.' },
-    { key: 'genModel', effort: 'genEffort', label: 'Exercices, bilans et cortex', help: 'Écrit les séries d’exercices et les bilans, et tient les cartes du cortex, sans recherche web : une à deux minutes.' },
+    { key: 'genModel', effort: 'genEffort', label: 'Exercices et bilans', help: 'Écrit les séries d’exercices et les bilans, sans recherche web : une à deux minutes.' },
+    { key: 'cortexModel', effort: 'cortexEffort', label: 'Agent du cortex', help: 'Conçoit et rediscute vos programmes, et range vos cartes : sonnet avec un effort moyen. Un effort plus haut donne des programmes plus réfléchis, mais des réponses plus lentes. Les cours tirés du cortex suivent le réglage « Cours du jour ».' },
     { key: 'gradeModel', effort: 'gradeEffort', label: 'Correction', help: 'Corrige l’écrit et l’oral et note les bilans : sonnet avec un effort moyen. C’est là que réfléchir paie : une note juste plutôt qu’une note rapide.' },
     { key: 'tutorModel', effort: '', label: 'Tuteur', help: 'Répond pendant la conversation : un modèle rapide garde l’échange fluide.' },
     { key: 'cardModel', effort: '', label: 'Correcteur des cartes', help: 'Relit une réponse refusée pendant les révisions et réécrit les cartes floues : un modèle rapide suffit.' },

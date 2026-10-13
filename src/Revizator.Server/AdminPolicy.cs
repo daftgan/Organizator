@@ -30,6 +30,8 @@ public sealed class AdminPolicy
         ["cardModel"] = "haiku",
         ["profModel"] = "sonnet",
         ["profEffort"] = "low",
+        ["cortexModel"] = "sonnet",
+        ["cortexEffort"] = "medium",
     };
 
     /// <summary>Genre de generation -> (champ du modele, champ de l'effort), comme <c>GEN_MODEL</c> de la page.</summary>
@@ -44,7 +46,7 @@ public sealed class AdminPolicy
         ["cardcheck"] = ("cardModel", null),
         ["cardfix"] = ("cardModel", null),
         ["prof"] = ("profModel", "profEffort"),
-        ["cortex"] = ("genModel", "genEffort"),
+        ["cortex"] = ("cortexModel", "cortexEffort"),
     };
 
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
