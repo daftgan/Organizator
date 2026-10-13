@@ -883,7 +883,7 @@
   /* La discussion avec l'agent : messages, programmes proposés (aperçu, ajout, révision), relances. */
   function chatHtml(map) {
     var focus = chatFocus(map), busy = U.chatBusy[map.id];
-    var h = ['<section class="rz-card rzc-chat"><div class="rzc-chat-head">' + icon('chat') + ' L’agent<span class="rz-muted">' + esc(map.title) + '</span></div>'];
+    var h = ['<section class="rz-card rzc-chat"><div class="rzc-chat-head">' + icon('chat') + ' L’agent<button type="button" class="rzc-model" data-act="rz-settings" title="Changer le modèle : Réglages › Révizator › Cortex">' + esc(currentAgent()) + '</button></div>'];
     h.push('<div class="rzc-chat-log" data-rzc-chat>');
     if (!map.chat.length) {
       h.push('<div class="rzc-msg is-agent"><div class="rzc-bubble"><p>Bonjour ! Dites-moi ce que vous voulez apprendre, aussi largement que vous voulez : je vous propose un <b>programme</b>, une suite d’étapes dans l’ordre, chacune un cours d’anglais. On le rediscute ensemble, puis vous l’ajoutez à votre cortex.</p></div></div>');
@@ -1185,6 +1185,8 @@
       };
       var h = ['<div class="set-card"><div class="set-card-head"><span class="set-card-title">Cortex</span></div>'];
       h.push('<div class="rz-set-help">Vos cartes des savoirs et les programmes discutés avec l’agent, d’où partent les cours de fond.</div>');
+      h.push(R.setField('Modèle de l’agent', modelControl()));
+      h.push('<div class="rz-set-help">Le modèle et l’effort de réflexion de l’agent qui conçoit vos programmes et range vos cartes (aussi dans « Agents (Claude Code) » ci-dessus). Un effort plus haut donne des programmes plus réfléchis, des réponses plus lentes, et un peu plus de quota. Les cours tirés du cortex suivent le réglage « Cours du jour ».</div>');
       h.push(R.setField('Ranger la carte', chips('cortexTidy', ['Automatiquement', 'Jamais'])));
       h.push('<div class="rz-set-help">Après chaque modification à la main, l’agent remet la carte en ordre : doublons fusionnés, nœuds mal placés déplacés, intitulés harmonisés. Chaque passage compte dans votre quota Claude Code.</div>');
       h.push(R.setField('Après un cours', chips('cortexGrow', ['Ajouter ses sujets suivants à la carte', 'Ne rien ajouter'])));
@@ -1195,6 +1197,24 @@
       return h.join('') + '</div>';
     }
   });
+  /* Modèle et effort de l'agent : les mêmes listes et les mêmes rôles que la carte « Agents » du noyau
+     (rz-set-model, rz-set-effort), sauf s'ils sont fixés par l'administrateur du serveur. */
+  function modelControl() {
+    var imposed = R.policy && R.policy.imposed ? R.policy.models || {} : null;
+    if (imposed) return '<span class="rz-set-fixed">' + esc(agentLabel(imposed.cortexModel, imposed.cortexEffort)) + ' · fixé par l’administrateur</span>';
+    return R.models.select(str(R.prefs.cortexModel), false, 'rz-set-model', 'rzc-set-model').replace('data-role="rz-set-model"', 'data-role="rz-set-model" data-field="cortexModel"')
+      + R.models.effort(str(R.prefs.cortexEffort), 'rz-set-effort', 'rzc-set-effort').replace('data-role="rz-set-effort"', 'data-role="rz-set-effort" data-field="cortexEffort"');
+  }
+  var EFFORT_FR = { low: 'effort bas', medium: 'effort moyen', high: 'effort haut', xhigh: 'effort très haut', max: 'effort maximal' };
+  function agentLabel(model, effort) {
+    model = str(model) || 'sonnet';
+    return model + (effort ? ' · ' + (EFFORT_FR[effort] || 'effort ' + effort) : '');
+  }
+  function currentAgent() {
+    var imposed = R.policy && R.policy.imposed ? R.policy.models || {} : null;
+    return imposed ? agentLabel(imposed.cortexModel, imposed.cortexEffort) : agentLabel(R.prefs.cortexModel, R.prefs.cortexEffort);
+  }
+
   R.act('rz-cortex-pref', function (el) {
     var k = attr(el, 'data-name');
     if (k !== 'cortexTidy' && k !== 'cortexGrow') return;

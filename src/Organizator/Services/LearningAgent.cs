@@ -63,7 +63,7 @@ public sealed class LearningAgent
         ["cardcheck"] = new("cardcheck", "Correcteur des cartes", "haiku", "", TimeSpan.FromSeconds(50), false),
         ["cardfix"] = new("cardfix", "Cartes clarifiées", "haiku", "", TimeSpan.FromSeconds(120), false),
         ["prof"] = new("prof", "Professeur", "sonnet", "low", TimeSpan.FromSeconds(90), false),
-        ["cortex"] = new("cortex", "Cortex", "sonnet", "low", TimeSpan.FromSeconds(150), false),
+        ["cortex"] = new("cortex", "Cortex", "sonnet", "medium", TimeSpan.FromSeconds(150), false),
     };
 
     // Vrai si un flux stream-json a rendu un resultat sans fiche structuree : on repasse alors en json.
