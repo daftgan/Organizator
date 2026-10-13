@@ -2896,6 +2896,81 @@ internal static class ExerciseGenre
     }
 }
 
+// ============================================================================ domaines des bilans
+
+/// <summary>
+/// Domaines imposes aux bilans (<c>toeic</c>, <c>sw</c>) : l'eventail du format, un domaine par ensemble.
+/// Un bilan de placement reste neutre (rien n'est adapte au metier ni aux centres d'interet) et varie :
+/// la liste est melangee avec la graine du client (<c>seed</c>, commune aux trois modules d'un bilan), les
+/// domaines recents (<c>recentDomains</c>, du plus ancien au plus recent) passent en dernier, et chaque
+/// module prend sa tranche du melange : les modules d'un meme bilan n'ont aucun domaine en commun.
+/// </summary>
+internal static class BilanDomains
+{
+    private static readonly (string Id, string Label)[] All =
+    {
+        ("office", "vie de bureau (fournitures, matériel, procédures, nouveaux locaux)"),
+        ("meetings", "réunions et communication interne (ordre du jour, comptes rendus, notes de service)"),
+        ("hr", "ressources humaines (recrutement, entretien d'embauche, formation, congés, avantages)"),
+        ("finance", "finance et comptabilité (budget, factures, notes de frais, banque)"),
+        ("purchasing", "achats et fournisseurs (devis, commandes, négociation, livraisons)"),
+        ("manufacturing", "fabrication (usine, chaîne de production, contrôle qualité, sécurité)"),
+        ("logistics", "logistique et expédition (entrepôt, stocks, transporteurs, retards)"),
+        ("sales", "ventes et marketing (lancement de produit, campagne, étude de marché, clients)"),
+        ("corporate", "développement de l'entreprise (expansion, fusion, nouvelle filiale, résultats)"),
+        ("technical", "domaine technique (laboratoire, maintenance, réparation, mode d'emploi d'un appareil)"),
+        ("travel", "voyages d'affaires (avion, train, hôtel, réservations, correspondances)"),
+        ("dining", "restaurants et repas (réservation, traiteur, repas d'affaires, menu)"),
+        ("health", "santé (cabinet médical, dentiste, pharmacie, assurance, salle de sport)"),
+        ("housing", "logement et immobilier (location, achat, travaux, déménagement, syndic)"),
+        ("shopping", "commerce et achats (magasin, commande en ligne, retour, garantie, soldes)"),
+        ("entertainment", "loisirs et culture (cinéma, théâtre, musée, concert, exposition)"),
+        ("events", "événements professionnels (salon, conférence, séminaire, inauguration)"),
+        ("customer", "service client (réclamation, remboursement, abonnement, assistance)"),
+        ("transport", "transports et vie locale (bus, travaux de voirie, stationnement, bibliothèque, mairie)"),
+        ("legal", "contrats et règlements (bail, contrat de prestation, conditions, licences)"),
+        ("environment", "environnement et énergie (recyclage, économies d'énergie, météo, parc)"),
+    };
+
+    /// <summary>A ajouter a la consigne d'un bilan : contenu neutre, domaines tenus.</summary>
+    public const string Neutral = "Bilan de placement : contenu neutre et varié, sans lien avec le métier, les objectifs ou les centres d'intérêt de l'apprenant ; chaque partie reste dans le domaine qui lui est imposé.";
+
+    /// <summary>
+    /// <paramref name="count"/> domaines a partir du rang <paramref name="offset"/> du melange (graine du
+    /// client, ou derivee du travail : <c>Compose</c> et <c>Sanitize</c> tirent alors les memes).
+    /// </summary>
+    public static List<(string Id, string Label)> Pick(LearnRequest r, int offset, int count)
+    {
+        var seed = LJ.Int(r.Params, "seed");
+        if (seed == 0)
+        {
+            foreach (var c in r.Job)
+            {
+                seed = unchecked(seed * 31 + c);
+            }
+        }
+
+        var rng = new Random(seed);
+        var recent = LJ.Strings(r.Params, "recentDomains", 40, 40);
+        var fresh = All.Where(d => !recent.Contains(d.Id)).OrderBy(_ => rng.Next()).ToList();
+        var stale = recent.Distinct().SelectMany(id => All.Where(d => d.Id == id)).ToList();
+        var order = fresh.Concat(stale).ToList();
+        return Enumerable.Range(offset, Math.Min(count, order.Count)).Select(i => order[i % order.Count]).ToList();
+    }
+
+    /// <summary>Consigne : un domaine impose par ensemble nomme.</summary>
+    public static string Line(IReadOnlyList<string> slots, List<(string Id, string Label)> picked)
+    {
+        var sb = new StringBuilder("Domaines imposés (tous différents) :\n");
+        for (var i = 0; i < slots.Count && i < picked.Count; i++)
+        {
+            sb.Append("- ").Append(slots[i]).Append(" : ").Append(picked[i].Label).Append('\n');
+        }
+
+        return sb.ToString();
+    }
+}
+
 // ============================================================================ bilan express
 
 /// <summary>
@@ -2918,7 +2993,7 @@ internal static class ToeicGenre
     private const string System = """
         Tu es l'auteur des bilans d'anglais d'Organizator : tu écris des items ORIGINAUX au format type TOEIC® Listening & Reading — le format seulement : n'imite, ne recopie ni ne paraphrase aucun item, consigne ou document officiel d'ETS. Tu rends uniquement la fiche demandée.
 
-        Contexte : anglais international du travail et de la vie courante (bureau, réunions, voyages d'affaires, restaurants, achats, santé, logement, ressources humaines, informatique, fabrication, finance simple). Pas de sujet sensible (politique, religion, drame), pas de culture locale pointue, aucune marque réelle ; personnes et entreprises fictives. Varie les thèmes, les prénoms, les entreprises et les accents d'un ensemble à l'autre.
+        Contexte : anglais international du travail et de la vie courante, sur tout l'éventail du format (bureau, réunions, ressources humaines, finance, achats, fabrication, logistique, ventes, technique, voyages, restaurants, santé, logement, commerce, loisirs, événements, services) ; la demande impose un domaine par ensemble. Pas de sujet sensible (politique, religion, drame), pas de culture locale pointue, aucune marque réelle ; personnes et entreprises fictives. Varie les thèmes, les prénoms, les entreprises et les accents d'un ensemble à l'autre.
 
         Écoute — tout ce qui est dans prompt, lines et, en partie 2, les options, est lu par la synthèse vocale :
         - Écris les nombres en toutes lettres, comme on les dit : « two thirty », « fifteen dollars », « room four-oh-two », « the twenty-first of May ». Ni didascalie, ni émoticône, ni balise, ni nom de locuteur dans le texte.
@@ -2986,6 +3061,20 @@ internal static class ToeicGenre
 
     private static string Module(LearnRequest r) => LJ.Pick(LJ.Str(r.Params, "module", 10), new[] { "stage1", "easy", "hard" }, "stage1");
 
+    /// <summary>Ensembles a domaine impose, dans l'ordre du schema, et tranche du melange propre au module.</summary>
+    private static (string[] Slots, int Offset) DomainSlots(string module) => module switch
+    {
+        "easy" => (new[] { "part3a", "part3b", "part4", "part7single", "part7multi" }, 4),
+        "hard" => (new[] { "part3a", "part3b", "part4", "part7single", "part7multi" }, 9),
+        _ => (new[] { "part3", "part4", "part6", "part7" }, 0),
+    };
+
+    private static List<(string Id, string Label)> Domains(LearnRequest r, string module)
+    {
+        var (slots, offset) = DomainSlots(module);
+        return BilanDomains.Pick(r, offset, slots.Length);
+    }
+
     private static string Center(LearnRequest r) => LJ.Pick(LJ.Str(r.Params, "center", 4), Centers, "B1");
 
     private static string Shift(string center, int delta)
@@ -3027,7 +3116,10 @@ internal static class ToeicGenre
               .Append("- part7multi : un ensemble double ou triple (deux ou trois documents liés), cinq questions dont au moins deux qui relient les documents.\n");
         }
 
-        var avoid = LJ.Strings(r.Params, "avoid", 20, 80);
+        sb.Append(BilanDomains.Line(DomainSlots(module).Slots, Domains(r, module)))
+          .Append("- part2 et part5 : un sujet différent par item, pris ailleurs dans l'éventail du format (bureau, voyage, achats, santé, loisirs, fabrication…).\n")
+          .Append(BilanDomains.Neutral).Append('\n');
+        var avoid = LJ.Strings(r.Params, "avoid", 30, 80);
         if (avoid.Count > 0)
         {
             sb.Append("Thèmes déjà vus dans les bilans précédents (à éviter) : ").Append(string.Join(" ; ", avoid)).Append(".\n");
@@ -3110,6 +3202,7 @@ internal static class ToeicGenre
         {
             ["module"] = module,
             ["center"] = center,
+            ["domains"] = LJ.Array(Domains(r, module).Select(d => d.Id)),
             ["listening"] = listening,
             ["reading"] = reading,
         };
@@ -3825,7 +3918,7 @@ internal static class SwGenre
     private const string System = """
         Tu es l'auteur des bilans oral et écrit d'Organizator, au format type TOEIC® Speaking & Writing — le format seulement : contenus originaux, aucun item officiel d'ETS imité ou paraphrasé. Tu rends uniquement la fiche demandée : le contenu des tâches, en anglais sauf mention contraire ; l'hôte ajoute les consignes et les minutages.
 
-        Contexte : vie professionnelle et quotidienne internationale (bureau, clients, voyages, services, loisirs) ; personnes et entreprises fictives ; aucun sujet sensible. Ajuste le vocabulaire et la complexité au niveau visé, sans sortir du format.
+        Contexte : vie professionnelle et quotidienne internationale, sur tout l'éventail du format (bureau, clients, ressources humaines, achats, fabrication, voyages, restaurants, santé, logement, commerce, loisirs, événements, services) ; la demande impose un domaine par tâche ; personnes et entreprises fictives ; aucun sujet sensible. Ajuste le vocabulaire et la complexité au niveau visé, sans sortir du format.
 
         Oral
         - readAloud.text : un texte de 60 à 90 mots fait pour être lu à voix haute (annonce, message enregistré, présentation, publicité), avec un ou deux noms propres simples, une énumération de trois éléments, une question, et des mots difficiles pour un francophone (accent tonique, th, h, -ed).
@@ -3837,8 +3930,11 @@ internal static class SwGenre
         Écrit
         - sentences : trois situations décrites EN FRANÇAIS (une scène en une ou deux phrases), chacune avec deux mots anglais imposés à employer dans une seule phrase (« woman / while », « because / closed »).
         - email : un e-mail reçu (from, subject, body de 50 à 90 mots, ton professionnel) ; taskEn = la tâche en anglais (« Respond to the e-mail as if you are … In your e-mail, give TWO pieces of information and make ONE request. ») ; taskFr = la même tâche en français, en vouvoyant.
-        - essay.prompt : une question d'essai argumentatif (accord ou désaccord, préférence entre deux options, avantages et inconvénients) sur le travail, l'éducation ou la technologie ; chaîne vide si l'essai n'est pas demandé.
+        - essay.prompt : une question d'essai argumentatif (accord ou désaccord, préférence entre deux options, avantages et inconvénients) sur le travail, l'éducation, la vie en ville, la consommation ou la technologie ; chaîne vide si l'essai n'est pas demandé.
         """;
+
+    /// <summary>Taches a domaine impose : opinion, essai et phrases gardent un theme general.</summary>
+    private static readonly string[] DomainSlots = { "readAloud", "describe", "respond", "respondInfo", "email" };
 
     private static readonly string Schema = ExerciseGenre.Compact("""
         {"type":"object","additionalProperties":false,"required":["readAloud","describe","respond","respondInfo","opinion","sentences","email","essay"],"properties":{
@@ -3860,6 +3956,9 @@ internal static class SwGenre
         sb.Append(Levels.Line(level)).Append('\n');
         sb.Append("Oral : readAloud, describe, respond (trois questions), respondInfo (trois questions), opinion.\n");
         sb.Append("Écrit : trois sentences, un email").Append(essay ? ", un essay." : " ; pas d'essai (essay.prompt vide).").Append('\n');
+        sb.Append(BilanDomains.Line(DomainSlots, BilanDomains.Pick(r, 0, DomainSlots.Length)))
+          .Append("- opinion").Append(essay ? ", essay" : "").Append(" et les trois sentences : des thèmes généraux, tous différents entre eux et des domaines ci-dessus.\n")
+          .Append(BilanDomains.Neutral).Append('\n');
         if (r.Context.Length > 0)
         {
             sb.Append('\n').Append(r.Context.Trim()).Append('\n');
@@ -3993,6 +4092,7 @@ internal static class SwGenre
         return new JsonObject
         {
             ["level"] = level,
+            ["domains"] = LJ.Array(BilanDomains.Pick(r, 0, DomainSlots.Length).Select(d => d.Id)),
             ["speaking"] = speaking,
             ["writing"] = writing,
         };
@@ -4065,7 +4165,7 @@ internal static class GradeGenre
         "opinion" => "Barème 0 à 5 : 5 = position claire, soutenue de façon cohérente (raisons, détails, exemples, liens explicites), débit fluide, bon contrôle des structures simples et complexes ; 4 = position claire, justification adéquate mais pas entièrement développée, gamme limitée ; 3 = position exprimée, au moins une raison, peu développée ou répétitive, surtout des structures de base ; 2 = position pertinente mais soutien absent ou confus, débit haché ; 1 = mots isolés, pas d'opinion intelligible ; 0 = rien, pas d'anglais, hors sujet.",
         "sentence" => "Barème 0 à 3 : 3 = une phrase sans faute, avec les deux mots bien employés, cohérente avec la situation ; 2 = erreurs qui ne gênent pas le sens, deux mots présents ; 1 = erreur qui gêne le sens, mot manquant ou phrase sans rapport ; 0 = vide ou autre langue.",
         "email" => "Barème 0 à 4 : 4 = toutes les consignes traitées en plusieurs phrases claires, liens logiques, ton adapté, quelques fautes isolées ; 3 = une consigne manquée ou incomplète, organisation partielle ; 2 = une seule consigne traitée, ou plusieurs de façon incomplète, liens absents ; 1 = aucune consigne, ton inadapté, fautes fréquentes ; 0 = copie de la consigne, hors sujet, autre langue ou vide.",
-        "essay" => "Barème 0 à 5 : 5 = traite pleinement le sujet, bien organisé et développé (explications, exemples), syntaxe variée, mots justes, fautes mineures ; 4 = quelques points peu développés, redondances occasionnelles ; 3 = développement moyen, liens parfois obscurs, gamme exacte mais limitée ; 2 = développement limité, organisation insuffisante, fautes accumulées ; 1 = désorganisé, presque sans détail, fautes graves ; 0 = copie, hors sujet, autre langue ou vide.",
+        "essay" => "Barème 0 à 5 : 5 = traite pleinement le sujet, bien organisé et développé (explications, exemples), syntaxe variée, mots justes, fautes mineures ; 4 = quelques points peu développés, redondances occasionnelles ; 3 = développement moyen, liens parfois obscurs, gamme exacte mais limitée ; 2 = développement limité, organisation insuffisante, fautes accumulées ; 1 = désorganisé, presque sans détail, fautes graves ; 0 = copie, hors sujet, autre langue ou vide. Longueur : moins de 300 mots, 4 au plus ; moins de 120 mots, 2 au plus.",
         _ => $"Barème de la tâche : 0 à {scale}, proportionnel à la réussite de la tâche (consignes, pertinence, langue).",
     };
 
@@ -4209,6 +4309,22 @@ internal static class GradeGenre
         return new AgentCall("", System + Levels.Quotes, Schema, sb.ToString());
     }
 
+    /// <summary>
+    /// Essai trop court pour montrer le developpement que demandent les bandes hautes (consigne : 300 mots au
+    /// moins) : moins de 120 mots, 2 au plus ; moins de 300, 4 au plus. Le correcteur est indulgent sur la
+    /// longueur, ce plafond ne depend pas de lui.
+    /// </summary>
+    private static double ShortEssayCap(JsonObject? p, double sw)
+    {
+        if (LJ.Str(LJ.Obj(p, "task"), "kind", 30) != "essay")
+        {
+            return sw;
+        }
+
+        var words = LJ.Words(LJ.Str(p, "response", 12000));
+        return Math.Min(sw, words < 120 ? 2 : (words < 300 ? 4 : 5));
+    }
+
     /// <summary>Notes d'une seconde correction, bornees comme celles de la premiere.</summary>
     public static JsonObject SanitizeScores(JsonObject o, LearnRequest r)
     {
@@ -4224,6 +4340,7 @@ internal static class GradeGenre
             sw = 0;
         }
 
+        sw = ShortEssayCap(p, sw);
         return new JsonObject
         {
             ["scores"] = new JsonObject
@@ -4379,6 +4496,8 @@ internal static class GradeGenre
             // Tache non accomplie (vide, hors sujet, autre langue) : la grille dit 0, quelle que soit la note rendue.
             sw = 0;
         }
+
+        sw = ShortEssayCap(p, sw);
 
         var rationale = LJ.Obj(o, "rationale");
         var scoreObject = new JsonObject

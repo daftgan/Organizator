@@ -261,7 +261,12 @@
 .rzt-rb-ci { position: absolute; top: 0; bottom: 0; border-radius: 99px; background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
 .rzt-rb-dot { position: absolute; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: var(--color-accent); border: 2px solid var(--color-surface); box-shadow: var(--shadow-sm); }
 .rzt-rb-cut { position: absolute; top: -4px; bottom: -4px; width: 1px; background: color-mix(in srgb, var(--color-text) 28%, transparent); }
-.rzt-rb-cut span { position: absolute; top: -15px; left: 50%; transform: translateX(-50%); font-size: 10px; font-style: normal; font-weight: 700; color: var(--rz-ink-soft); }
+.rzt-rb-lv { position: absolute; top: -16px; font-size: 10px; line-height: 1; font-weight: 700; color: var(--rz-ink-soft); white-space: nowrap; }
+.rzt-rb-legend { font-size: 12px; color: var(--rz-ink-soft); }
+.rzt-rb-legend i { display: inline-block; vertical-align: -1px; margin-right: 4px; }
+.rzt-rb-legend .is-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--color-accent); }
+.rzt-rb-legend .is-ci { width: 18px; height: 8px; border-radius: 99px; background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+.rzt-rb-legend .is-cut { width: 1px; height: 12px; background: color-mix(in srgb, var(--color-text) 28%, transparent); }
 
 .rzt-secs { align-items: stretch; }
 .rzt-sec { gap: 8px; }
@@ -272,6 +277,7 @@
 .rzt-sec-sub { font-size: 13px; color: var(--rz-ink-soft); }
 .rzt-cp { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
 .rzt-cp-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) 42px; gap: 8px; align-items: center; font-size: 12px; }
+.rzt-cp-cap { font-size: 12px; font-weight: 600; color: var(--rz-ink-soft); }
 .rzt-cp-k { color: var(--rz-ink-soft); }
 .rzt-cp-bar { height: 8px; border-radius: 99px; background: var(--color-neutral-200); overflow: hidden; }
 .rzt-cp-bar i { display: block; height: 100%; border-radius: 99px; background: var(--color-accent-2-600); min-width: 2px; }

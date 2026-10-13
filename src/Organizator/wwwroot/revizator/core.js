@@ -133,6 +133,9 @@
   var QUIET_KINDS = { grade: 1, tutor: 1, cardcheck: 1, cardfix: 1, prof: 1, cortex: 1 };
   /* Générations qui jugent l'apprenant : leur contexte ne dit pas son niveau supposé (R.context). */
   var BLIND_KINDS = { grade: 1, cardcheck: 1 };
+  /* Bilans de placement : contexte neutre (ni métier, ni objectif, ni centres d'intérêt, ni cours récents,
+     ni points faibles), pour un contenu varié pris dans tout l'éventail du format. */
+  var NEUTRAL_KINDS = { toeic: 1, sw: 1 };
 
   var KOKORO = {
     'en-US': { female: ['af_heart', 'af_bella', 'af_nicole'], male: ['am_michael', 'am_puck', 'am_fenrir'] },
@@ -1108,9 +1111,11 @@
   /* Contexte de l'apprenant pour les générations : ce qu'un professeur saurait de lui. */
   R.context = function (kind) {
     var d = subject(), p = d.profile, L = [];
-    L.push('Apprenant : adulte francophone, développeur, qui réapprend l’anglais (sessions de 10 à 45 minutes).');
-    if (p.goal) L.push('Objectif : ' + String(p.goal).slice(0, 300));
-    if (p.interests) L.push('Centres d’intérêt : ' + String(p.interests).slice(0, 400));
+    var neutral = NEUTRAL_KINDS[kind];
+    if (neutral) L.push('Apprenant : adulte francophone.');
+    else L.push('Apprenant : adulte francophone, développeur, qui réapprend l’anglais (sessions de 10 à 45 minutes).');
+    if (!neutral && p.goal) L.push('Objectif : ' + String(p.goal).slice(0, 300));
+    if (!neutral && p.interests) L.push('Centres d’intérêt : ' + String(p.interests).slice(0, 400));
     /* Le correcteur note à l'aveugle : ni niveau estimé ni score de bilan (sa note s'en rapprocherait). */
     var blind = BLIND_KINDS[kind];
     var lv = SKILLS.map(function (k) { var l = R.level(k.id); return k.label.toLowerCase() + ' ' + l.band + (l.conf === 'faible' ? ' (à confirmer)' : ''); });
@@ -1119,7 +1124,7 @@
     if (!blind && t && (t.L || t.R)) {
       L.push('Dernier bilan type TOEIC : ' + (t.L ? 'écoute ≈ ' + Math.round(t.L.mean) : '') + (t.L && t.R ? ', ' : '') + (t.R ? 'lecture ≈ ' + Math.round(t.R.mean) : '') + '.');
     }
-    var weak = R.weakPoints(6);
+    var weak = neutral ? [] : R.weakPoints(6);
     if (weak.length) {
       L.push('Points faibles (journal d’erreurs, du plus actif au moins actif) :');
       weak.forEach(function (w) {
@@ -1127,7 +1132,7 @@
         L.push('- ' + w.label + ' [' + w.category + '] : ' + w.count + ' fois' + (ex ? ' — ex. « ' + ex.original + ' » → « ' + ex.correction + ' »' : ''));
       });
     }
-    var recent = d.lessons.slice(-8).reverse();
+    var recent = neutral ? [] : d.lessons.slice(-8).reverse();
     if (recent.length) {
       L.push('Derniers cours (ne pas reprendre le même sujet ; faire tourner les rubriques, la grammaire et le genre d’écrit) :');
       recent.forEach(function (l) {
@@ -1137,7 +1142,7 @@
       });
     }
     var known = [];
-    d.cards.forEach(function (c) { var f = c && (c.term || c.front); if (f && known.length < 150) known.push(String(f).replace(/\s+/g, ' ').slice(0, 40)); });
+    if (!neutral) d.cards.forEach(function (c) { var f = c && (c.term || c.front); if (f && known.length < 150) known.push(String(f).replace(/\s+/g, ' ').slice(0, 40)); });
     if (known.length) L.push('Cartes déjà connues (ne pas recréer) : ' + known.join(', ') + '.');
     var ex = R.explainLang();
     L.push('Langue des explications : ' + (ex === 'fr' ? 'français' : (ex === 'mixed' ? 'anglais simple, avec des notes contrastives en français' : 'anglais')) + '.');

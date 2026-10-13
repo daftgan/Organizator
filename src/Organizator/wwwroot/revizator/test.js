@@ -13,7 +13,7 @@
      R.toeic.weakPoints(section, responses, score) → [{ ability, n, correct, expected, z, weak, strong }]
      R.toeic.kalman(état|null, { score, sd }, jours, dérive) → { mean, sd }
      R.toeic.calibrationOffset([{ official, app }]) → décalage rétréci (points)
-     R.toeic.estimateProductive('speaking'|'writing', [{ type, score }]) → { composite, score, range, cefr, capped }
+     R.toeic.estimateProductive('speaking'|'writing', [{ type, score, scale }]) → { composite, score, range, cefr, capped, noEssay, margin }
      R.toeic.thetaOfScore(section 'L'|'R'|'S'|'W'|'T', score) → theta (échelle du noyau, B1 = 0)
      R.toeic.cefrLabel(estimation) → { label: 'B1-B2 limite' | 'B2', main, p, pair }
      R.toeic.fitLearned(section, [{ items: [{ s, c, f, g, u, o, x }] }]) → { label: { A1…C1: points }, lex, n, bilans } | null
@@ -35,19 +35,30 @@
   /* ══ Estimateur (IRT simple, EAP sur grille) ════════════════════════════ */
 
   var CFG = {
-    scale: { L: 90, R: 95 },
+    scale: { L: 70, R: 70 },
     guessFactor: 0.8,
     guessable: 0.5,
     prior: { L: { mean: 325, sd: 150 }, R: { mean: 260, sd: 150 } },
     modelSd: 35,
+    /* Difficulté d'un item (le score où il est réussi une fois sur deux, hasard mis à part) selon son niveau
+       annoncé. Ajustée (avec la pente, scale) pour qu'une forme de composition TOEIC courante (A1 5 %, A2 15 %,
+       B1 35 %, B2 33 %, C1 12 %) redonne la table brut → échelle usuelle : écoute 50 % ≈ 245, 70 % ≈ 355,
+       90 % ≈ 475 ; lecture 50 % ≈ 220, 70 % ≈ 340, 90 % ≈ 460. Un item C1 reste dans l'échelle (un apprenant
+       à 495 le réussit trois fois sur quatre) : 495 demande un sans-faute ou presque. Les anciennes valeurs
+       (centres de bande, C1 = 520 / 500, au-delà de 495) donnaient 495 avec 70 % de bonnes réponses. */
     levelDifficulty: {
-      L: { A1: 85, A2: 190, B1: 335, B2: 445, C1: 520 },
-      R: { A1: 85, A2: 195, B1: 330, B2: 420, C1: 500 }
+      L: { A1: 80, A2: 170, B1: 265, B2: 370, C1: 440 },
+      R: { A1: 60, A2: 145, B1: 230, B2: 355, C1: 435 }
     },
+    /* Ce qui rend une question difficile : le niveau annoncé en tient déjà compte (consigne du générateur),
+       les caractéristiques ne font que le nuancer — dégressives (la plus forte entière, la suivante à moitié,
+       puis au quart…), plafonnées (featureCap), et la difficulté d'un item ne dépasse pas difficultyMax. */
     featureAdj: {
-      indirect_response: 30, negation: 15, paraphrase: 20, info_in_middle: 15,
-      cross_text: 30, inference: 20, rare_vocabulary: 25, graphic: 10, lexical_match: -25
+      indirect_response: 15, negation: 8, paraphrase: 8, info_in_middle: 8,
+      cross_text: 15, inference: 10, rare_vocabulary: 12, graphic: 5, lexical_match: -15
     },
+    featureCap: { lo: -20, hi: 25 },
+    difficultyMax: { L: 470, R: 465 },
     cefrCuts: {
       L: { A1: 60, A2: 110, B1: 275, B2: 400, C1: 490 },
       R: { A1: 60, A2: 115, B1: 275, B2: 385, C1: 455 },
@@ -71,14 +82,26 @@
     return CFG.levelDifficulty.L[c] != null ? c : 'B1';
   }
 
+  /* Ajustement des caractéristiques, dégressif et plafonné : trois caractéristiques ne font pas trois fois
+     la difficulté d'une seule. */
+  function featureSum(features) {
+    var seen = {}, pos = [], s = 0, w = 1;
+    arr(features).forEach(function (f) {
+      var a = CFG.featureAdj[f] || 0;
+      if (seen[f] || !a) return;
+      seen[f] = true;
+      if (a > 0) pos.push(a); else s += a;
+    });
+    pos.sort(function (a, b) { return b - a; }).forEach(function (a) { s += a * w; w /= 2; });
+    return Math.max(CFG.featureCap.lo, Math.min(CFG.featureCap.hi, s));
+  }
+
   function baseDifficulty(section, cefr, features) {
-    var d = CFG.levelDifficulty[section][itemLevel(cefr)];
-    arr(features).forEach(function (f) { d += CFG.featureAdj[f] || 0; });
-    return d;
+    return Math.min(CFG.difficultyMax[section], CFG.levelDifficulty[section][itemLevel(cefr)] + featureSum(features));
   }
 
   function difficulty(item) {
-    var d = item.difficultyPoints != null ? item.difficultyPoints + arr(item.features).reduce(function (a, f) { return a + (CFG.featureAdj[f] || 0); }, 0)
+    var d = item.difficultyPoints != null ? Math.min(CFG.difficultyMax[item.section], item.difficultyPoints + featureSum(item.features))
       : baseDifficulty(item.section, item.cefr, item.features);
     return d + learnedAdj(item) + num(item.calibrationOffset, 0);
   }
@@ -230,29 +253,45 @@
     var w = logPost.map(function (v) { return Math.exp(v - m); });
     var z = w.reduce(function (a, b) { return a + b; }, 0);
     var post = w.map(function (v) { return v / z; });
-    var mean = 0, i;
-    for (i = 0; i < GRID.length; i++) mean += GRID[i] * post[i];
+    /* Le score affiché est borné (5-495) : moyenne, écart type, intervalle et probabilités CECRL sont ceux du
+       score borné, pas de la capacité de la grille (qui dépasse 495 pour un sans-faute) ; mean garde l'EAP
+       non borné. */
+    var clampS = function (S) { return Math.min(495, Math.max(5, S)); };
+    var raw = 0, mean = 0, i, j;
+    for (i = 0; i < GRID.length; i++) { raw += GRID[i] * post[i]; mean += clampS(GRID[i]) * post[i]; }
     var varM = 0;
-    for (i = 0; i < GRID.length; i++) varM += Math.pow(GRID[i] - mean, 2) * post[i];
+    for (i = 0; i < GRID.length; i++) varM += Math.pow(clampS(GRID[i]) - mean, 2) * post[i];
     var sdMeas = Math.sqrt(varM);
     var sd = Math.sqrt(sdMeas * sdMeas + modelSd * modelSd);
-    var quant = function (p) { var acc = 0; for (var k = 0; k < GRID.length; k++) { acc += post[k]; if (acc >= p) return GRID[k]; } return GRID[GRID.length - 1]; };
-    var widen = function (x) { return mean + (x - mean) * (sd / Math.max(sdMeas, 1e-9)); };
+    /* Intervalle et niveaux : la loi a posteriori convoluée par l'erreur de modèle (normale, modelSd), puis
+       bornée — l'intervalle et les probabilités CECRL disent la même incertitude que l'écart type. */
+    var full = post;
+    if (modelSd > 0) {
+      var step = GRID[1] - GRID[0], kr = Math.ceil(4 * modelSd / step), ker = [], ks = 0;
+      for (j = -kr; j <= kr; j++) { ker.push(Math.exp(-0.5 * Math.pow(j * step / modelSd, 2))); ks += ker[j + kr]; }
+      full = GRID.map(function () { return 0; });
+      for (i = 0; i < GRID.length; i++) {
+        if (post[i] < 1e-12) continue;
+        for (j = -kr; j <= kr; j++) full[Math.min(GRID.length - 1, Math.max(0, i + j))] += post[i] * ker[j + kr] / ks;
+      }
+    }
+    var quant = function (p) { var acc = 0; for (var k = 0; k < GRID.length; k++) { acc += full[k]; if (acc >= p) return clampS(GRID[k]); } return clampS(GRID[GRID.length - 1]); };
     var cuts = CFG.cefrCuts[section];
     var bounds = [-Infinity, cuts.A1, cuts.A2, cuts.B1, cuts.B2, cuts.C1, Infinity];
     var cefrProb = {};
     CEFR_NAMES.forEach(function (n, k) {
       var a = 0;
-      for (var g = 0; g < GRID.length; g++) if (GRID[g] >= bounds[k] && GRID[g] < bounds[k + 1]) a += post[g];
+      for (var g = 0; g < GRID.length; g++) if (clampS(GRID[g]) >= bounds[k] && clampS(GRID[g]) < bounds[k + 1]) a += full[g];
       cefrProb[n] = +a.toFixed(3);
     });
     var score = round5(mean, 5, 495);
-    var lo = round5(widen(quant(0.05)), 5, 495), hi = round5(widen(quant(0.95)), 5, 495);
-    /* Aux bords de l'échelle (tout juste ou tout faux), l'intervalle borné s'écraserait sur 5 ou 495. */
-    if (lo >= score) lo = round5(score - 1.645 * sd, 5, 495);
-    if (hi <= score) hi = round5(score + 1.645 * sd, 5, 495);
+    var lo = round5(quant(0.05), 5, 495), hi = round5(quant(0.95), 5, 495);
+    /* Aux bords de l'échelle (tout juste ou tout faux), l'intervalle borné s'écraserait sur 5 ou 495 : un pas
+       gardé (un écart de ±1,645 σ, plus large que l'intervalle d'un score voisin, le rendrait non monotone). */
+    if (lo >= score) lo = Math.max(5, score - 5);
+    if (hi <= score) hi = Math.min(495, score + 5);
     return {
-      section: section, score: score, mean: Math.round(mean), sd: Math.round(sd), sdMeasurement: Math.round(sdMeas),
+      section: section, score: score, mean: Math.round(raw), sd: Math.round(sd), sdMeasurement: Math.round(sdMeas),
       ci90: [lo, hi],
       cefr: cefrOf(section, score), cefrProb: cefrProb,
       nItems: pre.length, nCorrect: pre.filter(function (q) { return q.x; }).length
@@ -356,7 +395,7 @@
     arr(tasks).forEach(function (t) {
       var type = TASK_ALIAS[t.type] || t.type;
       if (!W[type]) return;
-      (byType[type] = byType[type] || []).push(Math.max(0, Math.min(1, num(t.score, 0) / W[type][1])));
+      (byType[type] = byType[type] || []).push(Math.max(0, Math.min(1, num(t.score, 0) / (num(t.scale, 0) || W[type][1]))));
     });
     var nu = 0, de = 0;
     Object.keys(byType).forEach(function (type) {
@@ -371,7 +410,9 @@
     var half = speaking ? 20 : (noEssay ? 30 : 20);
     var cuts = CFG.cefrCuts[speaking ? 'S' : 'W'];
     var cefr = ['C1', 'B2', 'B1', 'A2', 'A1'].filter(function (l) { return score >= cuts[l]; })[0] || '<A1';
-    return { kind: speaking ? 'speaking' : 'writing', composite: +comp.toFixed(3), score: score, range: [Math.max(0, score - half), Math.min(200, score + half)], cefr: cefr, capped: noEssay && score >= 150 };
+    /* Sans essai, au-dessus de 150 l'écrit n'est plus mesuré : « 150 ou plus », marge ouverte jusqu'à 200. */
+    var capped = noEssay && score >= 150;
+    return { kind: speaking ? 'speaking' : 'writing', composite: +comp.toFixed(3), score: score, range: [Math.max(0, score - half), capped ? 200 : Math.min(200, score + half)], cefr: cefr, capped: capped, noEssay: noEssay, margin: half };
   }
 
   /* Score → theta du noyau (B1 au centre = 0) : chaque seuil officiel est la frontière basse d'un niveau,
@@ -548,11 +589,32 @@
     var t = TD();
     return t.topics.slice(-30);
   }
+  /* Domaines imposés par l'hôte aux bilans (t.domains : identifiants, dans l'ordre des bilans, express et
+     oral-écrit confondus). Les douze derniers, sans doublon, du plus ancien au plus récent, passent en
+     dernier dans le tirage du bilan suivant ; extra : domaines de modules repris de la réserve. */
+  function recentDomains(extra) {
+    var t = TD();
+    if (!Array.isArray(t.domains)) t.domains = [];
+    var log = t.domains.concat(extra || []), seen = {}, out = [];
+    for (var i = log.length - 1; i >= 0 && out.length < 12; i--) {
+      var id = String(log[i] || '');
+      if (id && !seen[id]) { seen[id] = 1; out.unshift(id); }
+    }
+    return out;
+  }
+  function rememberDomains(d) {
+    var t = TD();
+    if (!Array.isArray(t.domains)) t.domains = [];
+    arr(d && d.domains).forEach(function (id) { if (typeof id === 'string' && id) t.domains.push(id.slice(0, 40)); });
+    if (t.domains.length > 60) t.domains = t.domains.slice(t.domains.length - 60);
+  }
+  function domainSeed() { return 1 + Math.floor(Math.random() * 1e9); }
   function rememberTopics(ids) {
     var t = TD();
     ids.forEach(function (id) {
       var d = doc('toeic', id);
       if (!d) return;
+      rememberDomains(d);
       arr(d.listening).concat(arr(d.reading)).forEach(function (s) {
         var tp = String(s.topic || '').trim().slice(0, 60);
         if (tp && t.topics.indexOf(tp) < 0) t.topics.push(tp);
@@ -604,6 +666,12 @@
     });
     var ids = prep.taken.map(function (x) { return x.id; });
     needDocs('toeic', ids);
+    /* Une graine et une liste de domaines récents communes aux trois modules : l'hôte leur donne des
+       domaines disjoints (et, à la relance d'un module, les mêmes). */
+    var held = [];
+    ids.forEach(function (id) { var d = doc('toeic', id); if (d) held = held.concat(arr(d.domains)); });
+    prep.seed = domainSeed();
+    prep.recent = recentDomains(held);
     ['stage1', 'easy', 'hard'].forEach(function (m) { if (!prep.docs[m]) launchModule(m); });
     R.save(true);
     R.render();
@@ -615,7 +683,8 @@
     var job = R.uid('rzt' + m.charAt(0));
     prep.jobs[m] = job;
     delete prep.errors[m];
-    R.gen('toeic', { module: m, center: prep.center, avoid: avoidTopics() }, { job: job }).then(function (r) {
+    if (!prep.seed) { prep.seed = domainSeed(); prep.recent = recentDomains(); }
+    R.gen('toeic', { module: m, center: prep.center, avoid: avoidTopics(), seed: prep.seed, recentDomains: arr(prep.recent) }, { job: job }).then(function (r) {
       moduleDone(m, job, r);
     }, function (e) {
       var p = TD().prep;
@@ -1102,6 +1171,55 @@
     R.render();
   }
 
+  /* Bilans passés sous l'ancien estimateur (difficultés au-dessus de l'échelle : 70 % de bonnes réponses
+     pouvaient donner 495) : recalculés une fois depuis leurs réponses (entry.items), puis la tendance est
+     rejouée et le niveau recalé sur le dernier bilan. Les capacités (attendu par capacité) gardent leurs
+     valeurs : les réponses compactes ne disent pas à quelle capacité chaque question appartenait. */
+  var ESTIMATOR_VERSION = 2;
+  function rescoreHistory() {
+    var t = TD();
+    if (num(t.estimator, 1) >= ESTIMATOR_VERSION) return;
+    t.estimator = ESTIMATOR_VERSION;
+    var express = t.history.filter(function (e) { return e && e.kind === 'express' && e.L && e.R; })
+      .sort(function (a, b) { return a.at - b.at; });
+    if (!express.length) { R.save(); return; }
+    refreshLearned();
+    var redo = function (e, s, off) {
+      var resp = arr(e.items).filter(function (r) { return r && r.s === s; }).map(function (r) {
+        return {
+          item: { section: s, cefr: itemLevel(r.c), features: arr(r.f), lexGap: num(r.g, 0), guess: r.u ? CFG.guessable : null, nOptions: num(r.o, 0) || 4, calibrationOffset: off },
+          correct: !!r.x
+        };
+      });
+      return resp.length ? estimateSection(s, resp, { modelSd: modelSdFor(s) }) : null;
+    };
+    var state = { L: null, R: null, T: null }, last = null;
+    express.forEach(function (e) {
+      ['L', 'R'].forEach(function (s) {
+        var off = num(e[s].offset, 0), est = redo(e, s, off);
+        if (!est) return;
+        var lab = cefrLabel(est), raw = off ? redo(e, s, 0) : est;
+        e[s].score = est.score; e[s].sd = est.sd; e[s].sdMeasurement = est.sdMeasurement; e[s].ci90 = est.ci90;
+        e[s].cefr = est.cefr; e[s].cefrProb = est.cefrProb; e[s].label = lab.label; e[s].raw = raw.score;
+      });
+      var total = combineTotal(e.L, e.R);
+      e.total = { score: total.score, sd: total.sd, ci90: total.ci90, cefr: total.cefr, cefrProb: total.cefrProb };
+      var meas = { L: e.L, R: e.R, T: total }, trend = {};
+      ['L', 'R', 'T'].forEach(function (k) {
+        var st = state[k], k2 = kalman(st, meas[k], st ? (e.at - st.at) / 86400000 : 0);
+        state[k] = { mean: k2.mean, sd: k2.sd, at: e.at };
+        trend[k] = { mean: k2.mean, sd: k2.sd };
+      });
+      e.trend = trend;
+      last = e;
+    });
+    t.L = state.L; t.R = state.R; t.T = state.T;
+    R.calibrate('listen', thetaOfScore('L', last.L.score), 0.7);
+    R.calibrate('read', thetaOfScore('R', last.R.score), 0.7);
+    LEARNED_KEY = '';
+    R.save();
+  }
+
   function runAbandon() {
     var t = TD(), run = t.run;
     if (!run) return;
@@ -1131,7 +1249,7 @@
     var job = R.uid('rztsw');
     var withEssay = !!U.swEssay;
     t.swPrep = { job: job, level: genLevel(), withEssay: withEssay, startedAt: Date.now(), id: '', error: '', readyAt: 0 };
-    R.gen('sw', { level: t.swPrep.level, withEssay: withEssay }, { job: job }).then(function (r) { swPrepDone(job, r); }, function (e) {
+    R.gen('sw', { level: t.swPrep.level, withEssay: withEssay, seed: domainSeed(), recentDomains: recentDomains() }, { job: job }).then(function (r) { swPrepDone(job, r); }, function (e) {
       var p = TD().swPrep;
       if (!p || p.job !== job) return;
       p.error = (e && e.message) || 'échec de la préparation';
@@ -1148,6 +1266,7 @@
     R.docPut('sw', r.id, r.doc);
     if (!p || p.job !== job || p.id) return;
     if (!arr(r.doc.speaking).length && !arr(r.doc.writing).length) { p.error = 'Le bilan reçu est vide.'; p.job = ''; R.save(); R.render(); return; }
+    rememberDomains(r.doc);
     p.id = r.id;
     p.job = '';
     p.readyAt = Date.now();
@@ -1463,11 +1582,13 @@
     if ((!isFinite(s) || (window.bridge && bridge.isShim && !s)) && g.scores) {
       var sc = g.scores, vals = ['task', 'coherence', 'range', 'accuracy'].map(function (k) { return num(sc[k], 0); });
       s = Math.round(vals.reduce(function (a, b) { return a + b; }, 0) / vals.length / 5 * scale);
-      if (g.empty) s = 0;
+      /* Comme l'hôte (GradeGenre) : tâche non accomplie (task = 0) → 0, sauf la lecture à voix haute. */
+      if (g.empty || (!num(sc.task, 0) && (!u || u.type !== 'read_aloud'))) s = 0;
     }
     s = Math.max(0, Math.min(scale, isFinite(s) ? s : 0));
     U.swGrades[sr.id + ':' + key] = g;
     sr.grades[key] = { s: s, scale: scale, lv: String(g.levelEstimate || '') };
+    if (g.empty) sr.grades[key].empty = true;
     delete sr.gradeErrors[key];
     var d = swDoc(sr);
     if (d) {
@@ -1504,29 +1625,40 @@
     sr.done = true;
     var d = swDoc(sr);
     var units = swAnswerUnits(swSteps(d, sr.withEssay));
-    var sp = [], wr = [], tasks = {};
+    var sp = [], wr = [], tasks = {}, miss = { speak: 0, write: 0 }, got = { speak: 0, write: 0 };
     units.forEach(function (u) {
       var g = sr.grades[u.key];
-      var row = { type: SW_ESTIMATE_TYPE[u.type] || u.type, score: g.s };
-      (u.mode === 'speak' ? sp : wr).push(row);
+      var none = !!(g.empty || (U.swGrades[sr.id + ':' + u.key] || (d && d.grades && d.grades[u.key]) || {}).empty);
       tasks[u.key] = { type: u.type, s: g.s, scale: g.scale, lv: g.lv, mode: u.mode };
+      if (none) tasks[u.key].empty = true;
+      /* Essai non rendu : l'écrit est estimé sans essai (plafond 150, marge ± 30) plutôt qu'avec un 0 qui le ferait
+         tomber de 70 points ou plus ; une autre réponse manquante compte 0, comme à l'examen. */
+      if (none && u.type === 'essay') return;
+      if (none) miss[u.mode]++; else got[u.mode]++;
+      (u.mode === 'speak' ? sp : wr).push({ type: SW_ESTIMATE_TYPE[u.type] || u.type, score: g.s, scale: g.scale });
     });
     var endedAt = Date.now();
     var entry = { id: sr.id, at: endedAt, kind: 'sw', startedAt: sr.startedAt || sr.createdAt, docId: sr.docId, withEssay: sr.withEssay, level: sr.level, tasks: tasks };
     var days = function (st) { return st && st.at ? (endedAt - st.at) / 86400000 : 0; };
-    if (sp.length) {
+    /* Une partie sans aucune réponse (micro refusé, tout passé) ne mesure rien : pas de score, ni tendance ni niveau recalés. */
+    entry.none = { S: sp.length > 0 && !got.speak, W: wr.length > 0 && !got.write };
+    if (sp.length && got.speak) {
       var S = estimateProductive('speaking', sp);
-      entry.S = { score: S.score, range: S.range, cefr: S.cefr, composite: S.composite };
+      entry.S = { score: S.score, range: S.range, cefr: S.cefr, composite: S.composite, missing: miss.speak };
       var kS = kalman(t.S, { score: S.score, sd: 20 }, days(t.S), 1.5);
       t.S = { mean: kS.mean, sd: kS.sd, at: endedAt };
       R.calibrate('speak', thetaOfScore('S', S.score), R.level('speak').n < 3 ? 0.7 : 0.5);
     }
-    if (wr.length) {
+    if (wr.length && got.write) {
       var W = estimateProductive('writing', wr);
-      entry.W = { score: W.score, range: W.range, cefr: W.cefr, composite: W.composite, capped: W.capped };
-      var kW = kalman(t.W, { score: W.score, sd: W.capped || !sr.withEssay ? 30 : 20 }, days(t.W), 1.5);
-      t.W = { mean: kW.mean, sd: kW.sd, at: endedAt };
-      R.calibrate('write', thetaOfScore('W', W.score), R.level('write').n < 3 ? 0.7 : 0.5);
+      entry.W = { score: W.score, range: W.range, cefr: W.cefr, composite: W.composite, capped: W.capped, noEssay: W.noEssay, missing: miss.write };
+      /* Plafonné (« 150 ou plus ») : la mesure dit seulement « au moins », elle ne tire ni la tendance ni le niveau vers le bas. */
+      if (!W.capped || !t.W || t.W.mean < W.score) {
+        var kW = kalman(t.W, { score: W.score, sd: W.margin }, days(t.W), 1.5);
+        t.W = { mean: kW.mean, sd: kW.sd, at: endedAt };
+      }
+      var thW = thetaOfScore('W', W.score);
+      if (!W.capped || R.level('write').theta < thW) R.calibrate('write', thW, R.level('write').n < 3 ? 0.7 : 0.5);
     }
     entry.trend = { S: t.S ? { mean: t.S.mean, sd: t.S.sd } : null, W: t.W ? { mean: t.W.mean, sd: t.W.sd } : null };
     /* Erreurs au journal, cartes, tentatives (une fois par réponse). */
@@ -1557,7 +1689,7 @@
     U.screen = 'result';
     U.resultId = entry.id;
     R.save(true);
-    R.notify('Votre bilan oral et écrit est corrigé' + (entry.S ? ' : oral ≈ ' + entry.S.score : '') + (entry.W ? (entry.S ? ', ' : ' : ') + 'écrit ≈ ' + (entry.W.capped ? '150 ou plus' : entry.W.score) : '') + ' sur 200.', 'tests');
+    R.notify('Votre bilan oral et écrit est corrigé' + (entry.S || entry.W ? (entry.S ? ' : oral ≈ ' + entry.S.score : '') + (entry.W ? (entry.S ? ', ' : ' : ') + 'écrit ≈ ' + (entry.W.capped ? '150 ou plus' : entry.W.score) : '') + ' sur 200.' : ' : aucune réponse donnée, pas de score.'), 'tests');
     R.render();
   }
 
@@ -1813,12 +1945,42 @@
   function rangeBarHtml(section, est, max) {
     max = max || CFG.max[section];
     var pct = function (v) { return Math.max(0, Math.min(100, v / max * 100)).toFixed(2); };
-    var cuts = CFG.cefrCuts[section];
-    var ticks = ['A2', 'B1', 'B2', 'C1'].map(function (l) { return '<i class="rzt-rb-cut" style="left:' + pct(cuts[l]) + '%"><span>' + l + '</span></i>'; }).join('');
+    var cuts = CFG.cefrCuts[section], lv = ['A2', 'B1', 'B2', 'C1'];
+    /* Chaque trait est le seuil bas d'un niveau : l'étiquette se place au milieu de la zone du niveau (du
+       seuil au seuil suivant), pas sur le trait ; une zone étroite au bord se cale sur le bord. */
+    var ticks = lv.map(function (l, k) {
+      var c = (cuts[l] + (k < lv.length - 1 ? cuts[lv[k + 1]] : max)) / 2 / max * 100;
+      var pos = c > 95 ? 'right:0' : (c < 5 ? 'left:0' : 'left:' + c.toFixed(2) + '%;transform:translateX(-50%)');
+      return '<i class="rzt-rb-cut" style="left:' + pct(cuts[l]) + '%"></i><span class="rzt-rb-lv" style="' + pos + '">' + l + '</span>';
+    }).join('');
     var ci = arr(est.ci90).length === 2 ? est.ci90 : arr(est.range);
     return '<div class="rzt-rb" aria-hidden="true"><div class="rzt-rb-track">' + ticks
       + (ci.length === 2 ? '<span class="rzt-rb-ci" style="left:' + pct(ci[0]) + '%;width:' + (pct(ci[1]) - pct(ci[0])).toFixed(2) + '%"></span>' : '')
       + '<span class="rzt-rb-dot" style="left:' + pct(est.score) + '%"></span></div></div>';
+  }
+
+  function rangeLegendHtml() {
+    return '<div class="rzt-rb-legend"><i class="is-dot"></i>score estimé · <i class="is-ci"></i>marge à 90 % · <i class="is-cut"></i>début de chaque niveau CECRL</div>';
+  }
+
+  /* Marge lue sur l'intervalle affiché : symétrique, « ± 160 » ; coupée par un bord de l'échelle, elle ne
+     s'étend que d'un côté, et la page le dit au lieu d'annoncer un ± qui sortirait de l'échelle. */
+  function marginText(est, lo, hi) {
+    var ci = arr(est.ci90), s = est.score;
+    if (ci.length !== 2) return '± ' + Math.round(1.645 * est.sd);
+    var below = s - ci[0], above = ci[1] - s;
+    if (s >= hi) return 'jusqu’à ' + below + ' points en dessous ; ' + hi + ' est le maximum de l’échelle';
+    if (s <= lo) return 'jusqu’à ' + above + ' points au-dessus ; ' + lo + ' est le minimum de l’échelle';
+    if (Math.abs(below - above) > 10) return '−' + below + ' / +' + above + ', coupée par le bord de l’échelle';
+    return '± ' + Math.round(1.645 * est.sd);
+  }
+
+  /* Score au bord de l'échelle (5 ou 495 par section) : le dire, sinon 495 se lit comme un sans-faute. */
+  function edgeNoteHtml(score, lo, hi, cls) {
+    cls = cls || 'rzt-sec-sub';
+    if (score >= hi) return '<div class="' + cls + '">' + hi + ' est le maximum de l’échelle : le score s’y arrête et la marge ne s’étend que vers le bas. Ce n’est pas un sans-faute.</div>';
+    if (score <= lo) return '<div class="' + cls + '">' + lo + ' est le minimum de l’échelle : le score s’y arrête et la marge ne s’étend que vers le haut.</div>';
+    return '';
   }
 
   function lastResultCardHtml() {
@@ -1834,7 +1996,7 @@
     if (s) {
       h.push('<div class="rzt-last-row"><div class="rzt-last-k">Bilan oral et écrit · ' + esc(frShort(s.at)) + '</div><div class="rzt-last-v">'
         + (s.S ? '<span>Oral <b class="rzt-mid-num">' + s.S.score + '</b><span class="rz-muted"> / 200</span></span> ' : '')
-        + (s.W ? '<span>Écrit <b class="rzt-mid-num">' + (s.W.capped ? '≥ 150' : s.W.score) + '</b><span class="rz-muted"> / 200</span></span>' : '') + '</div>'
+        + (s.W ? '<span>Écrit <b class="rzt-mid-num">' + (s.W.capped ? '≥ 150' : s.W.score) + '</b><span class="rz-muted"> / 200</span></span>' : '') + (!s.S && !s.W ? '<span class="rz-muted">Aucune réponse : pas de score.</span>' : '') + '</div>'
         + btn('rz-test-result', 'Voir les résultats', 'btn-secondary rzt-sm', ' data-id="' + esc(s.id) + '"') + '</div>');
     }
     var nextE = e ? Math.ceil((e.at + NEXT_EXPRESS_DAYS * 86400000 - Date.now()) / 86400000) : 0;
@@ -1881,7 +2043,7 @@
     shown.forEach(function (e) {
       var what = e.kind === 'express'
         ? '<b>' + e.total.score + '</b> / 990 <span class="rz-muted">· É ' + e.L.score + ' · L ' + e.R.score + '</span>'
-        : (e.S ? 'Oral <b>' + e.S.score + '</b>' : '') + (e.S && e.W ? ' · ' : '') + (e.W ? 'Écrit <b>' + (e.W.capped ? '≥ 150' : e.W.score) + '</b>' : '');
+        : ((e.S ? 'Oral <b>' + e.S.score + '</b>' : '') + (e.S && e.W ? ' · ' : '') + (e.W ? 'Écrit <b>' + (e.W.capped ? '≥ 150' : e.W.score) + '</b>' : '') || '<span class="rz-muted">aucune réponse</span>');
       out.push('<li><button type="button" class="rzt-hist-item" data-act="rz-test-result" data-id="' + esc(e.id) + '"><span class="rzt-hist-date">' + esc(frShort(e.at)) + '</span>'
         + '<span class="rzt-hist-kind">' + (e.kind === 'express' ? 'Express' : 'Oral et écrit') + '</span><span class="rzt-hist-what">' + what + '</span>' + R.icon('arrow') + '</button></li>');
     });
@@ -2099,11 +2261,19 @@
       + (k ? '<span class="rz-level-k">' + esc(k) + '</span>' : '') + esc(label) + '</span>';
   }
 
-  function cefrBarsHtml(probs, order) {
-    order = order || ['A2', 'B1', 'B2', 'C1'];
-    return '<div class="rzt-cp">' + order.map(function (l) {
-      var p = num(probs && probs[l], 0) + (l === 'A2' ? num(probs && probs.A1, 0) + num(probs && probs['<A1'], 0) : 0);
-      return '<div class="rzt-cp-row" title="' + esc(l + ' : ' + Math.round(p * 100) + ' %') + '"><span class="rzt-cp-k">' + (l === 'A2' ? 'A2 ou moins' : l) + '</span><span class="rzt-cp-bar"><i style="width:' + (p * 100).toFixed(1) + '%"></i></span><span class="rzt-cp-v">' + Math.round(p * 100) + ' %</span></div>';
+  /* Probabilité de chaque niveau (A2 ou moins = A2 + A1 + <A1). Pourcentages arrondis au plus fort reste :
+     leur somme fait 100, ce qu'un arrondi ligne à ligne ne garantit pas (0 + 2 + 30 + 69 = 101). */
+  function cefrBarsHtml(probs, caption) {
+    var order = ['A2', 'B1', 'B2', 'C1'];
+    var ps = order.map(function (l) { return num(probs && probs[l], 0) + (l === 'A2' ? num(probs && probs.A1, 0) + num(probs && probs['<A1'], 0) : 0); });
+    var sum = ps.reduce(function (a, b) { return a + b; }, 0) || 1;
+    var raw = ps.map(function (p) { return p / sum * 100; });
+    var pc = raw.map(Math.floor), left = 100 - pc.reduce(function (a, b) { return a + b; }, 0);
+    raw.map(function (v, i) { return { i: i, r: v - pc[i] }; }).sort(function (a, b) { return b.r - a.r; })
+      .slice(0, left).forEach(function (x) { pc[x.i]++; });
+    return '<div class="rzt-cp">' + (caption ? '<div class="rzt-cp-cap">' + esc(caption) + '</div>' : '') + order.map(function (l, i) {
+      var k = l === 'A2' ? 'A2 ou moins' : l;
+      return '<div class="rzt-cp-row" title="' + esc(k + ' : ' + pc[i] + ' %') + '"><span class="rzt-cp-k">' + k + '</span><span class="rzt-cp-bar"><i style="width:' + raw[i].toFixed(1) + '%"></i></span><span class="rzt-cp-v">' + pc[i] + ' %</span></div>';
     }).join('') + '</div>';
   }
 
@@ -2115,7 +2285,8 @@
       + rangeBarHtml(s, r)
       + '<div class="rzt-sec-sub">' + r.correct + ' bonnes réponses sur ' + r.n + (r.neutral ? ' (et ' + r.neutral + ' question' + (r.neutral > 1 ? 's' : '') + ' neutralisée' + (r.neutral > 1 ? 's' : '') + ' par la relecture)' : '') + ' · étape 2 ' + (r.path === 'hard' ? 'exigeante' : 'accessible')
       + (delta != null ? ' · <span class="' + (delta >= 0 ? 'rzt-up' : 'rzt-down') + '">' + signed(delta) + '</span> depuis le bilan précédent' : '') + '</div>'
-      + cefrBarsHtml(r.cefrProb) + '</div>';
+      + edgeNoteHtml(r.score, 5, 495)
+      + cefrBarsHtml(r.cefrProb, 'Probabilité que votre niveau en ' + (s === 'L' ? 'écoute' : 'lecture') + ' soit…') + '</div>';
   }
 
   function abilityAgg(e) {
@@ -2145,8 +2316,10 @@
         var tag = '';
         if (g && g.n >= 4 && g.k > 1 && zAgg < -1.5) { tag = '<span class="rzt-tag is-weak">Point faible confirmé</span>'; weak.push(r.k); }
         else if (g && g.n >= 4 && g.k > 1 && zAgg > 1.5) { tag = '<span class="rzt-tag is-strong">Point fort confirmé</span>'; strong.push(r.k); }
-        else if (a.z < -1 && a.c < a.e) { tag = '<span class="rzt-tag is-weak">Tendance : point faible</span>'; weak.push(r.k); }
-        else if (a.z > 1 && a.c > a.e) { tag = '<span class="rzt-tag is-strong">Tendance : point fort</span>'; strong.push(r.k); }
+        /* Une ou deux questions ne font pas une tendance : une seule réponse juste à une question difficile
+           donnait z > 1 (1/1 « point fort »), une seule fausse « point faible » et un conseil. */
+        else if (a.n >= 3 && a.z < -1 && a.c < a.e) { tag = '<span class="rzt-tag is-weak">Tendance : point faible</span>'; weak.push(r.k); }
+        else if (a.n >= 3 && a.z > 1 && a.c > a.e) { tag = '<span class="rzt-tag is-strong">Tendance : point fort</span>'; strong.push(r.k); }
         var ratio = a.n ? a.c / a.n : 0, exp = a.n ? a.e / a.n : 0;
         h.push('<div class="rzt-ab-row"><div class="rzt-ab-label">' + esc((ABILITIES[r.k] || { label: r.k }).label) + tag + '</div>'
           + '<div class="rzt-ab-bar" title="' + esc(a.c + ' sur ' + a.n + ' — attendu à votre score : ' + (Math.round(a.e * 10) / 10).toString().replace('.', ',')) + '"><i style="width:' + (ratio * 100).toFixed(1) + '%"></i><b style="left:' + (exp * 100).toFixed(1) + '%"></b></div>'
@@ -2155,7 +2328,7 @@
       h.push('</div>');
     });
     h.push('</div>');
-    h.push('<div class="rz-card-foot">Barre : réussite observée ; trait : réussite attendue à votre score. Un seul bilan ne compte que 2 à 4 questions par capacité : on parle de <b>tendance</b>, confirmée quand vos trois derniers bilans vont dans le même sens.</div>');
+    h.push('<div class="rz-card-foot">Barre : votre part de bonnes réponses ; trait : la part qu’on attend d’une personne qui a votre score à ces mêmes questions (barre au-delà du trait : mieux que prévu). Un seul bilan ne compte que quelques questions par capacité : on parle de <b>tendance</b> à partir de 3 questions, confirmée quand vos trois derniers bilans vont dans le même sens.</div>');
     if (weak.length) {
       h.push('<div class="rzt-advice"><div class="rz-fb-sub">' + R.icon('target') + ' À travailler</div><ul>' + weak.slice(0, 3).map(function (k) { return '<li><b>' + esc((ABILITIES[k] || { label: k }).label) + '.</b> ' + esc((ABILITIES[k] || { tip: '' }).tip) + '</li>'; }).join('') + '</ul>'
         + btn('rz-go', 'Exercices ' + R.icon('arrow'), 'btn-secondary rzt-sm', ' data-view="exercises"') + '</div>');
@@ -2248,10 +2421,11 @@
     var tl = cefrLabel({ cefr: e.total.cefr, cefrProb: e.total.cefrProb });
     h.push('<section class="rz-card rzt-hero"><div class="rzt-hero-main"><div class="rzt-hero-k">Score estimé</div><div class="rzt-hero-v"><b>' + e.total.score + '</b><span> / 990</span></div>'
       + '<div class="rzt-hero-ci">entre ' + e.total.ci90[0] + ' et ' + e.total.ci90[1] + ' à 90 % · ' + levelPill(tl.label, 'Niveau') + '</div>'
-      + rangeBarHtml('T', { score: e.total.score, ci90: e.total.ci90 })
+      + rangeBarHtml('T', { score: e.total.score, ci90: e.total.ci90 }) + rangeLegendHtml()
       + (prev ? '<div class="rzt-hero-sub">Bilan précédent (' + esc(frShort(prev.at)) + ') : ' + prev.total.score + '. Tendance de vos bilans : ≈ ' + e.trend.T.mean + ' ± ' + Math.round(1.645 * e.trend.T.sd) + '.</div>'
-        : '<div class="rzt-hero-sub">Premier bilan : la marge est large (± ' + Math.round(1.645 * e.total.sd) + '). Elle se resserre bilan après bilan.</div>')
-      + '</div><div class="rzt-hero-note">Ce score est estimé à partir de 43 questions ; un test officiel en compte 200. Il situe votre niveau, pas un résultat au point près.'
+        : '<div class="rzt-hero-sub">Premier bilan : la marge est large (' + esc(marginText(e.total, 10, 990)) + '). Elle se resserre bilan après bilan.</div>')
+      + (prev ? edgeNoteHtml(e.total.score, 10, 990, 'rzt-hero-sub') : '')
+      + '</div><div class="rzt-hero-note">Ce score est estimé à partir de ' + ((num(e.L.n, 0) + num(e.R.n, 0)) || 43) + ' questions ; un test officiel en compte 200. Il situe votre niveau, pas un résultat au point près.'
       + (e.L.offset || e.R.offset ? ' Recalé sur vos scores officiels (écoute ' + signed(e.L.offset) + ', lecture ' + signed(e.R.offset) + ').' : '')
       + (e.pauses || e.replays ? ' ' + plural(e.pauses, 'pause') + (e.replays ? ', ' + plural(e.replays, 'reprise') + ' d’écoute' : '') + '.' : '') + '</div>'
       + mentionHtml() + '</section>');
@@ -2391,11 +2565,17 @@
     h.push('<div class="rzt-head"><div><div class="rz-kicker">' + R.icon('speak') + ' Bilan oral et écrit · ' + esc(frDate(e.at)) + '</div><h2 class="rz-section-title">Vos résultats</h2></div>'
       + '<div class="rzt-actions">' + btn('rz-test-home', R.icon('back') + ' Bilans', 'btn-ghost') + btn('rz-test-progress', R.icon('chart') + ' Progrès', 'btn-secondary') + '</div></div>');
     var tile = function (k, label, skill, x) {
-      if (!x) return '';
+      if (!x) return e.none && e.none[k] ? '<div class="rz-card rzt-sec"><div class="rzt-sec-head">' + R.h.skill(skill, false) + '<span class="rzt-sec-name">' + label + '</span></div>'
+        + '<div class="rzt-sec-sub">Aucune réponse enregistrée : pas de score, votre niveau n’a pas été modifié.</div></div>' : '';
       var lab = k === 'W' && x.capped ? '≥ 150' : String(x.score);
+      var noEssay = k === 'W' && (x.noEssay != null ? x.noEssay : !e.withEssay), skipped = noEssay && e.withEssay;
+      var sub = k === 'W' && x.capped ? (skipped ? 'Essai non rendu : l’écrit, estimé sans lui, plafonne à 150.' : 'Sans essai, l’écrit plafonne à 150 : faites le bilan avec l’essai pour aller au-delà.')
+        : (noEssay ? (skipped ? 'Essai non rendu : estimé sans essai, marge plus large (± 30).' : 'Estimé sans essai : marge plus large (± 30).')
+          : 'Estimation à partir de la note de chaque tâche, pondérée selon la longueur et l’exigence des tâches (repère de Révizator, pas le barème d’ETS).');
+      if (x.missing) sub += ' ' + plural(x.missing, 'réponse manquante', 'réponses manquantes') + (x.missing > 1 ? ' comptées 0' : ' comptée 0') + ', comme à l’examen.';
       return '<div class="rz-card rzt-sec"><div class="rzt-sec-head">' + R.h.skill(skill, false) + '<span class="rzt-sec-name">' + label + '</span>' + R.h.level(x.cefr) + '</div>'
         + '<div class="rzt-sec-score"><b>' + esc(lab) + '</b><span class="rz-muted"> / 200</span><span class="rzt-sec-ci">[' + x.range[0] + '–' + x.range[1] + ']</span></div>' + rangeBarHtml(k, x, 200)
-        + '<div class="rzt-sec-sub">' + (k === 'W' && x.capped ? 'Sans essai, l’écrit plafonne à 150 : faites le bilan avec l’essai pour aller au-delà.' : (k === 'W' && !e.withEssay ? 'Estimé sans essai : marge plus large (± 30).' : 'Estimation à partir de la note de chaque tâche, pondérée comme les tâches officielles.')) + '</div></div>';
+        + '<div class="rzt-sec-sub">' + sub + '</div></div>';
     };
     h.push('<div class="rz-grid2 rzt-secs">' + tile('S', 'Oral', 'speak', e.S) + tile('W', 'Écrit', 'write', e.W) + '</div>');
     h.push('<section class="rz-card rzt-hero-note-only">' + '<div class="rz-card-foot">Notes données par Claude à partir de la transcription de Whisper et de votre texte, selon des grilles inspirées des barèmes officiels (0-3, 0-4, 0-5). La prononciation n’est jugée qu’indirectement.</div>' + mentionHtml() + '</section>');
@@ -2409,7 +2589,7 @@
       var t = u.task || {};
       var q = u.type === 'respond' || u.type === 'respond_info' ? arr(t.questions)[u.qi] : (u.type === 'sentence' ? arr(t.words).join(' / ') : (u.type === 'read_aloud' || u.type === 'describe' ? '' : t.prompt));
       h.push('<details class="rzt-rv-sec rzt-sw-rv"><summary>' + R.h.skill(u.mode === 'speak' ? 'speak' : 'write', false) + '<span>' + esc((SW_TASKS[u.type] || {}).label || u.type) + (u.qi >= 0 && u.qi != null ? ' · question ' + (u.qi + 1) : '') + '</span>'
-        + (tk ? '<span class="rzt-sw-note">' + tk.s + ' / ' + tk.scale + '</span>' : '') + '</summary>');
+        + (tk ? '<span class="rzt-sw-note">' + (tk.empty && u.type === 'essay' ? 'non rendu' : String(tk.s).replace('.', ',') + ' / ' + tk.scale) + '</span>' : '') + '</summary>');
       if (q) h.push('<div class="rzt-sw-text is-q is-small" lang="en">' + esc(q) + '</div>');
       if (u.mode === 'speak') {
         var url = resp.url || U.blobUrls[u.key] || '';
@@ -2683,6 +2863,7 @@
   /* ══ Événements ═════════════════════════════════════════════════════════ */
 
   R.on('loaded', function () {
+    rescoreHistory();
     var t = TD();
     /* Un rechargement interrompt l'examen : il reprend en pause, au début de l'ensemble d'écoute en cours. */
     if (t.run) {
