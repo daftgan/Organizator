@@ -116,7 +116,8 @@
     lessonModel: 'sonnet', lessonEffort: 'medium', genModel: 'sonnet', genEffort: 'low', gradeModel: 'sonnet', gradeEffort: 'medium',
     tutorModel: 'haiku', cardModel: 'haiku', engine: 'auto', voiceUs: 'af_heart', voiceGb: 'bf_emma', speed: 1, retention: 0.9,
     whisperModel: 'small', tutorLive: true, tutorSensitivity: 40, tutorBargeIn: 'words',
-    profEnabled: true, profLang: 'auto', profLevel: 'auto', profVoice: true, profModel: 'sonnet', profEffort: 'low'
+    profEnabled: true, profLang: 'auto', profLevel: 'auto', profVoice: true, profModel: 'sonnet', profEffort: 'low',
+    profTone: 'warm', profLength: 'short', profChat: 'some', profAddress: 'vous', profVoices: 'two', profVoiceEn: '', profFresh: true
   };
   var DEFAULT_PROFILE = { onboarded: false, goal: '', interests: '', startLevel: 'B1', weeklyGoal: 4, defaultMinutes: 20, explain: 'auto' };
 
