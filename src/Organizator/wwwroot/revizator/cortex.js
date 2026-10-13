@@ -1,32 +1,51 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    Révizator — le cortex (vue « cortex »)
 
-   Des cartes mentales de ce que l'utilisateur veut savoir : un nœud racine (« Mon cortex »,
-   « Bricolage », « Informatique »…) et des thèmes de plus en plus précis. Chaque nœud peut donner un
-   cours d'anglais de fond (lesson.js, source « Mon cortex ») : l'agent du cours fait une recherche
-   sur le nœud au lieu de lire l'actualité, puis le cours fait le nœud passe à « étudié » (ou « à
-   approfondir » si le cours a été jugé difficile ou réussi à moins de 60 %).
+   Des cartes mentales de ce que l'utilisateur veut savoir. Une carte commence vide : sa racine
+   seule (« Mon cortex »). Les grands nœuds arrivent au fil de l'eau, ajoutés à la main ou nés d'une
+   discussion avec l'agent. Chaque nœud peut donner un cours d'anglais de fond (lesson.js, source
+   « Mon cortex ») : l'agent du cours fait une recherche sur le nœud au lieu de lire l'actualité, puis
+   le cours fait passe le nœud à « étudié » (ou « à approfondir » si le cours a été jugé difficile ou
+   réussi à moins de 60 %).
+
+   Programmes : l'onglet « Agent » est une discussion où l'utilisateur demande un programme (« du début
+   de l'humanité à la fin ») ; l'agent propose une suite ordonnée d'étapes (Préhistoire, Antiquité,
+   Moyen Âge…), avec des sous-étapes au besoin, qu'on rediscute (« plus court », « ajoute l'Égypte »)
+   avant de l'ajouter à la carte. Un programme est un nœud (kind « program ») dont les enfants sont
+   les étapes (kind « step »), dans l'ordre ; les cours en proposent l'étape suivante. On peut aussi
+   rediscuter un programme déjà dans la carte : l'agent rend la révision, appliquée en gardant l'état
+   et les cours des étapes conservées.
 
    Deux façons de faire grandir une carte (réglage par carte) :
-     • « propose » : l'agent propose — plan de départ d'une nouvelle carte, sous-thèmes à la demande,
-       et après chaque cours les trois sujets suivants du cours deviennent des sous-nœuds. Les nœuds
-       proposés sous un nœud pas encore étudié sont « à débloquer » : étudier leur parent les ouvre,
-       un clic aussi ;
+     • « propose » : l'agent propose — sous-thèmes à la demande, et après chaque cours (hors
+       programme) les trois sujets suivants du cours deviennent des sous-nœuds. Les sous-thèmes
+       proposés sous un nœud pas encore étudié sont « à débloquer » ;
      • « manual » : l'utilisateur choisit seul ses nœuds ; rien n'est verrouillé.
-   Réorganisation : après chaque modification à la main (ajout, renommage, suppression), si la carte
-   l'a activée, l'agent rend la carte entière remise en ordre (doublons fusionnés, nœuds déplacés,
-   intitulés harmonisés). La fusion ne perd jamais l'état d'un nœud ni ses cours.
+   Réorganisation : après chaque modification à la main, si la carte l'a activée, l'agent rend la
+   carte remise en ordre (doublons fusionnés, nœuds déplacés, intitulés harmonisés).
 
-   Agent : R.gen('cortex', { mode: create|expand|organize, map: { title, description }, nodes:
-   [{ id, parent, title, status, origin }], node, request }) → { mode, nodes: [{ ref, parent, title,
-   summaryFr, query }], merged: [{ from, into }], noteFr } (CortexGenre, LearningAgent.cs).
+   Versions : chaque modification enregistre une version de la carte (libellé, auteur, heure) dans un
+   document à part, learning\cortex\<id de la carte>.json (100 versions au plus). Annuler (Ctrl+Z),
+   Rétablir (Ctrl+Y), et l'onglet « Versions » pour revenir à n'importe laquelle (ce retour est
+   lui-même une version). Une carte supprimée va à la corbeille, d'où on la restaure.
+
+   Grand écran : la vue occupe toute la fenêtre (Échap pour en sortir).
+
+   Agent : R.gen('cortex', { mode: create|expand|organize|chat, map: { title, description }, nodes:
+   [{ id, parent, title, status, origin, kind }], node, request, history, message, draft })
+     create|expand|organize → { mode, nodes: [{ ref, parent, title, summaryFr, query }], merged, noteFr }
+     chat → { mode, reply, proposal: { action: none|new|revise, target, attach, title, summaryFr, query,
+              steps: [{ ref, parent, title, summaryFr, query }] }, followUps }   (CortexGenre, LearningAgent.cs)
 
    Données (learning.json, sujet « en ») :
-     cortex { current, maps: [{ id, title, description, mode: 'propose'|'manual', autoTidy, createdAt, updatedAt,
+     cortex { v, current, trash: [{ map, at }], maps: [{ id, title, description, mode: 'propose'|'manual', autoTidy,
+              createdAt, updatedAt, chat: [{ role: 'user'|'agent', text, at, proposal?, applied?, followUps? }],
               nodes: [{ id, parent ('' pour la racine), title, summaryFr, query, status: 'locked'|'open'|'studied'|'deepen',
-                        origin: 'seed'|'user'|'agent'|'lesson', order, lessons: [id de cours], at, studiedAt }] }] }
-   API pour lesson.js : R.cortex.{ suggest(n), get(map, node), path(map, node), lessonParams(map, node, depth),
-     lessonDone(entry, L), statusLabel(s) }
+                        origin: 'seed'|'user'|'agent'|'lesson', kind: ''|'program'|'step', order, lessons: [id de cours],
+                        at, studiedAt }] }] }
+     document cortex/<id de carte> { map, index, versions: [{ id, at, label, by: 'user'|'agent'|'lesson', snap }] }
+   API pour lesson.js : R.cortex.{ suggest(n), get(map, node), path(map, node), status(map, node),
+     lessonParams(map, node, depth), lessonDone(entry, L), statusLabel(s) }
    ═══════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
@@ -37,24 +56,26 @@
 
   var U = R.ui.cortex = {
     sel: {}, expanded: {}, zoom: 1, busy: {}, note: {}, error: {}, again: {},
-    newOpen: false, newTitle: '', newDesc: '', newPlan: 'agent', add: '', rename: null, confirmDel: '', centered: ''
+    newOpen: false, newTitle: '', newDesc: '', add: '', rename: null, confirmDel: '', centered: '',
+    side: '', full: false, chatText: '', chatBusy: {}, chatError: {}, focusOff: {}, hist: {}, trashOpen: false
   };
 
   var STATUS = { locked: 'À débloquer', open: 'À étudier', studied: 'Étudié', deepen: 'À approfondir' };
   var RANK = { locked: 0, open: 1, deepen: 2, studied: 3 };
   var MODES = { propose: 'L’agent propose', manual: 'Je choisis moi-même' };
+  var BY = { user: 'vous', agent: 'l’agent', lesson: 'un cours' };
   var HUES = 8;                      /* couleurs de branche (cortex.css, .rzc-h0 … .rzc-h7) */
   var TIDY_MS = 2500;                /* réorganisation automatique : délai après la dernière modification */
-  var NODE_ARC = 132;                /* écart visé entre deux feuilles voisines, en px */
-  var SEED = [
-    ['Histoire', 'Les grandes périodes, les civilisations et les événements qui ont façonné le monde.', 'world history key periods'],
-    ['Philosophie', 'Les grandes questions, les courants et les penseurs, de l’Antiquité à aujourd’hui.', 'philosophy main ideas thinkers'],
-    ['Sciences', 'Comprendre l’univers, le vivant, la matière et la méthode scientifique.', 'science explained basics'],
-    ['Informatique', 'Comment marchent les ordinateurs, le web, la programmation et l’IA.', 'computing explained programming basics'],
-    ['Arts et littérature', 'Peinture, musique, cinéma et grands livres, surtout du monde anglophone.', 'art literature history'],
-    ['Bricolage et maison', 'Outils, techniques et savoir-faire pour entretenir et améliorer la maison.', 'DIY home improvement basics'],
-    ['Économie et société', 'Argent, travail, institutions et grands débats de société.', 'economics society explained'],
-    ['Monde anglophone', 'Cultures, institutions et vie quotidienne au Royaume-Uni, aux États-Unis et ailleurs.', 'English-speaking world culture']
+  var NODE_ARC = 132;                /* écart visé entre deux voisins d'un même anneau, en px */
+  var FAN = Math.PI;                 /* éventail des enfants d'un nœud (hors racine) : un demi-tour au plus */
+  var MAX_VERSIONS = 100;
+  var CHAT_KEEP = 40;                /* messages gardés par carte */
+  var CHAT_SEND = 12;                /* messages repris à chaque tour */
+  var EXAMPLES = [
+    'Un programme qui va du début de l’humanité à la fin',
+    'Apprendre le bricolage, des bases à la rénovation',
+    'Comprendre l’informatique, du transistor à l’IA',
+    'Les grands philosophes, dans l’ordre'
   ];
 
   /* ══ Utilitaires ════════════════════════════════════════════════════════ */
@@ -67,16 +88,26 @@
   function plural(n, one, many) { return n + ' ' + (n > 1 ? (many || one + 's') : one); }
   function key(s) { return R.text.norm(str(s)).replace(/^(les?|la|l'|un|une|des|the|a|an)\s+/, ''); }
   function clip(s, n) { s = str(s).trim(); return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s; }
+  function copy(v) { return JSON.parse(JSON.stringify(v)); }
+  function when(ms) {
+    var d = new Date(ms), today = R.today() === R.dayOf(ms);
+    return (today ? 'aujourd’hui' : R.fmtDayShort(R.dayOf(ms))) + ' à ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  }
+  /* Texte de l'agent : paragraphes et **gras**, rien d'autre. */
+  function prose(t) {
+    return str(t).split(/\n{2,}/).map(function (p) {
+      return '<p>' + esc(p).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>') + '</p>';
+    }).join('');
+  }
 
   /* ══ Données ════════════════════════════════════════════════════════════ */
 
-  function seedMap() {
-    var now = Date.now(), id = R.uid('cxmap');
-    var nodes = [{ id: 'root', parent: '', title: 'Mon cortex', summaryFr: 'Tout ce que vous voulez apprendre, en anglais.', query: '', status: 'open', origin: 'seed', order: 0, lessons: [], at: now }];
-    SEED.forEach(function (s, i) {
-      nodes.push({ id: R.uid('cn'), parent: 'root', title: s[0], summaryFr: s[1], query: s[2], status: 'open', origin: 'seed', order: i, lessons: [], at: now });
-    });
-    return { id: id, title: 'Mon cortex', description: '', mode: 'propose', autoTidy: true, createdAt: now, updatedAt: now, nodes: nodes };
+  function emptyMap(title, description) {
+    var now = Date.now();
+    return {
+      id: R.uid('cxmap'), title: title || 'Mon cortex', description: description || '', mode: 'propose', autoTidy: true, createdAt: now, updatedAt: now, chat: [],
+      nodes: [{ id: 'root', parent: '', title: title || 'Mon cortex', summaryFr: '', query: '', status: 'open', origin: 'user', kind: '', order: 0, lessons: [], at: now }]
+    };
   }
 
   function normNode(n, i) {
@@ -87,6 +118,7 @@
     n.query = str(n.query);
     if (!STATUS[n.status]) n.status = 'open';
     if (['seed', 'user', 'agent', 'lesson'].indexOf(n.origin) < 0) n.origin = 'user';
+    if (['program', 'step'].indexOf(n.kind) < 0) n.kind = '';
     n.order = num(n.order, i);
     n.lessons = arr(n.lessons);
     return n;
@@ -99,8 +131,9 @@
     map.nodes = map.nodes.filter(function (n) { if (ids[n.id]) return false; ids[n.id] = n; return true; });
     var roots = map.nodes.filter(function (n) { return !n.parent || !ids[n.parent]; });
     var root = roots.filter(function (n) { return !n.parent; })[0] || roots[0];
-    if (!root) { root = normNode({ id: 'root', parent: '', title: map.title || 'Carte', origin: 'seed' }, 0); map.nodes.unshift(root); ids[root.id] = root; }
+    if (!root) { root = normNode({ id: 'root', parent: '', title: map.title || 'Carte', origin: 'user' }, 0); map.nodes.unshift(root); ids[root.id] = root; }
     root.parent = '';
+    root.kind = '';
     map.nodes.forEach(function (n) {
       if (n === root) return;
       if (!n.parent || !ids[n.parent]) { n.parent = root.id; return; }
@@ -120,21 +153,38 @@
     m.description = str(m.description);
     if (!MODES[m.mode]) m.mode = 'propose';
     m.autoTidy = m.autoTidy !== false;
+    m.chat = arr(m.chat).filter(obj).slice(-CHAT_KEEP);
     repair(m);
     return m;
+  }
+
+  /* v2 : le cortex commence vide. Les huit thèmes de départ de la v1, jamais touchés (ni cours, ni
+     sous-thème, ni état), sont retirés une fois. */
+  function migrate(c) {
+    if (c.v >= 2) return;
+    c.maps.forEach(function (m) {
+      var used = {};
+      arr(m.nodes).forEach(function (n) { if (n && n.parent) used[n.parent] = 1; });
+      m.nodes = arr(m.nodes).filter(function (n) {
+        return !(n && n.origin === 'seed' && n.parent && !used[n.id] && !arr(n.lessons).length && (n.status || 'open') === 'open');
+      });
+    });
+    c.v = 2;
+    R.save();
   }
 
   var normalized = false;
   function store() {
     var c = obj(R.data.cortex);
-    if (!c) c = R.data.cortex = { current: '', maps: [] };
+    if (!c) { c = R.data.cortex = { v: 2, current: '', maps: [], trash: [] }; }
     c.maps = arr(c.maps).filter(obj);
-    if (!c.maps.length) { c.maps.push(seedMap()); normalized = false; R.save(); }
-    if (!normalized) { c.maps.forEach(normMap); normalized = true; }
+    c.trash = arr(c.trash).filter(function (t) { return obj(t) && obj(t.map); }).slice(-10);
+    if (!c.maps.length) { c.maps.push(emptyMap()); c.v = 2; normalized = false; R.save(); }
+    if (!normalized) { migrate(c); c.maps.forEach(normMap); normalized = true; }
     if (!mapById(c.current, c)) c.current = c.maps[0].id;
     return c;
   }
-  R.on('loaded', function () { normalized = false; });
+  R.on('loaded', function () { normalized = false; U.hist = {}; });
 
   function maps() { return store().maps; }
   function mapById(id, c) { return arr((c || store()).maps).filter(function (m) { return m.id === id; })[0] || null; }
@@ -144,9 +194,11 @@
   function kids(map, id) {
     return map.nodes.filter(function (n) { return n.parent === id && n.parent; }).sort(function (a, b) { return a.order - b.order; });
   }
+  function descendants(map, id) { var out = []; kids(map, id).forEach(function (k) { out.push(k); out = out.concat(descendants(map, k.id)); }); return out; }
   function depth(map, n) { var d = 0; while (n && n.parent && d < 20) { n = node(map, n.parent); d++; } return d; }
   function pathOf(map, n) { var p = []; while (n && p.length < 20) { p.unshift(n); n = n.parent ? node(map, n.parent) : null; } return p; }
   function isUnder(map, n, ancestorId) { var p = n && node(map, n.parent); while (p) { if (p.id === ancestorId) return true; p = p.parent ? node(map, p.parent) : null; } return false; }
+  function programOf(map, n) { var p = pathOf(map, n); for (var i = p.length - 1; i >= 0; i--) if (p[i].kind === 'program') return p[i]; return null; }
   /* Verrouillage : seulement quand l'agent propose. */
   function status(map, n) { return map.mode === 'manual' && n.status === 'locked' ? 'open' : n.status; }
   function studied(s) { return s === 'studied' || s === 'deepen'; }
@@ -156,7 +208,102 @@
     var k = kids(map, p[0].id);
     return Math.max(0, k.indexOf(p[1])) % HUES;
   }
-  function touched(map) { map.updatedAt = Date.now(); R.save(); }
+  function isEmpty(map) { return map.nodes.length <= 1; }
+
+  /* ══ Versions ═══════════════════════════════════════════════════════════ */
+
+  function snapOf(map) { return copy({ title: map.title, description: map.description, mode: map.mode, autoTidy: map.autoTidy, nodes: map.nodes }); }
+
+  /* L'historique d'une carte, lu une fois. L'état à l'ouverture est pris tout de suite (pour pouvoir
+     annuler la première modification) ; à la lecture, les versions faites entre-temps suivent les anciennes. */
+  function hist(map) {
+    var H = U.hist[map.id];
+    if (H) return H;
+    H = U.hist[map.id] = { map: map.id, index: 0, loaded: false,
+      versions: [{ id: R.uid('cv'), at: Date.now(), label: 'État de départ', by: 'user', snap: snapOf(map), opening: true }] };
+    function done(d) {
+      var old = arr(d && d.versions).filter(function (v) { return obj(v) && obj(v.snap); });
+      var newer = H.versions.slice(0, H.index + 1).filter(function (v) { return !v.opening; });
+      if (old.length) {
+        var oldIndex = Math.max(0, Math.min(num(d.index, old.length - 1), old.length - 1));
+        H.versions = old.slice(0, oldIndex + 1).concat(newer).slice(-MAX_VERSIONS);
+      } else {
+        H.versions = H.versions.slice(0, H.index + 1);
+        H.versions.forEach(function (v) { delete v.opening; });
+      }
+      H.index = H.versions.length - 1;
+      H.loaded = true;
+      if (!old.length || newer.length) saveHist(H);
+      R.renderSoon();
+    }
+    R.doc('cortex', map.id).then(done, function () { done(null); });
+    return H;
+  }
+
+  var histTimers = {};
+  function saveHist(H) {
+    clearTimeout(histTimers[H.map]);
+    histTimers[H.map] = setTimeout(function () {
+      R.docSave('cortex', H.map, { map: H.map, index: H.index, versions: H.versions })['catch'](function (e) {
+        if (window.console) console.warn('Historique du cortex non enregistré : ' + (e && e.message));
+      });
+    }, 800);
+  }
+
+  /* Une version de plus : ce qui suivait la version courante (rétablir) est abandonné. */
+  function commit(map, label, by) {
+    var H = hist(map);
+    H.versions = H.versions.slice(0, H.index + 1);
+    H.versions.push({ id: R.uid('cv'), at: Date.now(), label: clip(label || 'Modification', 120), by: BY[by] ? by : 'user', snap: snapOf(map) });
+    if (H.versions.length > MAX_VERSIONS) H.versions = H.versions.slice(-MAX_VERSIONS);
+    H.index = H.versions.length - 1;
+    if (H.loaded) saveHist(H);
+  }
+
+  function restoreSnap(map, snap) {
+    var s = copy(snap);
+    map.title = s.title || map.title; map.description = str(s.description); map.mode = MODES[s.mode] ? s.mode : map.mode; map.autoTidy = s.autoTidy !== false;
+    map.nodes = arr(s.nodes);
+    repair(map);
+    if (!node(map, U.sel[map.id])) U.sel[map.id] = rootOf(map).id;
+    map.updatedAt = Date.now();
+    R.save();
+  }
+
+  function undo(map) {
+    var H = hist(map);
+    if (H.index <= 0) { R.toast('Rien à annuler.'); return; }
+    var v = H.versions[H.index];
+    H.index--;
+    restoreSnap(map, H.versions[H.index].snap);
+    saveHist(H);
+    U.note[map.id] = 'Annulé : ' + v.label + '.';
+    R.render();
+  }
+  function redo(map) {
+    var H = hist(map);
+    if (H.index >= H.versions.length - 1) { R.toast('Rien à rétablir.'); return; }
+    H.index++;
+    restoreSnap(map, H.versions[H.index].snap);
+    saveHist(H);
+    U.note[map.id] = 'Rétabli : ' + H.versions[H.index].label + '.';
+    R.render();
+  }
+  function restoreVersion(map, id) {
+    var H = hist(map), v = H.versions.filter(function (x) { return x.id === id; })[0];
+    if (!v) return;
+    restoreSnap(map, v.snap);
+    commit(map, 'Retour à la version du ' + when(v.at) + ' (' + v.label + ')', 'user');
+    U.note[map.id] = 'Carte revenue à la version du ' + when(v.at) + '.';
+    R.render();
+  }
+
+  /* Toute modification passe par ici : date, sauvegarde, version. */
+  function touched(map, label, by) {
+    map.updatedAt = Date.now();
+    R.save();
+    commit(map, label, by || 'user');
+  }
 
   /* ══ Mise en page radiale ═══════════════════════════════════════════════ */
 
@@ -183,50 +330,55 @@
     }
     var top = build(root, 0);
     var maxD = tree.reduce(function (a, t) { return Math.max(a, t.d); }, 0);
-    var leafDepth = {};
-    tree.forEach(function (t) { if (!t.ch.length && t.d > 0) leafDepth[t.d] = 1; });
-    var radius = [0];
-    var need = NODE_ARC * top.leaves / (2 * Math.PI);
-    for (var d = 1; d <= maxD; d++) {
-      var r = radius[d - 1] + (d === 1 ? 200 : 180);
-      if (leafDepth[d] || d === maxD) r = Math.max(r, need);
-      radius.push(r);
-    }
-    /* Une seule branche : la répartir sur un demi-cercle plutôt que tout autour. */
-    function place(t, a0, a1) {
-      var a = (a0 + a1) / 2;
-      pos[t.n.id] = { x: t.d ? radius[t.d] * Math.cos(a) : 0, y: t.d ? radius[t.d] * Math.sin(a) : 0, a: a, d: t.d, t: t };
+    /* Les angles d'abord : chaque sous-arbre a une part proportionnelle à ses feuilles, et les enfants
+       d'un nœud (hors racine) se déploient en éventail autour de lui, sur un demi-tour au plus. */
+    var ang = {};
+    function angles(t, a0, a1) {
+      ang[t.n.id] = { a: (a0 + a1) / 2, d: t.d, t: t };
+      var span = a1 - a0, mid = (a0 + a1) / 2;
+      if (t.d > 0 && span > FAN) { a0 = mid - FAN / 2; a1 = mid + FAN / 2; span = FAN; }
       var cur = a0;
       t.ch.forEach(function (c) {
-        var span = (a1 - a0) * c.leaves / t.leaves;
-        place(c, cur, cur + span);
-        cur += span;
+        var part = span * c.leaves / t.leaves;
+        angles(c, cur, cur + part);
+        cur += part;
       });
     }
-    place(top, -Math.PI / 2, 3 * Math.PI / 2);
+    angles(top, -Math.PI / 2, 3 * Math.PI / 2);
+    /* Puis les rayons : assez grands pour que deux voisins d'un même anneau ne se chevauchent pas. */
+    var radius = [0];
+    for (var d = 1; d <= maxD; d++) {
+      var on = Object.keys(ang).filter(function (id) { return ang[id].d === d; }).map(function (id) { return ang[id].a; }).sort(function (x, y) { return x - y; });
+      var gap = 2 * Math.PI;
+      for (var i = 1; i < on.length; i++) gap = Math.min(gap, on[i] - on[i - 1]);
+      if (on.length > 1) gap = Math.min(gap, 2 * Math.PI - (on[on.length - 1] - on[0]));
+      radius.push(Math.max(radius[d - 1] + (d === 1 ? 200 : 180), on.length > 1 ? NODE_ARC / Math.max(gap, 0.05) : 0));
+    }
+    Object.keys(ang).forEach(function (id) {
+      var A = ang[id];
+      pos[id] = { x: A.d ? radius[A.d] * Math.cos(A.a) : 0, y: A.d ? radius[A.d] * Math.sin(A.a) : 0, a: A.a, d: A.d, t: A.t };
+    });
     var xs = [], ys = [];
     Object.keys(pos).forEach(function (id) { xs.push(pos[id].x); ys.push(pos[id].y); });
-    var pad = 130;
-    var minX = Math.min.apply(null, xs) - pad, maxX = Math.max.apply(null, xs) + pad;
-    var minY = Math.min.apply(null, ys) - 70, maxY = Math.max.apply(null, ys) + 70;
+    var padX = 130, padY = 70;
+    var minX = Math.min.apply(null, xs) - padX, maxX = Math.max.apply(null, xs) + padX;
+    var minY = Math.min.apply(null, ys) - padY, maxY = Math.max.apply(null, ys) + padY;
     Object.keys(pos).forEach(function (id) { pos[id].x -= minX; pos[id].y -= minY; });
     return { pos: pos, w: Math.round(maxX - minX), h: Math.round(maxY - minY), radius: radius, root: root, cx: -minX, cy: -minY };
   }
 
-  /* ══ Agent ══════════════════════════════════════════════════════════════ */
+  /* ══ Agent : carte (create, expand, organize) ═══════════════════════════ */
 
-  function agentOk() { return !!(window.bridge && (window.bridge.isShim || window.bridge.mode === 'server' || window.bridge.call)); }
+  function nodesParam(map) {
+    return map.nodes.map(function (n) { return { id: n.id, parent: n.parent, title: n.title, status: n.status, origin: n.origin, kind: n.kind }; });
+  }
 
   function runAgent(map, mode, opts) {
     opts = opts || {};
     if (U.busy[map.id]) { if (mode === 'organize') U.again[map.id] = true; return; }
     U.busy[map.id] = { mode: mode, node: opts.node || '', at: Date.now() };
     U.error[map.id] = '';
-    var params = {
-      mode: mode, map: { title: map.title, description: map.description },
-      nodes: map.nodes.map(function (n) { return { id: n.id, parent: n.parent, title: n.title, status: n.status, origin: n.origin }; }),
-      node: opts.node || '', request: opts.request || ''
-    };
+    var params = { mode: mode, map: { title: map.title, description: map.description }, nodes: nodesParam(map), node: opts.node || '', request: opts.request || '' };
     R.render();
     R.gen('cortex', params).then(function (r) {
       delete U.busy[map.id];
@@ -235,7 +387,7 @@
       var n = apply(m, r && r.doc, opts.node || '');
       if (mode === 'create') U.centered = '';
       U.note[map.id] = str(r && r.doc && r.doc.noteFr) || (n ? plural(n, 'nouveau nœud', 'nouveaux nœuds') + '.' : 'Carte remise en ordre.');
-      touched(m);
+      touched(m, { create: 'Plan de départ par l’agent', expand: 'Sous-thèmes proposés par l’agent', organize: 'Réorganisation par l’agent' }[mode] || 'Modification par l’agent', 'agent');
       R.renderSoon();
       if (U.again[map.id]) { delete U.again[map.id]; schedule(m); }
     }, function (e) {
@@ -250,9 +402,9 @@
   function schedule(map) {
     if (!map.autoTidy) return;
     clearTimeout(timers[map.id]);
-    timers[map.id] = setTimeout(function () { var m = mapById(map.id); if (m) runAgent(m, 'organize'); }, TIDY_MS);
+    timers[map.id] = setTimeout(function () { var m = mapById(map.id); if (m && !isEmpty(m)) runAgent(m, 'organize'); }, TIDY_MS);
   }
-  function edited(map) { touched(map); schedule(map); }
+  function edited(map, label) { touched(map, label, 'user'); schedule(map); }
 
   /* La réponse de l'agent, fusionnée dans la carte. Rend le nombre de nœuds ajoutés. */
   function apply(map, doc, focus) {
@@ -291,11 +443,12 @@
     });
     repair(map);
     /* Nouveaux nœuds : à la suite de leurs frères (sauf en réorganisation, où l'ordre rendu vaut) ;
-       verrouillés sous un nœud pas encore étudié, quand l'agent propose. */
+       verrouillés sous un nœud pas encore étudié, quand l'agent propose ; étapes s'ils sont dans un programme. */
     map.nodes.forEach(function (n) {
       if (!fresh[n.id]) return;
       var p = node(map, n.parent);
       n.status = !p || !p.parent || studied(p.status) || map.mode === 'manual' ? 'open' : 'locked';
+      if (programOf(map, n)) { n.kind = 'step'; n.status = 'open'; }
       if (mode !== 'organize') {
         var sib = kids(map, n.parent).filter(function (s) { return !fresh[s.id]; });
         n.order = (sib.length ? sib[sib.length - 1].order + 1 : 0) + n.order - 1000;
@@ -324,6 +477,119 @@
     if (U.sel[map.id] === from.id) U.sel[map.id] = into.id;
   }
 
+  /* ══ Agent : la discussion des programmes ═══════════════════════════════ */
+
+  /* Le dernier programme proposé et pas encore ajouté : l'agent le révise plutôt que d'en refaire un. */
+  function draftOf(map) {
+    for (var i = map.chat.length - 1; i >= 0; i--) {
+      var m = map.chat[i];
+      if (m.role !== 'agent' || !obj(m.proposal) || m.proposal.action === 'none') continue;
+      return m.applied || m.dismissed || m.proposal.action !== 'new' ? null : m;
+    }
+    return null;
+  }
+  function chatFocus(map) {
+    if (U.focusOff[map.id]) return null;
+    var n = node(map, U.sel[map.id]);
+    return n && n.parent ? n : null;
+  }
+
+  function sendChat(map, text) {
+    text = str(text).trim().slice(0, 2000);
+    if (!text || U.chatBusy[map.id]) return;
+    var draft = draftOf(map), focus = chatFocus(map);
+    var history = map.chat.slice(-CHAT_SEND).map(function (m) { return { role: m.role, text: m.text }; });
+    map.chat.push({ role: 'user', text: text, at: Date.now() });
+    map.chat = map.chat.slice(-CHAT_KEEP);
+    R.save();
+    U.chatText = ''; U.chatBusy[map.id] = true; U.chatError[map.id] = ''; U.side = 'chat';
+    R.render();
+    R.gen('cortex', {
+      mode: 'chat', map: { title: map.title, description: map.description }, nodes: nodesParam(map), node: focus ? focus.id : '',
+      history: history, message: text,
+      draft: draft ? { title: draft.proposal.title, attach: draft.proposal.attach, steps: draft.proposal.steps.map(function (s) { return { ref: s.ref, parent: s.parent, title: s.title }; }) } : null
+    }).then(function (r) {
+      delete U.chatBusy[map.id];
+      var m = mapById(map.id), d = obj(r && r.doc) || {};
+      if (!m) return;
+      var prop = obj(d.proposal);
+      if (prop && prop.action === 'revise' && !node(m, prop.target)) prop.action = 'none';
+      if (draft && prop && prop.action === 'new') draft.dismissed = true;
+      m.chat.push({ role: 'agent', text: str(d.reply), at: Date.now(), proposal: prop && prop.action !== 'none' ? prop : null, followUps: arr(d.followUps).slice(0, 3) });
+      m.chat = m.chat.slice(-CHAT_KEEP);
+      R.save();
+      R.renderSoon();
+      scrollChat();
+    }, function (e) {
+      delete U.chatBusy[map.id];
+      U.chatError[map.id] = str(e && e.message) || 'L’agent n’a pas répondu.';
+      R.renderSoon();
+    });
+    scrollChat();
+  }
+  function scrollChat() { setTimeout(function () { var el = document.querySelector('[data-rzc-chat]'); if (el) el.scrollTop = el.scrollHeight; }, 30); }
+
+  /* Un programme proposé, ajouté à la carte (nouveau) ou appliqué au programme existant (révision). */
+  function applyProposal(map, msg) {
+    var p = obj(msg && msg.proposal);
+    if (!p) return;
+    var prog, label;
+    if (p.action === 'revise' && node(map, p.target)) { prog = reviseProgram(map, node(map, p.target), p); label = 'Programme « ' + prog.title + ' » modifié avec l’agent'; }
+    else { prog = createProgram(map, p); label = 'Programme « ' + prog.title + ' » ajouté'; }
+    msg.applied = true;
+    renumber(map);
+    repair(map);
+    U.sel[map.id] = prog.id;
+    U.expanded[expKey(map, prog)] = true;
+    U.centered = '';
+    U.note[map.id] = label + ' : ' + plural(descendants(map, prog.id).length, 'étape') + '.';
+    touched(map, label, 'agent');
+    R.render();
+  }
+
+  function stepsInto(map, prog, steps, keep) {
+    var ids = {}, now = Date.now();
+    steps.forEach(function (s) { ids[s.ref] = keep && keep[s.ref] ? s.ref : R.uid('cn'); });
+    steps.forEach(function (s, i) {
+      var id = ids[s.ref], parent = s.parent && ids[s.parent] ? ids[s.parent] : prog.id;
+      var n = keep && keep[s.ref];
+      if (n) {
+        n.parent = parent; n.title = clip(s.title, 80) || n.title; n.order = i; n.kind = 'step';
+        if (s.summaryFr) n.summaryFr = str(s.summaryFr);
+        if (s.query) n.query = str(s.query);
+      } else {
+        map.nodes.push(normNode({ id: id, parent: parent, title: s.title, summaryFr: s.summaryFr, query: s.query, status: 'open', origin: 'agent', kind: 'step', order: i, at: now }, i));
+      }
+    });
+  }
+
+  function createProgram(map, p) {
+    var root = rootOf(map), at = node(map, p.attach) || root;
+    var prog = normNode({ id: R.uid('cn'), parent: at.id, title: p.title, summaryFr: p.summaryFr, query: p.query, status: 'open', origin: 'agent', kind: 'program', order: kids(map, at.id).length, at: Date.now() }, 0);
+    map.nodes.push(prog);
+    stepsInto(map, prog, arr(p.steps), null);
+    U.expanded[expKey(map, at)] = true;
+    return prog;
+  }
+
+  /* Révision : les étapes rendues avec leur ref gardent leur état et leurs cours ; les étapes absentes
+     sont retirées, sauf celles qui ont déjà des cours (rangées à la fin). */
+  function reviseProgram(map, prog, p) {
+    var keep = {};
+    descendants(map, prog.id).forEach(function (n) { keep[n.id] = n; });
+    var kept = {};
+    arr(p.steps).forEach(function (s) { if (keep[s.ref]) kept[s.ref] = 1; });
+    map.nodes = map.nodes.filter(function (n) { return !keep[n.id] || kept[n.id] || n.lessons.length; });
+    var orphans = Object.keys(keep).filter(function (id) { return !kept[id] && keep[id].lessons.length; });
+    prog.title = clip(p.title, 80) || prog.title;
+    if (p.summaryFr) prog.summaryFr = str(p.summaryFr);
+    if (p.query) prog.query = str(p.query);
+    prog.kind = 'program';
+    stepsInto(map, prog, arr(p.steps), keep);
+    orphans.forEach(function (id, i) { var n = node(map, id); if (n) { n.parent = prog.id; n.order = 900 + i; } });
+    return prog;
+  }
+
   /* ══ Modifications à la main ════════════════════════════════════════════ */
 
   function addChild(map, parentId, title) {
@@ -333,23 +599,31 @@
     var dup = kids(map, p.id).filter(function (k) { return key(k.title) === key(title); })[0];
     if (dup) { R.toast('« ' + dup.title + ' » existe déjà ici.'); return dup; }
     var sib = kids(map, p.id);
-    var n = normNode({ id: R.uid('cn'), parent: p.id, title: title, status: 'open', origin: 'user', order: sib.length, at: Date.now() }, sib.length);
+    var n = normNode({ id: R.uid('cn'), parent: p.id, title: title, status: 'open', origin: 'user', kind: programOf(map, p) ? 'step' : '', order: sib.length, at: Date.now() }, sib.length);
     map.nodes.push(n);
     U.expanded[expKey(map, p)] = true;
-    edited(map);
+    edited(map, 'Ajout de « ' + n.title + ' »');
     return n;
   }
 
-  /* Supprimer un nœud : ses enfants remontent d'un cran. */
-  function removeNode(map, id) {
+  /* Supprimer un nœud seul (ses enfants remontent d'un cran) ou avec toute sa branche. */
+  function removeNode(map, id, branchToo) {
     var n = node(map, id);
-    if (!n || !n.parent) return;
-    var at = n.order;
-    kids(map, n.id).forEach(function (k, i) { k.parent = n.parent; k.order = at + 0.1 + i / 100; });
+    if (!n || !n.parent) return 0;
+    var gone = 1;
+    if (branchToo) {
+      var drop = {};
+      descendants(map, n.id).forEach(function (d) { drop[d.id] = 1; gone++; });
+      map.nodes = map.nodes.filter(function (x) { return !drop[x.id]; });
+    } else {
+      var at = n.order;
+      kids(map, n.id).forEach(function (k, i) { k.parent = n.parent; k.order = at + 0.1 + i / 100; });
+    }
     map.nodes = map.nodes.filter(function (x) { return x !== n; });
     renumber(map);
     U.sel[map.id] = n.parent;
-    edited(map);
+    edited(map, 'Suppression de « ' + n.title + ' »' + (branchToo && gone > 1 ? ' et de ' + plural(gone - 1, 'sous-thème') : ''));
+    return gone;
   }
 
   function setStatus(map, n, s) {
@@ -358,33 +632,51 @@
       n.studiedAt = n.studiedAt || Date.now();
       kids(map, n.id).forEach(function (k) { if (k.status === 'locked') k.status = 'open'; });
     }
-    touched(map);
   }
 
   /* ══ Pour lesson.js ═════════════════════════════════════════════════════ */
 
-  /* Ce qui se prête à un cours : d'abord ce qui demande un approfondissement, puis les nœuds ouverts
-     jamais étudiés, du moins profond au plus profond, la carte courante en premier. */
+  /* L'étape suivante d'un programme : la première pas encore étudiée, dans l'ordre de lecture
+     (une période, puis ses sous-étapes, puis la période suivante). */
+  function nextStep(map, prog) {
+    return descendants(map, prog.id).filter(function (x) { return !studied(x.status); })[0] || null;
+  }
+
+  /* Ce qui se prête à un cours : ce qui demande un approfondissement, l'étape suivante de chaque
+     programme, puis les nœuds ouverts jamais étudiés (hors programmes), la carte courante en premier. */
   function suggest(n) {
     var cur = current(), out = [];
     var list = maps().slice().sort(function (a, b) { return (b === cur) - (a === cur) || num(b.updatedAt, 0) - num(a.updatedAt, 0); });
     list.forEach(function (m) {
+      var bonus = m === cur ? 0 : 3;
       m.nodes.forEach(function (x) {
         if (!x.parent) return;
-        var s = status(m, x);
+        var s = status(m, x), prog = programOf(m, x);
+        if (x.kind === 'program') {
+          var nx = nextStep(m, x);
+          if (nx) out.push({ map: m, node: nx, s: status(m, nx), score: 2 + bonus + nx.order / 100 });
+          return;
+        }
+        if (prog) { if (s === 'deepen') out.push({ map: m, node: x, s: s, score: 1 + bonus }); return; }
         if (s === 'locked' || s === 'studied') return;
         var p = node(m, x.parent);
-        out.push({ map: m, node: x, s: s, score: (s === 'deepen' ? 0 : 10) + depth(m, x) + (p && studied(p.status) ? -0.5 : 0) + (m === cur ? 0 : 3) + x.order / 100 });
+        out.push({ map: m, node: x, s: s, score: (s === 'deepen' ? 0 : 10) + depth(m, x) + (p && studied(p.status) ? -0.5 : 0) + bonus + x.order / 100 });
       });
     });
-    return out.sort(function (a, b) { return a.score - b.score; }).slice(0, n || 6);
+    var seen = {};
+    return out.sort(function (a, b) { return a.score - b.score; }).filter(function (x) {
+      var k = x.map.id + ':' + x.node.id;
+      if (seen[k]) return false;
+      seen[k] = 1;
+      return true;
+    }).slice(0, n || 6);
   }
 
   function lessonParams(mapId, nodeId, depthWanted) {
     var m = mapById(mapId), n = node(m, nodeId);
     if (!n) return null;
     var p = pathOf(m, n), last = n.lessons.length ? lessonEntry(n.lessons[n.lessons.length - 1]) : null;
-    return {
+    var out = {
       map: m.id, node: n.id, mapTitle: m.title,
       path: p.map(function (x) { return x.title; }),
       summary: n.summaryFr,
@@ -394,11 +686,19 @@
       studied: m.nodes.filter(function (x) { return x.parent && x !== n && studied(x.status); }).sort(function (a, b) { return num(b.studiedAt, 0) - num(a.studiedAt, 0); })
         .slice(0, 16).map(function (x) { return x.title; })
     };
+    var prog = programOf(m, n);
+    if (prog && prog !== n) {
+      var steps = descendants(m, prog.id), i = steps.indexOf(n);
+      out.program = prog.title; out.step = i + 1; out.steps = steps.length;
+      out.prevStep = i > 0 ? steps[i - 1].title : '';
+      out.nextStep = i >= 0 && i < steps.length - 1 ? steps[i + 1].title : '';
+    }
+    return out;
   }
   function lessonEntry(id) { return arr(R.data.lessons).filter(function (l) { return l && l.id === id; })[0] || null; }
 
   /* Un cours du cortex terminé : le nœud est étudié (ou à approfondir), ses enfants s'ouvrent, et quand
-     l'agent propose, les sujets suivants du cours deviennent des sous-nœuds. */
+     l'agent propose (hors programme, qui a déjà sa suite), les sujets suivants du cours deviennent des sous-nœuds. */
   function lessonDone(e, L) {
     var link = obj(e && e.cortex), m = link && mapById(link.map), n = m && node(m, link.node);
     if (!n) return;
@@ -408,7 +708,7 @@
     setStatus(m, n, hard ? 'deepen' : 'studied');
     n.studiedAt = Date.now();
     var added = 0;
-    if (m.mode === 'propose' && L) {
+    if (m.mode === 'propose' && L && !programOf(m, n)) {
       arr(L.nextTopics).slice(0, 3).forEach(function (t, i) {
         var title = clip(t.title, 80);
         if (!title || m.nodes.some(function (x) { return key(x.title) === key(title); })) return;
@@ -418,8 +718,11 @@
       renumber(m);
     }
     U.sel[m.id] = n.id;
-    U.note[m.id] = '« ' + n.title + ' » : ' + (hard ? 'à approfondir' : 'étudié') + (added ? ', ' + plural(added, 'nouveau sous-thème', 'nouveaux sous-thèmes') : '') + '.';
-    if (added) edited(m); else touched(m);
+    var prog = programOf(m, n), nx = prog && nextStep(m, prog);
+    U.note[m.id] = '« ' + n.title + ' » : ' + (hard ? 'à approfondir' : 'étudié') + (added ? ', ' + plural(added, 'nouveau sous-thème', 'nouveaux sous-thèmes') : '')
+      + (prog ? (nx ? ' ; prochaine étape : « ' + nx.title + ' »' : ' ; programme « ' + prog.title + ' » terminé !') : '') + '.';
+    touched(m, 'Cours terminé : « ' + n.title + ' »', 'lesson');
+    if (added) schedule(m);
   }
 
   R.cortex = {
@@ -434,46 +737,74 @@
 
   /* ══ Rendu ══════════════════════════════════════════════════════════════ */
 
+  function sideTab(map) {
+    if (U.side) return U.side;
+    return isEmpty(map) ? 'chat' : 'node';
+  }
+
   function render() {
     var map = current();
-    var h = ['<div class="rzc">'];
-    h.push('<div class="rzc-head"><div><div class="rz-kicker">' + icon('node') + ' Le cortex</div><h1 class="rzc-title">Ce que vous voulez savoir</h1>'
-      + '<p class="rzc-lead">Vos cartes des savoirs : choisissez un nœud, votre professeur fait une recherche approfondie et en tire un cours d’anglais. Chaque cours fait avancer la carte.</p></div></div>');
+    hist(map);
+    var h = ['<div class="rzc' + (U.full ? ' is-full' : '') + '">'];
+    if (!U.full) {
+      h.push('<div class="rzc-head"><div><div class="rz-kicker">' + icon('node') + ' Le cortex</div><h1 class="rzc-title">Ce que vous voulez savoir</h1>'
+        + '<p class="rzc-lead">Vos cartes des savoirs, construites au fil de l’eau : demandez un programme à l’agent, ou ajoutez vos propres nœuds. Chaque nœud donne un cours d’anglais de fond, et chaque cours fait avancer la carte.</p></div></div>');
+    }
     h.push(mapsBarHtml(map));
     if (U.newOpen) h.push(newMapHtml());
+    if (U.trashOpen) h.push(trashHtml());
     h.push('<div class="rzc-body">');
     h.push('<section class="rz-card rzc-board">' + toolbarHtml(map) + canvasHtml(map) + legendHtml() + '</section>');
-    h.push('<aside class="rzc-side">' + panelHtml(map) + '</aside>');
+    var tab = sideTab(map);
+    h.push('<aside class="rzc-side"><div class="rzc-tabs" role="tablist">'
+      + tabBtn('node', 'Nœud', tab) + tabBtn('chat', 'Agent', tab, U.chatBusy[map.id]) + tabBtn('history', 'Versions', tab) + '</div>'
+      + (tab === 'chat' ? chatHtml(map) : (tab === 'history' ? historyHtml(map) : panelHtml(map))) + '</aside>');
     h.push('</div></div>');
     return h.join('');
   }
+  function tabBtn(id, label, cur, busy) {
+    return '<button type="button" role="tab" aria-selected="' + (id === cur) + '" class="rzc-tab' + (id === cur ? ' on' : '') + '" data-act="rz-cortex-side" data-tab="' + id + '">' + esc(label) + (busy ? ' <span class="rz-spin"></span>' : '') + '</button>';
+  }
 
   function mapsBarHtml(map) {
+    var c = store();
     return '<div class="rzc-maps" role="tablist">' + maps().map(function (m) {
       var on = m === map, n = m.nodes.length - 1, done = m.nodes.filter(function (x) { return x.parent && studied(x.status); }).length;
       return '<button type="button" role="tab" aria-selected="' + on + '" class="rzc-map' + (on ? ' on' : '') + '" data-act="rz-cortex-map" data-id="' + esc(m.id) + '">'
-        + '<span class="rzc-map-t">' + esc(m.title) + '</span><span class="rzc-map-m">' + esc(done + ' / ' + n) + '</span></button>';
-    }).join('') + '<button type="button" class="btn btn-ghost rzc-map-new" data-act="rz-cortex-new">+ Nouvelle carte</button></div>';
+        + '<span class="rzc-map-t">' + esc(m.title) + '</span><span class="rzc-map-m">' + esc(n ? done + ' / ' + n : 'vide') + '</span></button>';
+    }).join('') + '<button type="button" class="btn btn-ghost rzc-map-new" data-act="rz-cortex-new">+ Nouvelle carte</button>'
+      + (c.trash.length ? '<button type="button" class="btn btn-ghost rzc-map-new" data-act="rz-cortex-trash">Corbeille · ' + c.trash.length + '</button>' : '') + '</div>';
   }
 
   function newMapHtml() {
     return '<section class="rz-card rzc-new"><div class="rz-card-head"><span class="rz-card-title">Nouvelle carte</span>'
       + '<button type="button" class="btn btn-ghost" data-act="rz-cortex-new">Fermer</button></div>'
-      + '<label class="rzc-field"><span class="rzl-k">Domaine</span><input class="input" type="text" data-role="rz-cortex-new-title" data-focus-key="rzc-new-title" maxlength="80" placeholder="Le bricolage, l’informatique, la Rome antique, le jazz…" value="' + esc(U.newTitle) + '"></label>'
+      + '<label class="rzc-field"><span class="rzl-k">Domaine</span><input class="input" type="text" data-role="rz-cortex-new-title" data-focus-key="rzc-new-title" maxlength="80" placeholder="Le bricolage, l’informatique, l’histoire, le jazz…" value="' + esc(U.newTitle) + '"></label>'
       + '<label class="rzc-field"><span class="rzl-k">Ce que vous voulez en savoir <span class="rz-muted">· facultatif</span></span><textarea class="input" rows="2" data-role="rz-cortex-new-desc" data-focus-key="rzc-new-desc" maxlength="600" placeholder="Ex. rénover mon appartement moi-même ; comprendre comment marche un ordinateur, jusqu’au code">' + esc(U.newDesc) + '</textarea></label>'
-      + '<div class="rzc-field"><span class="rzl-k">Le point de départ</span>' + R.h.chips('rzc-plan', ['agent', 'empty'], U.newPlan, ['Plan proposé par l’agent', 'Carte vide, je la construis'], 'rz-cortex-new-plan') + '</div>'
-      + '<div class="rz-row"><button type="button" class="btn btn-primary" data-act="rz-cortex-create">' + icon('spark') + ' Créer la carte</button>'
-      + '<span class="rz-muted">' + esc(U.newPlan === 'agent' ? 'L’agent dresse 5 à 8 grands thèmes et leurs premiers sous-thèmes, en une minute environ.' : 'Vous ajoutez vous-même les thèmes, nœud par nœud.') + '</span></div></section>';
+      + '<div class="rz-row"><button type="button" class="btn btn-primary" data-act="rz-cortex-create">Créer la carte</button>'
+      + '<span class="rz-muted">Elle commence vide : discutez avec l’agent pour y bâtir vos programmes, ou ajoutez vos nœuds.</span></div></section>';
+  }
+
+  function trashHtml() {
+    var c = store();
+    return '<section class="rz-card rzc-new"><div class="rz-card-head"><span class="rz-card-title">Corbeille</span><button type="button" class="btn btn-ghost" data-act="rz-cortex-trash">Fermer</button></div>'
+      + (c.trash.length ? '<ul class="rzc-lessons">' + c.trash.slice().reverse().map(function (t) {
+        return '<li class="rzc-trash-row"><span>Supprimée ' + esc(when(t.at)) + '</span><b>' + esc(t.map.title) + '</b><span class="rz-muted">' + esc(plural(arr(t.map.nodes).length - 1, 'nœud')) + '</span>'
+          + '<button type="button" class="btn btn-secondary" data-act="rz-cortex-untrash" data-id="' + esc(t.map.id) + '">Restaurer</button></li>';
+      }).join('') + '</ul>' : '<div class="rz-muted">La corbeille est vide.</div>') + '</section>';
   }
 
   function toolbarHtml(map) {
-    var busy = U.busy[map.id];
+    var busy = U.busy[map.id], H = hist(map);
     var h = '<div class="rzc-tools"><div class="rzc-tools-l">'
       + R.h.chips('rzc-mode', ['propose', 'manual'], map.mode, [MODES.propose, MODES.manual], 'rz-cortex-mode')
-      + '<label class="rzc-switch" title="Après chaque modification à la main, l’agent remet la carte en ordre : doublons, nœuds mal placés, intitulés."><input type="checkbox" data-role="rz-cortex-tidy"' + (map.autoTidy ? ' checked' : '') + '> Réorganisation automatique</label>'
+      + '<label class="rzc-switch" title="Après chaque modification à la main, l’agent remet la carte en ordre : doublons, nœuds mal placés, intitulés."><input type="checkbox" data-role="rz-cortex-tidy"' + (map.autoTidy ? ' checked' : '') + '> Réorganisation auto</label>'
       + '</div><div class="rzc-tools-r">'
-      + '<button type="button" class="btn btn-ghost" data-act="rz-cortex-organize"' + (busy ? ' disabled' : '') + ' title="Demander à l’agent de remettre toute la carte en ordre">' + icon('replay') + ' Réorganiser</button>'
-      + '<span class="rzc-zoom"><button type="button" class="btn btn-ghost" data-act="rz-cortex-zoom" data-z="-1" aria-label="Dézoomer">−</button><button type="button" class="btn btn-ghost" data-act="rz-cortex-zoom" data-z="0" title="Recentrer">' + Math.round(U.zoom * 100) + ' %</button><button type="button" class="btn btn-ghost" data-act="rz-cortex-zoom" data-z="1" aria-label="Zoomer">+</button></span>'
+      + '<span class="rzc-seg"><button type="button" class="btn btn-ghost" data-act="rz-cortex-undo"' + (H.index > 0 ? '' : ' disabled') + ' title="Annuler (Ctrl+Z)' + (H.versions[H.index] && H.index > 0 ? ' : ' + esc(H.versions[H.index].label) : '') + '" aria-label="Annuler">↶</button>'
+      + '<button type="button" class="btn btn-ghost" data-act="rz-cortex-redo"' + (H.index < H.versions.length - 1 ? '' : ' disabled') + ' title="Rétablir (Ctrl+Y)" aria-label="Rétablir">↷</button></span>'
+      + '<button type="button" class="btn btn-ghost" data-act="rz-cortex-organize"' + (busy || isEmpty(map) ? ' disabled' : '') + ' title="Demander à l’agent de remettre toute la carte en ordre">' + icon('replay') + ' Réorganiser</button>'
+      + '<span class="rzc-seg rzc-zoom"><button type="button" class="btn btn-ghost" data-act="rz-cortex-zoom" data-z="-1" aria-label="Dézoomer">−</button><button type="button" class="btn btn-ghost" data-act="rz-cortex-zoom" data-z="0" title="Recentrer">' + Math.round(U.zoom * 100) + ' %</button><button type="button" class="btn btn-ghost" data-act="rz-cortex-zoom" data-z="1" aria-label="Zoomer">+</button></span>'
+      + '<button type="button" class="btn btn-ghost rzc-full-btn" data-act="rz-cortex-full" title="' + (U.full ? 'Quitter le grand écran (Échap)' : 'Grand écran') + '">' + (U.full ? '⤡ Quitter' : '⤢ Grand écran') + '</button>'
       + '</div></div>';
     if (busy) h += '<div class="rzc-status is-busy"><span class="rz-spin"></span> ' + esc({ create: 'L’agent dresse le plan de la carte…', expand: 'L’agent cherche des sous-thèmes…', organize: 'L’agent réorganise la carte…' }[busy.mode] || 'L’agent travaille…') + '</div>';
     else if (U.error[map.id]) h += '<div class="rzc-status is-error" role="alert">' + icon('cross') + ' ' + esc(U.error[map.id]) + '</div>';
@@ -495,15 +826,20 @@
       }
       var s = n.parent ? status(map, n) : 'root';
       var hid = P.t.hidden;
-      nodes.push('<button type="button" class="rzc-node is-' + s + ' rzc-h' + branch(map, n) + ' d' + Math.min(P.d, 3) + (id === sel ? ' on' : '') + '" style="left:' + r1(P.x) + 'px;top:' + r1(P.y) + 'px"'
-        + ' data-act="rz-cortex-sel" data-id="' + esc(id) + '" aria-pressed="' + (id === sel) + '" title="' + esc((STATUS[s] ? STATUS[s] + ' · ' : '') + n.title + (n.summaryFr ? ' — ' + n.summaryFr : '')) + '">'
+      var par = n.parent && node(map, n.parent), num1 = n.kind === 'step' && par && par.kind === 'program' ? (n.order + 1) + '. ' : '';
+      nodes.push('<button type="button" class="rzc-node is-' + s + (n.kind ? ' is-' + n.kind : '') + ' rzc-h' + branch(map, n) + ' d' + Math.min(P.d, 3) + (id === sel ? ' on' : '') + '" style="left:' + r1(P.x) + 'px;top:' + r1(P.y) + 'px"'
+        + ' data-act="rz-cortex-sel" data-id="' + esc(id) + '" aria-pressed="' + (id === sel) + '" title="' + esc((n.kind === 'program' ? 'Programme · ' : '') + (STATUS[s] ? STATUS[s] + ' · ' : '') + n.title + (n.summaryFr ? ' — ' + n.summaryFr : '')) + '">'
         + (s === 'studied' ? '<i class="rzc-badge is-ok">' + icon('check') + '</i>' : (s === 'deepen' ? '<i class="rzc-badge is-deep">↻</i>' : (s === 'locked' ? '<i class="rzc-badge is-lock">' + lockSvg() + '</i>' : '')))
-        + '<span class="rzc-node-t">' + esc(n.title) + '</span>'
+        + (n.kind === 'program' ? '<span class="rzc-prog-k">Programme</span>' : '')
+        + '<span class="rzc-node-t">' + esc(num1 + n.title) + '</span>'
         + (hid ? '<span class="rzc-more">+' + hid + '</span>' : '') + '</button>');
     });
+    var empty = isEmpty(map) ? '<div class="rzc-empty"><div class="rzc-empty-t">Votre cortex est vide</div>'
+      + '<p>Il se remplit au fil de l’eau. Dites à l’agent ce que vous voulez apprendre : il vous propose un programme, étape par étape, que vous rediscutez avant de l’ajouter. Ou ajoutez vous-même un premier nœud, à droite.</p>'
+      + '<div class="rzc-examples">' + EXAMPLES.slice(0, 2).map(function (x) { return '<button type="button" class="rzc-ex" data-act="rz-cortex-ask" data-text="' + esc(x) + '">' + esc(x) + '</button>'; }).join('') + '</div></div>' : '';
     return '<div class="rzc-canvas" data-rzc-canvas data-map="' + esc(map.id) + '"><div class="rzc-stage" style="width:' + L.w + 'px;height:' + L.h + 'px;zoom:' + U.zoom + '" data-cx="' + r1(L.cx) + '" data-cy="' + r1(L.cy) + '">'
       + '<svg class="rzc-links" width="' + L.w + '" height="' + L.h + '" aria-hidden="true"><g class="rzc-rings">' + ring + '</g>' + links.join('') + '</svg>'
-      + nodes.join('') + '</div></div>';
+      + nodes.join('') + '</div>' + empty + '</div>';
   }
   function r1(v) { return Math.round(v * 10) / 10; }
   function lockSvg() { return '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>'; }
@@ -515,40 +851,47 @@
   function panelHtml(map) {
     var root = rootOf(map), n = node(map, U.sel[map.id]) || root, s = n.parent ? status(map, n) : 'root', busy = U.busy[map.id];
     var h = ['<section class="rz-card rzc-panel">'];
-    var p = pathOf(map, n);
+    var p = pathOf(map, n), prog = programOf(map, n);
     if (p.length > 1) h.push('<nav class="rzc-crumbs">' + p.slice(0, -1).map(function (x) { return '<button type="button" class="rzc-crumb" data-act="rz-cortex-sel" data-id="' + esc(x.id) + '">' + esc(x.title) + '</button>'; }).join('<span>›</span>') + '</nav>');
     if (U.rename === n.id) {
       h.push('<div class="rzc-rename"><input class="input" type="text" data-role="rz-cortex-rename" data-focus-key="rzc-rename" maxlength="80" value="' + esc(n.title) + '">'
         + '<button type="button" class="btn btn-primary" data-act="rz-cortex-rename-ok">OK</button><button type="button" class="btn btn-ghost" data-act="rz-cortex-rename">Annuler</button></div>');
     } else {
-      h.push('<h2 class="rzc-panel-t">' + esc(n.title) + '</h2>');
+      h.push((n.kind === 'program' ? '<div class="rzc-k">Programme</div>' : '') + '<h2 class="rzc-panel-t">' + esc(n.title) + '</h2>');
     }
-    if (STATUS[s]) h.push('<div class="rzc-panel-meta"><span class="rzc-st is-' + s + '">' + esc(STATUS[s]) + '</span>' + (n.lessons.length ? '<span class="rz-muted">' + esc(plural(n.lessons.length, 'cours', 'cours')) + '</span>' : '') + '</div>');
+    if (STATUS[s]) h.push('<div class="rzc-panel-meta"><span class="rzc-st is-' + s + '">' + esc(STATUS[s]) + '</span>' + (n.lessons.length ? '<span class="rz-muted">' + esc(plural(n.lessons.length, 'cours', 'cours')) + '</span>' : '')
+      + (prog && prog !== n ? '<span class="rz-muted">Étape ' + (descendants(map, prog.id).indexOf(n) + 1) + ' / ' + descendants(map, prog.id).length + '</span>' : '') + '</div>');
     if (n.summaryFr) h.push('<p class="rzc-panel-p">' + esc(n.summaryFr) + '</p>');
-    else if (!n.parent) h.push('<p class="rzc-panel-p">' + esc(map.description || 'La racine de la carte. Ajoutez-y vos grands thèmes, ou demandez-en à l’agent.') + '</p>');
+    else if (!n.parent) h.push('<p class="rzc-panel-p">' + esc(map.description || (isEmpty(map) ? 'La racine de la carte, encore vide. Ajoutez un premier grand thème ci-dessous, ou demandez un programme à l’agent.' : 'La racine de la carte.')) + '</p>');
 
-    if (n.parent) {
+    if (n.kind === 'program') {
+      var nx = nextStep(map, n), all = descendants(map, n.id), done = all.filter(function (x) { return studied(x.status); }).length;
+      h.push('<div class="rzc-prog"><div class="rzc-home-bar" aria-hidden="true"><i style="width:' + (all.length ? Math.round(done / all.length * 100) : 0) + '%"></i></div><span class="rz-muted">' + esc(done + ' / ' + all.length + ' étapes étudiées') + '</span></div>');
+      if (nx) h.push('<button type="button" class="btn btn-primary rzc-cta" data-act="rz-cortex-lesson" data-id="' + esc(nx.id) + '" data-depth="intro">' + icon('spark') + ' Étape suivante : ' + esc(nx.title) + '</button>');
+      else if (all.length) h.push('<div class="rzc-hint">Programme terminé. Approfondissez une étape, ou demandez à l’agent de le prolonger.</div>');
+      h.push('<button type="button" class="btn btn-ghost rzc-propose" data-act="rz-cortex-discuss">' + icon('chat') + ' Rediscuter ce programme avec l’agent</button>');
+    } else if (n.parent) {
       var deep = studied(s);
       h.push('<div class="rzc-actions">');
       h.push('<button type="button" class="btn btn-primary rzc-cta" data-act="rz-cortex-lesson" data-depth="' + (deep ? 'deepen' : 'intro') + '">' + icon('spark') + ' ' + (deep ? 'Un cours pour approfondir' : 'Préparer le cours sur ce nœud') + '</button>');
       if (deep) h.push('<button type="button" class="btn btn-ghost" data-act="rz-cortex-lesson" data-depth="intro">Refaire un cours de découverte</button>');
       h.push('</div>');
       if (s === 'locked') h.push('<div class="rzc-hint">Ce nœud s’ouvrira quand « ' + esc(node(map, n.parent).title) + ' » sera étudié. Vous pouvez aussi <button type="button" class="btn btn-ghost rzc-inline" data-act="rz-cortex-status" data-s="open">le débloquer tout de suite</button>, ou préparer son cours directement.</div>');
-      h.push('<div class="rzc-k">Où en êtes-vous ?</div>' + R.h.chips('rzc-st', ['open', 'studied', 'deepen'], s === 'locked' ? '' : s, ['À étudier', 'Étudié', 'À approfondir'], 'rz-cortex-status'));
     }
+    if (n.parent) h.push('<div class="rzc-k">Où en êtes-vous ?</div>' + R.h.chips('rzc-st', ['open', 'studied', 'deepen'], s === 'locked' ? '' : s, ['À étudier', 'Étudié', 'À approfondir'], 'rz-cortex-status'));
 
     var ch = kids(map, n.id);
-    h.push('<div class="rzc-k">Sous-thèmes' + (ch.length ? ' · ' + ch.length : '') + '</div>');
+    h.push('<div class="rzc-k">' + (n.kind === 'program' ? 'Étapes' : (n.parent ? 'Sous-thèmes' : 'Grands thèmes')) + (ch.length ? ' · ' + ch.length : '') + '</div>');
     if (ch.length) {
-      h.push('<ul class="rzc-kids">' + ch.map(function (k) {
+      h.push('<ol class="rzc-kids' + (n.kind === 'program' ? ' is-steps' : '') + '">' + ch.map(function (k) {
         var ks = status(map, k);
         return '<li><button type="button" class="rzc-kid is-' + ks + '" data-act="rz-cortex-sel" data-id="' + esc(k.id) + '"><i class="rzc-dot is-' + ks + '"></i><span>' + esc(k.title) + '</span>'
-          + (kids(map, k.id).length ? '<span class="rz-muted">' + kids(map, k.id).length + '</span>' : '') + '</button></li>';
-      }).join('') + '</ul>');
+          + (k.kind === 'program' ? '<span class="rzc-tag">programme</span>' : '') + (kids(map, k.id).length ? '<span class="rz-muted">' + kids(map, k.id).length + '</span>' : '') + '</button></li>';
+      }).join('') + '</ol>');
     } else h.push('<div class="rz-muted">Aucun pour l’instant.</div>');
-    h.push('<div class="rzc-add"><input class="input" type="text" data-role="rz-cortex-add" data-focus-key="rzc-add" maxlength="80" placeholder="' + esc(n.parent ? 'Un sous-thème : ex. « ' + exampleFor(n) + ' »' : 'Un grand thème : ex. « Cuisine », « Astronomie »') + '" value="' + esc(U.add) + '">'
+    h.push('<div class="rzc-add"><input class="input" type="text" data-role="rz-cortex-add" data-focus-key="rzc-add" maxlength="80" placeholder="' + esc(n.kind === 'program' ? 'Une étape de plus' : (n.parent ? 'Un sous-thème : ex. « ' + exampleFor(n) + ' »' : 'Un grand thème : ex. « Histoire », « Cuisine »')) + '" value="' + esc(U.add) + '">'
       + '<button type="button" class="btn btn-secondary" data-act="rz-cortex-add">Ajouter</button></div>');
-    h.push('<button type="button" class="btn btn-ghost rzc-propose" data-act="rz-cortex-expand"' + (busy ? ' disabled' : '') + '>' + icon('spark') + ' ' + (n.parent ? 'Proposer des sous-thèmes' : 'Proposer des grands thèmes') + '</button>');
+    if (n.kind !== 'program') h.push('<button type="button" class="btn btn-ghost rzc-propose" data-act="rz-cortex-expand"' + (busy ? ' disabled' : '') + '>' + icon('spark') + ' ' + (n.parent ? 'Proposer des sous-thèmes' : 'Proposer des grands thèmes') + '</button>');
 
     if (n.lessons.length) {
       h.push('<div class="rzc-k">Cours sur ce nœud</div><ul class="rzc-lessons">' + n.lessons.slice().reverse().map(function (id) {
@@ -559,13 +902,19 @@
 
     h.push('<div class="rzc-foot">');
     if (n.parent) {
+      var nk = descendants(map, n.id).length;
       h.push('<button type="button" class="btn btn-ghost" data-act="rz-cortex-rename">Renommer</button>');
-      h.push('<button type="button" class="btn btn-ghost rzc-danger" data-act="rz-cortex-del">' + esc(U.confirmDel === n.id ? 'Confirmer la suppression' : 'Supprimer') + '</button>');
+      if (U.confirmDel === n.id) {
+        h.push('<span class="rzc-confirm">Supprimer « ' + esc(n.title) + ' » ?'
+          + (nk ? ' <button type="button" class="btn btn-ghost rzc-danger" data-act="rz-cortex-del" data-branch="1">Avec ' + esc(plural(nk, 'sous-thème')) + '</button><button type="button" class="btn btn-ghost rzc-danger" data-act="rz-cortex-del">Le nœud seul</button>'
+            : ' <button type="button" class="btn btn-ghost rzc-danger" data-act="rz-cortex-del">Oui, supprimer</button>')
+          + '<button type="button" class="btn btn-ghost" data-act="rz-cortex-del-cancel">Non</button></span>');
+      } else h.push('<button type="button" class="btn btn-ghost rzc-danger" data-act="rz-cortex-del-ask">Supprimer</button>');
     } else {
       h.push('<button type="button" class="btn btn-ghost" data-act="rz-cortex-rename">Renommer la carte</button>');
-      if (maps().length > 1) h.push('<button type="button" class="btn btn-ghost rzc-danger" data-act="rz-cortex-del-map">' + esc(U.confirmDel === map.id ? 'Confirmer : supprimer la carte' : 'Supprimer la carte') + '</button>');
+      h.push('<button type="button" class="btn btn-ghost rzc-danger" data-act="rz-cortex-del-map">' + esc(U.confirmDel === map.id ? 'Confirmer : à la corbeille' : 'Supprimer la carte') + '</button>');
     }
-    h.push('</div></section>');
+    h.push('</div><div class="rzc-foot-note rz-muted">Tout se récupère : ↶ Annuler, ou l’onglet Versions.</div></section>');
     return h.join('');
   }
   function exampleFor(n) {
@@ -578,25 +927,89 @@
     return 'un sujet précis';
   }
 
-  /* Au premier affichage d'une carte, on centre la racine ; ensuite, un nœud choisi hors de vue
-     (depuis le panneau, après un cours) est ramené au centre. */
+  /* La discussion avec l'agent : messages, programmes proposés (aperçu, ajout, révision), relances. */
+  function chatHtml(map) {
+    var focus = chatFocus(map), busy = U.chatBusy[map.id];
+    var h = ['<section class="rz-card rzc-chat">'];
+    h.push('<div class="rzc-chat-log" data-rzc-chat>');
+    if (!map.chat.length) {
+      h.push('<div class="rzc-msg is-agent"><div class="rzc-bubble"><p>Bonjour ! Dites-moi ce que vous voulez apprendre, aussi largement que vous voulez : je vous propose un <b>programme</b>, une suite d’étapes dans l’ordre, chacune un cours d’anglais. On le rediscute ensemble, puis vous l’ajoutez à votre cortex.</p></div></div>');
+      h.push('<div class="rzc-examples">' + EXAMPLES.map(function (x) { return '<button type="button" class="rzc-ex" data-act="rz-cortex-ask" data-text="' + esc(x) + '">' + esc(x) + '</button>'; }).join('') + '</div>');
+    }
+    var last = map.chat.length - 1;
+    map.chat.forEach(function (m, i) {
+      if (m.role === 'user') { h.push('<div class="rzc-msg is-user"><div class="rzc-bubble">' + prose(m.text) + '</div></div>'); return; }
+      h.push('<div class="rzc-msg is-agent"><div class="rzc-bubble">' + prose(m.text) + (obj(m.proposal) ? proposalHtml(map, m, i) : '') + '</div></div>');
+      if (i === last && !busy && arr(m.followUps).length) h.push('<div class="rzc-examples">' + m.followUps.map(function (x) { return '<button type="button" class="rzc-ex" data-act="rz-cortex-ask" data-text="' + esc(x) + '">' + esc(x) + '</button>'; }).join('') + '</div>');
+    });
+    if (busy) h.push('<div class="rzc-msg is-agent"><div class="rzc-bubble rzc-typing"><span class="rz-spin"></span> L’agent réfléchit à votre programme…</div></div>');
+    if (U.chatError[map.id]) h.push('<div class="rzc-status is-error" role="alert">' + icon('cross') + ' ' + esc(U.chatError[map.id]) + '</div>');
+    h.push('</div>');
+    h.push('<div class="rzc-chat-foot">');
+    if (focus) h.push('<div class="rzc-focus">À propos de : <b>' + esc(focus.title) + '</b>' + (focus.kind === 'program' ? ' (programme)' : '') + ' <button type="button" class="btn btn-ghost rzc-inline" data-act="rz-cortex-unfocus" title="Parler de toute la carte">✕</button></div>');
+    h.push('<div class="rzc-chat-in"><textarea class="input" rows="2" data-role="rz-cortex-chat" data-focus-key="rzc-chat" maxlength="2000" placeholder="' + esc(draftOf(map) ? 'Rediscutez le programme : « plus court », « ajoute l’Égypte »…' : 'Ex. un programme qui va du début de l’humanité à la fin') + '"' + (busy ? ' disabled' : '') + '>' + esc(U.chatText) + '</textarea>'
+      + '<button type="button" class="btn btn-primary" data-act="rz-cortex-send"' + (busy ? ' disabled' : '') + '>Envoyer</button></div>');
+    h.push('<div class="rzc-chat-meta"><span class="rz-muted">Entrée pour envoyer · chaque message compte dans votre quota Claude Code</span>' + (map.chat.length ? '<button type="button" class="btn btn-ghost rzc-inline" data-act="rz-cortex-chat-clear">Effacer la discussion</button>' : '') + '</div>');
+    h.push('</div></section>');
+    return h.join('');
+  }
+
+  function proposalHtml(map, m, i) {
+    var p = m.proposal, steps = arr(p.steps), byParent = {};
+    steps.forEach(function (s) { (byParent[s.parent || ''] = byParent[s.parent || ''] || []).push(s); });
+    function list(parent) {
+      var l = byParent[parent] || [];
+      if (!l.length) return '';
+      return '<ol>' + l.map(function (s) { return '<li><b>' + esc(s.title) + '</b>' + (s.summaryFr ? '<span>' + esc(s.summaryFr) + '</span>' : '') + list(s.ref) + '</li>'; }).join('') + '</ol>';
+    }
+    var target = p.action === 'revise' ? node(map, p.target) : null, attach = node(map, p.attach);
+    var h = '<div class="rzc-proposal' + (m.applied ? ' is-applied' : '') + (m.dismissed ? ' is-dismissed' : '') + '">'
+      + '<div class="rzc-proposal-k">' + (p.action === 'revise' ? 'Révision du programme' : 'Programme proposé') + ' · ' + esc(plural(steps.length, 'étape')) + (attach && attach.parent ? ' · sous « ' + esc(attach.title) + ' »' : '') + '</div>'
+      + '<div class="rzc-proposal-t">' + esc(p.title) + '</div>' + (p.summaryFr ? '<div class="rz-muted">' + esc(p.summaryFr) + '</div>' : '')
+      + list('');
+    if (m.applied) h += '<div class="rzc-proposal-done">' + icon('check') + ' ' + (p.action === 'revise' ? 'Appliqué au programme' : 'Ajouté à votre cortex') + '</div>';
+    else if (m.dismissed) h += '<div class="rz-muted">Remplacé par une version plus récente.</div>';
+    else h += '<div class="rz-row"><button type="button" class="btn btn-primary" data-act="rz-cortex-apply" data-i="' + i + '">' + (p.action === 'revise' ? 'Appliquer à « ' + esc(target ? target.title : p.title) + ' »' : 'Ajouter au cortex') + '</button>'
+      + '<span class="rz-muted">ou continuez à en discuter ci-dessous</span></div>';
+    return h + '</div>';
+  }
+
+  function historyHtml(map) {
+    var H = hist(map);
+    var h = ['<section class="rz-card rzc-panel">'];
+    h.push('<div class="rzc-k">Versions de « ' + esc(map.title) + ' »</div>');
+    h.push('<p class="rzc-panel-p">Chaque modification de la carte est gardée ici (' + MAX_VERSIONS + ' au plus). Revenir à une version en crée une nouvelle : rien ne se perd.</p>');
+    if (!H.loaded && !H.versions.length) h.push('<div class="rz-muted"><span class="rz-spin"></span> Lecture de l’historique…</div>');
+    h.push('<ol class="rzc-versions">' + H.versions.map(function (v, i) { return { v: v, i: i }; }).reverse().map(function (x) {
+      var cur = x.i === H.index, after = x.i > H.index;
+      return '<li class="' + (cur ? 'on' : '') + (after ? ' is-after' : '') + '"><div class="rzc-v-l"><b>' + esc(x.v.label) + '</b><span class="rz-muted">' + esc(when(x.v.at) + ' · ' + (BY[x.v.by] || 'vous') + ' · ' + plural(arr(x.v.snap && x.v.snap.nodes).length - 1, 'nœud')) + '</span></div>'
+        + (cur ? '<span class="rzc-tag">actuelle</span>' : '<button type="button" class="btn btn-ghost" data-act="rz-cortex-restore" data-id="' + esc(x.v.id) + '">Revenir ici</button>') + '</li>';
+    }).join('') + '</ol>');
+    return h.join('') + '</section>';
+  }
+
+  /* Au premier affichage d'une carte, on centre la racine ; ensuite, un nœud choisi hors de vue est ramené au centre. */
   function after(host) {
+    document.documentElement.classList.toggle('rzc-noscroll', !!U.full);
     var c = host.querySelector('[data-rzc-canvas]');
     if (!c) return;
     var mapId = c.getAttribute('data-map');
-    if (U.centered !== mapId + ':' + U.zoom) {
-      U.centered = mapId + ':' + U.zoom;
+    if (U.centered !== mapId + ':' + U.zoom + ':' + U.full) {
+      U.centered = mapId + ':' + U.zoom + ':' + U.full;
       var st = c.firstChild, cx = num(st.getAttribute('data-cx'), 0) * U.zoom, cy = num(st.getAttribute('data-cy'), 0) * U.zoom;
       c.scrollLeft = Math.max(0, cx - c.clientWidth / 2);
       c.scrollTop = Math.max(0, cy - c.clientHeight / 2);
     }
     var sel = c.querySelector('.rzc-node.on');
-    if (!sel) return;
-    var cr = c.getBoundingClientRect(), r = sel.getBoundingClientRect(), m = 24;
-    if (r.left < cr.left + m || r.right > cr.right - m || r.top < cr.top + m || r.bottom > cr.bottom - m) {
-      c.scrollLeft += (r.left + r.width / 2) - (cr.left + cr.width / 2);
-      c.scrollTop += (r.top + r.height / 2) - (cr.top + cr.height / 2);
+    if (sel) {
+      var cr = c.getBoundingClientRect(), r = sel.getBoundingClientRect(), m = 24;
+      if (r.left < cr.left + m || r.right > cr.right - m || r.top < cr.top + m || r.bottom > cr.bottom - m) {
+        c.scrollLeft += (r.left + r.width / 2) - (cr.left + cr.width / 2);
+        c.scrollTop += (r.top + r.height / 2) - (cr.top + cr.height / 2);
+      }
     }
+    var log = host.querySelector('[data-rzc-chat]');
+    if (log && log.getAttribute('data-n') !== String(current().chat.length)) { log.setAttribute('data-n', String(current().chat.length)); log.scrollTop = log.scrollHeight; }
   }
 
   R.view('cortex', {
@@ -605,8 +1018,17 @@
     onShow: function (p) {
       if (p && p.map && mapById(p.map)) { store().current = p.map; if (p.node) U.sel[p.map] = p.node; }
     },
+    onHide: function () { if (U.full) { U.full = false; document.documentElement.classList.remove('rzc-noscroll'); } },
     keydown: function (e, el, role) {
+      var typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
+      if (e.key === 'Escape' && U.full) { e.preventDefault(); U.full = false; R.render(); return true; }
+      if (!typing && (e.ctrlKey || e.metaKey) && !e.altKey) {
+        var k = e.key.toLowerCase();
+        if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(current()); return true; }
+        if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(current()); return true; }
+      }
       if (e.key !== 'Enter') return false;
+      if (role === 'rz-cortex-chat' && !e.shiftKey) { e.preventDefault(); sendChat(current(), el.value); return true; }
       if (role === 'rz-cortex-add') { e.preventDefault(); doAdd(); return true; }
       if (role === 'rz-cortex-rename') { e.preventDefault(); doRename(); return true; }
       if (role === 'rz-cortex-new-title') { e.preventDefault(); doCreate(); return true; }
@@ -619,7 +1041,8 @@
   function attr(el, n) { return el && el.getAttribute ? el.getAttribute(n) : null; }
   function selected() { var m = current(); return { map: m, node: node(m, U.sel[m.id]) || rootOf(m) }; }
 
-  R.act('rz-cortex-map', function (el) { store().current = attr(el, 'data-id'); U.rename = null; U.confirmDel = ''; U.add = ''; R.save(); R.render(); });
+  R.act('rz-cortex-map', function (el) { store().current = attr(el, 'data-id'); U.rename = null; U.confirmDel = ''; U.add = ''; U.side = ''; R.save(); R.render(); });
+  R.act('rz-cortex-side', function (el) { U.side = attr(el, 'data-tab'); R.render(); });
   R.act('rz-cortex-sel', function (el) {
     var m = current(), id = attr(el, 'data-id'), n = node(m, id);
     if (!n) return;
@@ -627,21 +1050,27 @@
       var k = expKey(m, n);
       U.expanded[k] = !isExpanded(m, n, depth(m, n));
     } else if (n.parent && kids(m, id).length) U.expanded[expKey(m, n)] = true;
-    U.sel[m.id] = id; U.rename = null; U.confirmDel = ''; U.add = '';
+    U.sel[m.id] = id; U.rename = null; U.confirmDel = ''; U.add = ''; U.focusOff[m.id] = false;
+    if (sideTab(m) === 'history') U.side = 'node';
     R.render();
   });
   R.act('rz-cortex-mode', function (el) {
     var m = current(), v = attr(el, 'data-value');
-    if (!MODES[v]) return;
+    if (!MODES[v] || m.mode === v) return;
     m.mode = v;
     U.note[m.id] = v === 'manual' ? 'Vous choisissez vos nœuds : tout est ouvert, l’agent ne propose plus rien de lui-même.' : 'L’agent propose : sous-thèmes à la demande, et de nouveaux nœuds après chaque cours.';
-    touched(m); R.render();
+    touched(m, v === 'manual' ? 'Mode : je choisis moi-même' : 'Mode : l’agent propose'); R.render();
   });
-  R.change('rz-cortex-tidy', function (el) { var m = current(); m.autoTidy = !!el.checked; touched(m); R.render(); });
+  R.change('rz-cortex-tidy', function (el) { var m = current(); m.autoTidy = !!el.checked; touched(m, el.checked ? 'Réorganisation automatique activée' : 'Réorganisation automatique coupée'); R.render(); });
   R.act('rz-cortex-organize', function () { runAgent(current(), 'organize'); });
+  R.act('rz-cortex-undo', function () { undo(current()); });
+  R.act('rz-cortex-redo', function () { redo(current()); });
+  R.act('rz-cortex-restore', function (el) { restoreVersion(current(), attr(el, 'data-id')); });
+  R.act('rz-cortex-full', function () { U.full = !U.full; R.render(); });
   R.act('rz-cortex-zoom', function (el) {
     var z = +attr(el, 'data-z');
     U.zoom = z === 0 ? 1 : Math.max(0.4, Math.min(1.6, Math.round((U.zoom + z * 0.15) * 100) / 100));
+    if (z === 0) U.centered = '';
     R.render();
   });
   R.act('rz-cortex-expand', function () {
@@ -652,67 +1081,96 @@
   R.act('rz-cortex-add', function () { doAdd(); });
   function doAdd() {
     var s = selected(), t = U.add.trim();
-    if (!t) { R.toast('Écrivez le sous-thème à ajouter.'); return; }
+    if (!t) { R.toast('Écrivez ce que vous voulez ajouter.'); return; }
     var n = addChild(s.map, s.node.id, t);
     U.add = '';
     if (n) U.note[s.map.id] = '« ' + n.title + ' » ajouté' + (s.map.autoTidy ? ' ; la carte va être remise en ordre.' : '.');
     R.render();
   }
-  R.act('rz-cortex-status', function (el) { var s = selected(); if (s.node.parent && STATUS[attr(el, 'data-s') || attr(el, 'data-value')]) setStatus(s.map, s.node, attr(el, 'data-s') || attr(el, 'data-value')); R.render(); });
+  R.act('rz-cortex-status', function (el) {
+    var s = selected(), v = attr(el, 'data-s') || attr(el, 'data-value');
+    if (!s.node.parent || !STATUS[v] || s.node.status === v) return;
+    setStatus(s.map, s.node, v);
+    touched(s.map, '« ' + s.node.title + ' » : ' + STATUS[v].toLowerCase());
+    R.render();
+  });
   R.act('rz-cortex-rename', function () { var s = selected(); U.rename = U.rename === s.node.id ? null : s.node.id; R.render(); });
   R.act('rz-cortex-rename-ok', function () { doRename(); });
   function doRename() {
     var s = selected(), el = document.querySelector('[data-role="rz-cortex-rename"]'), t = clip(el ? el.value : '', 80);
     U.rename = null;
     if (t && t !== s.node.title) {
+      var was = s.node.title;
       s.node.title = t;
-      if (!s.node.parent) { s.map.title = t; touched(s.map); } else edited(s.map);
+      if (!s.node.parent) { s.map.title = t; touched(s.map, 'Carte renommée : « ' + t + ' »'); } else edited(s.map, '« ' + was + ' » renommé « ' + t + ' »');
     }
     R.render();
   }
-  R.act('rz-cortex-del', function () {
-    var s = selected();
-    if (U.confirmDel !== s.node.id) { U.confirmDel = s.node.id; R.render(); return; }
+  R.act('rz-cortex-del-ask', function () { U.confirmDel = selected().node.id; R.render(); });
+  R.act('rz-cortex-del-cancel', function () { U.confirmDel = ''; R.render(); });
+  R.act('rz-cortex-del', function (el) {
+    var s = selected(), t = s.node.title, branchToo = attr(el, 'data-branch') === '1';
     U.confirmDel = '';
-    var t = s.node.title;
-    removeNode(s.map, s.node.id);
-    U.note[s.map.id] = '« ' + t + ' » supprimé ; ses sous-thèmes sont remontés d’un cran.';
+    var gone = removeNode(s.map, s.node.id, branchToo);
+    U.note[s.map.id] = '« ' + t + ' » supprimé' + (branchToo && gone > 1 ? ' avec ' + plural(gone - 1, 'sous-thème') : '') + '. ↶ Annuler pour le récupérer.';
     R.render();
   });
   R.act('rz-cortex-del-map', function () {
     var m = current(), c = store();
     if (U.confirmDel !== m.id) { U.confirmDel = m.id; R.render(); return; }
     U.confirmDel = '';
+    c.trash.push({ map: copy(m), at: Date.now() });
+    c.trash = c.trash.slice(-10);
     c.maps = c.maps.filter(function (x) { return x !== m; });
     c.current = c.maps[0] ? c.maps[0].id : '';
-    R.save(); R.render();
+    R.save(); R.toast('« ' + m.title + ' » est à la corbeille.', { label: 'Restaurer', run: function () { untrash(m.id); } });
+    R.render();
   });
+  function untrash(id) {
+    var c = store(), t = c.trash.filter(function (x) { return x.map.id === id; })[0];
+    if (!t) return;
+    c.trash = c.trash.filter(function (x) { return x !== t; });
+    var m = normMap(t.map);
+    if (mapById(m.id)) m.id = R.uid('cxmap');
+    c.maps.push(m); c.current = m.id;
+    if (!c.trash.length) U.trashOpen = false;
+    U.note[m.id] = '« ' + m.title + ' » restaurée.';
+    R.save(); R.render();
+  }
+  R.act('rz-cortex-trash', function () { U.trashOpen = !U.trashOpen; R.render(); });
+  R.act('rz-cortex-untrash', function (el) { untrash(attr(el, 'data-id')); });
   R.act('rz-cortex-lesson', function (el) {
-    var s = selected();
-    if (!s.node.parent) return;
+    var s = selected(), id = attr(el, 'data-id') || s.node.id;
+    if (!node(s.map, id) || !node(s.map, id).parent) return;
     if (!R.lessonApi) { R.toast('Le module du cours n’est pas chargé.'); return; }
-    R.lessonApi.pickCortex(s.map.id, s.node.id, attr(el, 'data-depth') === 'deepen' ? 'deepen' : 'intro');
+    U.full = false;
+    R.lessonApi.pickCortex(s.map.id, id, attr(el, 'data-depth') === 'deepen' ? 'deepen' : 'intro');
   });
 
-  R.act('rz-cortex-new', function () { U.newOpen = !U.newOpen; R.render(); });
+  /* Discussion */
+  R.input('rz-cortex-chat', function (el) { U.chatText = el.value.slice(0, 2000); });
+  R.act('rz-cortex-send', function () { var el = document.querySelector('[data-role="rz-cortex-chat"]'); sendChat(current(), el ? el.value : U.chatText); });
+  R.act('rz-cortex-ask', function (el) { sendChat(current(), attr(el, 'data-text')); });
+  R.act('rz-cortex-apply', function (el) { var m = current(), msg = m.chat[+attr(el, 'data-i')]; if (msg) applyProposal(m, msg); });
+  R.act('rz-cortex-discuss', function () { U.side = 'chat'; U.focusOff[current().id] = false; R.render(); setTimeout(function () { var t = document.querySelector('[data-role="rz-cortex-chat"]'); if (t) t.focus(); }, 30); });
+  R.act('rz-cortex-unfocus', function () { U.focusOff[current().id] = true; R.render(); });
+  R.act('rz-cortex-chat-clear', function () { var m = current(); m.chat = []; R.save(); R.render(); });
+
+  R.act('rz-cortex-new', function () { U.newOpen = !U.newOpen; U.trashOpen = false; R.render(); });
   R.input('rz-cortex-new-title', function (el) { U.newTitle = el.value.slice(0, 80); });
   R.input('rz-cortex-new-desc', function (el) { U.newDesc = el.value.slice(0, 600); });
-  R.act('rz-cortex-new-plan', function (el) { U.newPlan = attr(el, 'data-value') === 'empty' ? 'empty' : 'agent'; R.render(); });
   R.act('rz-cortex-create', function () { doCreate(); });
   function doCreate() {
     var t = clip(U.newTitle, 80);
     if (!t) { R.toast('Donnez un nom à la carte : le domaine que vous voulez explorer.'); return; }
-    var now = Date.now(), c = store();
-    var m = normMap({ id: R.uid('cxmap'), title: t, description: U.newDesc.trim(), mode: U.newPlan === 'agent' ? 'propose' : 'manual', autoTidy: true, createdAt: now, updatedAt: now,
-      nodes: [{ id: 'root', parent: '', title: t, summaryFr: U.newDesc.trim(), status: 'open', origin: 'user', order: 0, at: now }] });
+    var c = store(), m = normMap(emptyMap(t, U.newDesc.trim()));
     c.maps.push(m);
     c.current = m.id;
-    U.sel[m.id] = 'root';
-    var plan = U.newPlan;
+    U.sel[m.id] = 'root'; U.side = 'chat';
     U.newOpen = false; U.newTitle = ''; U.newDesc = ''; U.centered = '';
+    U.note[m.id] = 'Carte créée. Demandez un programme à l’agent, ou ajoutez vos grands thèmes.';
     R.save(true);
-    if (plan === 'agent') runAgent(m, 'create', { node: 'root' });
-    else { U.note[m.id] = 'Carte créée : ajoutez vos grands thèmes à droite.'; R.render(); }
+    R.render();
   }
 
   /* ══ Carte d'accueil ════════════════════════════════════════════════════ */
@@ -721,12 +1179,14 @@
     if (!R.profile.onboarded) return '';
     var m = current(), total = m.nodes.length - 1, done = m.nodes.filter(function (x) { return x.parent && studied(x.status); }).length;
     var next = suggest(3);
-    var h = ['<section class="rz-card rzc-home"><div class="rz-card-head"><span class="rz-card-title">' + icon('node') + ' Le cortex</span><span class="rz-card-meta">' + esc(m.title + ' · ' + done + ' / ' + total) + '</span></div>'];
-    h.push('<div class="rzc-home-bar" aria-hidden="true"><i style="width:' + (total ? Math.round(done / total * 100) : 0) + '%"></i></div>');
+    var h = ['<section class="rz-card rzc-home"><div class="rz-card-head"><span class="rz-card-title">' + icon('node') + ' Le cortex</span><span class="rz-card-meta">' + esc(total ? m.title + ' · ' + done + ' / ' + total : 'vide') + '</span></div>'];
+    if (!total) h.push('<p class="rz-muted">Demandez un programme à l’agent — « du début de l’humanité à la fin », « le bricolage » — et vos cours suivront ses étapes.</p>');
+    else h.push('<div class="rzc-home-bar" aria-hidden="true"><i style="width:' + Math.round(done / total * 100) + '%"></i></div>');
     if (next.length) h.push('<ul class="rzc-home-list">' + next.map(function (x) {
-      return '<li><button type="button" class="rzc-kid is-' + x.s + '" data-act="rz-cortex-lesson-home" data-map="' + esc(x.map.id) + '" data-id="' + esc(x.node.id) + '" title="Préparer le cours sur ce nœud"><i class="rzc-dot is-' + x.s + '"></i><span>' + esc(x.node.title) + '</span><span class="rz-muted">' + esc(STATUS[x.s]) + '</span></button></li>';
+      var prog = programOf(x.map, x.node);
+      return '<li><button type="button" class="rzc-kid is-' + x.s + '" data-act="rz-cortex-lesson-home" data-map="' + esc(x.map.id) + '" data-id="' + esc(x.node.id) + '" title="Préparer le cours sur ce nœud"><i class="rzc-dot is-' + x.s + '"></i><span>' + esc(x.node.title) + '</span><span class="rz-muted">' + esc(prog ? prog.title : STATUS[x.s]) + '</span></button></li>';
     }).join('') + '</ul>');
-    h.push('<button type="button" class="btn btn-ghost" data-act="rz-go" data-view="cortex">Ouvrir le cortex</button></section>');
+    h.push('<button type="button" class="btn btn-ghost" data-act="rz-go" data-view="cortex">' + (total ? 'Ouvrir le cortex' : 'Commencer mon cortex') + '</button></section>');
     return h.join('');
   } });
   R.act('rz-cortex-lesson-home', function (el) { if (R.lessonApi) R.lessonApi.pickCortex(attr(el, 'data-map'), attr(el, 'data-id'), null); });
@@ -736,13 +1196,34 @@
   R.fixture('cortex', function (p) {
     var nodes = arr(p.nodes), mode = p.mode;
     var focus = nodes.filter(function (n) { return n.id === p.node; })[0];
+    if (mode === 'chat') {
+      var msg = str(p.message).toLowerCase(), draft = obj(p.draft);
+      if (/court|moins/.test(msg) && draft) {
+        return { mode: 'chat', reply: 'Voici une version plus courte, en six grandes étapes.', followUps: ['Ajoute plus sur l’Égypte', 'Parfait, merci'],
+          proposal: { action: 'new', target: '', attach: '', title: draft.title, summaryFr: 'Version courte.', query: 'history of humanity', steps: arr(draft.steps).filter(function (s) { return !s.parent; }).slice(0, 6).map(function (s) { return { ref: s.ref, parent: '', title: s.title, summaryFr: '', query: s.title }; }) } };
+      }
+      if (focus && focus.kind === 'program') {
+        var kept = nodes.filter(function (n) { return n.parent === focus.id; }).map(function (n) { return { ref: n.id, parent: '', title: n.title, summaryFr: '', query: n.title }; });
+        kept.splice(2, 0, { ref: 'new1', parent: '', title: 'L’Égypte ancienne', summaryFr: 'Pharaons, pyramides et Nil.', query: 'ancient Egypt' });
+        return { mode: 'chat', reply: 'J’ai ajouté une étape sur l’Égypte ancienne, juste après la Préhistoire.', followUps: [], proposal: { action: 'revise', target: focus.id, attach: '', title: focus.title, summaryFr: '', query: '', steps: kept } };
+      }
+      var eras = [['La Préhistoire', ['Les premiers humains', 'La révolution néolithique']], ['L’Antiquité', ['La Mésopotamie', 'La Grèce antique', 'Rome']], ['Le Moyen Âge', ['Les grandes invasions', 'La féodalité']],
+        ['La Renaissance', []], ['Les Temps modernes', ['Les grandes découvertes', 'Les Lumières']], ['L’époque contemporaine', ['La révolution industrielle', 'Les guerres mondiales']], ['Le monde d’aujourd’hui', []], ['Les futurs possibles', []]];
+      var steps = [];
+      eras.forEach(function (e, i) {
+        steps.push({ ref: 'new' + (i + 1), parent: '', title: e[0], summaryFr: 'Une grande période de l’histoire humaine.', query: e[0] });
+        e[1].forEach(function (t, j) { steps.push({ ref: 'new' + (i + 1) + '_' + j, parent: 'new' + (i + 1), title: t, summaryFr: '', query: t }); });
+      });
+      return { mode: 'chat', reply: 'Je vous propose de suivre l’histoire de l’humanité dans l’ordre chronologique, en huit grandes étapes, des premiers humains aux futurs possibles. Les périodes les plus riches sont découpées en sous-étapes, pour qu’un cours ne survole pas tout.',
+        followUps: ['Fais-le plus court', 'Ajoute plus sur l’Égypte', 'Commence plutôt au Big Bang'],
+        proposal: { action: 'new', target: '', attach: '', title: 'L’histoire de l’humanité', summaryFr: 'Des premiers humains à demain, dans l’ordre.', query: 'history of humanity', steps: steps } };
+    }
     if (mode === 'create') {
       var themes = ['Les outils de base', 'Les matériaux', 'La sécurité', 'Les projets faciles'];
       var out = [];
       themes.forEach(function (t, i) {
         out.push({ ref: 'new' + (i + 1), parent: p.node || 'root', title: t, summaryFr: 'Ce qu’il faut savoir : ' + t.toLowerCase() + '.', query: t });
         out.push({ ref: 'new' + (i + 1) + 'a', parent: 'new' + (i + 1), title: t + ' : l’essentiel', summaryFr: '', query: t + ' basics' });
-        out.push({ ref: 'new' + (i + 1) + 'b', parent: 'new' + (i + 1), title: t + ' : aller plus loin', summaryFr: '', query: t + ' advanced' });
       });
       return { mode: mode, nodes: out, merged: [], noteFr: 'Voici un plan de départ en quatre grands thèmes.' };
     }

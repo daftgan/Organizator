@@ -47,6 +47,7 @@ public sealed class LearningStore
         ["exercise"] = "exercises",
         ["toeic"] = "toeic",
         ["sw"] = "sw",
+        ["cortex"] = "cortex",
     };
 
     // Les documents restent lisibles a l'oeil (accents non echappes) ; learning.json, ecrit a
