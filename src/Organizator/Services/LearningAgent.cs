@@ -1593,6 +1593,15 @@ internal static class LessonGenre
                 sb.Append(" ; mots-clés de recherche : ").Append(query);
             }
 
+            // Titre du jour choisi dans le menu RSS : sa redaction et son lien, a lire ailleurs si le site est ferme a WebFetch.
+            var source = LJ.Str(topic, "source", 60);
+            var url = LJ.Https(LJ.Str(topic, "url", 2000));
+            if (url.Length > 0)
+            {
+                sb.Append(" ; titre du menu du jour").Append(source.Length > 0 ? " (" + source + ")" : "").Append(" : ").Append(url)
+                    .Append(NewsMenu.IsBlocked(url) ? ", site fermé à WebFetch : lisez ce fait sur une autre rédaction" : "");
+            }
+
             sb.Append(timeless
                 ? ".\n"
                 : ". Cherchez son dernier développement (moins de 7 jours) ; s'il n'y a rien de neuf, partez de l'article le plus récent (14 jours au plus) et dites-le dans summaryFr.\n");

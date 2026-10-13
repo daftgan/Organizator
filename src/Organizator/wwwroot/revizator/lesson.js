@@ -32,7 +32,7 @@
   var esc = R.esc;
 
   var U = R.ui.lesson = {
-    minutes: null, topicMode: null, topicOpen: false, custom: '',
+    minutes: null, topicMode: null, topicOpen: false, custom: '', newsPick: null,
     error: null, cancelled: {}, menu: '', news: null, newsAt: 0, newsBusy: false,
     prepSrs: false, prepSrsDone: false, docWait: {}, docMissing: {},
     gloss: null, confirmQuit: false, drafts: {}, show: {}, grading: {}, gradeError: {},
@@ -74,6 +74,8 @@
     30: [['warmup', 3], ['reading', 5], ['listening', 5], ['vocabulary', 4], ['grammar', 3], ['writing', 4], ['speaking', 4], ['review', 2]],
     45: [['warmup', 4], ['reading', 8], ['listening', 7], ['vocabulary', 6], ['grammar', 5], ['writing', 7], ['speaking', 6], ['review', 2]]
   };
+  var NEWS_PICKS = 10;               /* titres du jour proposés comme sujet dans le choix du sujet */
+  var NEWS_PER_SOURCE = 2;           /* pas plus de deux titres d'une même rédaction : de la variété */
   var PREP_EXPECT_S = 150;           /* durée typique d'une préparation (sources.md §6.2) */
   var IDLE_MS = 180000;              /* au-delà de 3 min sans geste, le minuteur ne compte plus */
 
@@ -281,6 +283,7 @@
   }
   function topicMode() {
     if (U.topicMode === 'custom' && U.custom.trim()) return 'custom';
+    if (U.topicMode === 'news' && U.newsPick && U.newsPick.title) return 'news';
     if (U.topicMode === 'teacher') return 'teacher';
     return R.data.nextTopic && R.data.nextTopic.title ? 'next' : 'teacher';
   }
@@ -288,6 +291,7 @@
     var m = topicMode();
     if (m === 'custom') { var t = U.custom.trim().slice(0, 160); return { title: t, query: t, rubric: '' }; }
     if (m === 'next') { var n = R.data.nextTopic; return { title: str(n.title), query: str(n.query || n.title), rubric: str(n.rubric) }; }
+    if (m === 'news') { var p = U.newsPick; return { title: str(p.title).slice(0, 200), query: '', rubric: '', source: str(p.source).slice(0, 60), url: str(p.url).slice(0, 2000) }; }
     return null;
   }
 
@@ -370,10 +374,21 @@
 
   function loadNews(force) {
     if (U.newsBusy || (!force && U.news && Date.now() - U.newsAt < 600000)) return;
-    U.newsBusy = true;
+    U.newsBusy = true; U.newsFailed = false;
     bridge.call('learnNews', force ? { force: true } : {}, 20000).then(function (r) {
-      U.newsBusy = false; U.news = arr(r && r.items); U.newsAt = Date.now(); R.renderSoon();
-    }, function () { U.newsBusy = false; U.news = U.news || []; U.newsAt = Date.now(); R.renderSoon(); });
+      U.newsBusy = false; U.news = arr(r && r.items); U.newsAt = Date.now();
+      U.newsFetchedAt = num(r && r.fetchedAt, 0) || Date.now(); R.renderSoon();
+    }, function () { U.newsBusy = false; U.newsFailed = !!force; U.news = U.news || []; U.newsAt = Date.now(); R.renderSoon(); });
+  }
+
+  /* Les titres du jour proposés comme sujet : les plus récents, sans les titres « lourds »,
+     au plus NEWS_PER_SOURCE par rédaction pour couvrir plusieurs rubriques. */
+  function newsPicks() {
+    var bySrc = {};
+    return arr(U.news).filter(function (n) { return n && n.title && !n.heavy; })
+      .sort(function (a, b) { return (Date.parse(b.published) || 0) - (Date.parse(a.published) || 0); })
+      .filter(function (n) { var k = str(n.source); bySrc[k] = (bySrc[k] || 0) + 1; return bySrc[k] <= NEWS_PER_SOURCE; })
+      .slice(0, NEWS_PICKS);
   }
 
   /* ══ Carte d'accueil : le cours d'aujourd'hui ═══════════════════════════ */
@@ -435,15 +450,39 @@
     var h = '<div class="rzl-topic">';
     if (m === 'next') h += '<div class="rzl-topic-cur"><span class="rzl-topic-k">Sujet retenu au dernier cours</span><b lang="en">' + esc(nt.title) + '</b>' + (nt.pitchFr ? '<span class="rzl-topic-pitch">' + esc(nt.pitchFr) + '</span>' : '') + '</div>';
     else if (m === 'custom') h += '<div class="rzl-topic-cur"><span class="rzl-topic-k">Votre sujet</span><b>' + esc(U.custom.trim()) + '</b></div>';
+    else if (m === 'news') h += '<div class="rzl-topic-cur"><span class="rzl-topic-k">Dans l’actualité' + (U.newsPick.source ? ' · ' + esc(U.newsPick.source) : '') + '</span><b lang="en">' + esc(U.newsPick.title) + '</b></div>';
     else h += '<div class="rzl-topic-cur"><b>Au choix du professeur, sur l’actualité</b><span class="rzl-topic-pitch">' + esc(avoidRubrics().length ? 'Une autre rubrique que ' + avoidRubrics().map(rubricLabel).join(' et ') + ', comme aux derniers cours.' : 'France, Royaume-Uni, monde, tech, science, culture, sport…') + '</span></div>';
     if (!U.topicOpen) return h + '<button type="button" class="btn btn-ghost rzl-topic-change" data-act="rz-lesson-topic-open">changer</button></div>';
     h += '<div class="rzl-topic-pick">';
     var chips = [];
     if (nt && nt.title) chips.push(['next', 'Le sujet retenu']);
     chips.push(['teacher', 'Au choix du professeur']);
-    h += R.h.chips('rzl-topic', chips.map(function (c) { return c[0]; }), m === 'custom' ? '' : m, chips.map(function (c) { return c[1]; }), 'rz-lesson-topic');
+    h += R.h.chips('rzl-topic', chips.map(function (c) { return c[0]; }), m === 'custom' || m === 'news' ? '' : m, chips.map(function (c) { return c[1]; }), 'rz-lesson-topic');
+    h += newsPickHtml();
     h += '<input class="input rzl-topic-in" type="text" data-role="rz-lesson-custom" data-focus-key="rzl-topic-custom" placeholder="Ou un sujet à vous : le rugby à Toulouse, l’IA au travail…" value="' + esc(U.custom) + '" maxlength="160">';
     return h + '</div></div>';
+  }
+
+  /* Choisir son sujet parmi les titres du jour, et relancer la lecture des flux. */
+  function newsPickHtml() {
+    if (!U.news && !U.newsBusy) loadNews();
+    var at = U.newsFetchedAt ? Math.max(0, Math.round((Date.now() - U.newsFetchedAt) / 60000)) : -1;
+    var meta = U.newsBusy ? 'Lecture des flux…' : (at < 0 ? '' : (at < 1 ? 'à l’instant' : (at < 60 ? 'il y a ' + at + ' min' : 'à ' + R.fmtTime(U.newsFetchedAt))));
+    var h = '<div class="rzl-npick"><div class="rzl-npick-head"><span class="rzl-topic-k">Ou un titre du jour</span>'
+      + (meta ? '<span class="rzl-npick-meta">' + (U.newsBusy ? '<span class="rz-spin"></span> ' : '') + esc(meta) + '</span>' : '')
+      + '<button type="button" class="btn btn-ghost rzl-npick-refresh" data-act="rz-lesson-news-refresh"' + (U.newsBusy ? ' disabled' : '') + ' title="Relire les flux d’actualité maintenant">' + icon('replay') + ' Relancer la recherche</button></div>';
+    if (U.newsFailed) h += '<div class="rz-muted">Les flux n’ont pas répondu : vérifiez la connexion, puis relancez.</div>';
+    if (!U.news) return h + (U.newsBusy ? '' : '<div class="rz-muted">Les titres du jour ne sont pas encore lus.</div>') + '</div>';
+    var picks = newsPicks();
+    if (!picks.length) return h + '<div class="rz-muted">Aucun titre récent pour l’instant : relancez la recherche dans un moment.</div></div>';
+    var cur = topicMode() === 'news' ? str(U.newsPick.url || U.newsPick.title) : '';
+    return h + '<ul class="rzl-npick-list">' + picks.map(function (n, i) {
+      var on = cur && cur === str(n.url || n.title);
+      var t = Date.parse(n.published);
+      return '<li><button type="button" class="rzl-npick-item' + (on ? ' on' : '') + '" data-act="rz-lesson-news-pick" data-i="' + i + '" aria-pressed="' + !!on + '">'
+        + '<span class="rzl-news-src">' + esc(n.source) + (t ? ' · ' + esc(R.fmtTime(t)) : '') + (on ? ' · ' + icon('check') + ' retenu' : '') + '</span>'
+        + '<span class="rzl-npick-t" lang="en">' + esc(n.title) + '</span></button></li>';
+    }).join('') + '</ul></div>';
   }
 
   function errorHtml(err) {
@@ -1566,7 +1605,7 @@
     if (rv.next != null || nt) R.data.nextTopic = nt;
     R.tts.stopAll();
     R.setActive(null);
-    U.acc = 0; U.confirmQuit = false; U.prepUntil = {}; U.drafts = {}; U.show = {}; U.topicMode = null; U.topicOpen = false; U.custom = '';
+    U.acc = 0; U.confirmQuit = false; U.prepUntil = {}; U.drafts = {}; U.show = {}; U.topicMode = null; U.topicOpen = false; U.custom = ''; U.newsPick = null;
     R.save(true);
     R.go('home');
     R.toast('Séance terminée — ' + Math.max(1, Math.round(sum.minutes)) + ' min' + (sum.score != null ? ', ' + pct(sum.score) + ' de bonnes réponses' : '') + '. À demain !');
@@ -1639,8 +1678,15 @@
   R.act('rz-lesson-noop', function () { /* absorbe le clic (bulle de glose) */ });
   R.act('rz-lesson-minutes', function (el) { U.minutes = +attr(el, 'data-value') || 20; R.render(); });
   R.act('rz-lesson-topic-open', function () { U.topicOpen = !U.topicOpen; R.render(); });
-  R.act('rz-lesson-topic', function (el) { U.topicMode = attr(el, 'data-value'); U.custom = ''; U.topicOpen = false; R.render(); });
-  R.input('rz-lesson-custom', function (el) { U.custom = el.value.slice(0, 160); U.topicMode = U.custom.trim() ? 'custom' : null; });
+  R.act('rz-lesson-topic', function (el) { U.topicMode = attr(el, 'data-value'); U.custom = ''; U.newsPick = null; U.topicOpen = false; R.render(); });
+  R.act('rz-lesson-news-pick', function (el) {
+    var n = newsPicks()[+attr(el, 'data-i')];
+    if (!n) return;
+    U.newsPick = { title: str(n.title), source: str(n.source), url: str(n.url) };
+    U.topicMode = 'news'; U.custom = ''; U.topicOpen = false; R.render();
+  });
+  R.act('rz-lesson-news-refresh', function () { loadNews(true); R.render(); });
+  R.input('rz-lesson-custom', function (el) { U.custom = el.value.slice(0, 160); U.topicMode = U.custom.trim() ? 'custom' : (U.newsPick ? 'news' : null); });
   R.act('rz-lesson-prepare', function (el) { prepare({ srs: attr(el, 'data-srs') === '1' }); });
   R.act('rz-lesson-prep-srs', function () {
     if (!srsOk()) return;
