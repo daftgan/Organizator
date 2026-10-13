@@ -29,7 +29,6 @@
 .rzc-board { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
 .rzc-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; }
 .rzc-tools-l, .rzc-tools-r { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
-.rzc-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--rz-ink-soft); cursor: pointer; }
 .rzc-seg { display: inline-flex; align-items: center; border: 1px solid var(--rz-line); border-radius: 999px; overflow: hidden; }
 .rzc-seg .btn { border-radius: 0; min-width: 34px; padding: 0 8px; font-variant-numeric: tabular-nums; font-size: 15px; }
 .rzc-seg .btn:disabled { opacity: 0.35; }
@@ -51,7 +50,6 @@
 .rzc-stage { position: relative; margin: auto; }
 .rzc-links { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
 .rzc-links path { fill: none; stroke: var(--rzc-c, var(--rz-line)); stroke-width: 2.2; stroke-linecap: round; opacity: 0.55; }
-.rzc-links path.is-locked { stroke-dasharray: 4 5; opacity: 0.35; }
 .rzc-rings circle { fill: none; stroke: color-mix(in srgb, var(--color-text) 6%, transparent); stroke-width: 1; stroke-dasharray: 2 6; }
 
 .rzc-node {
@@ -75,7 +73,6 @@
 }
 .rzc-node.is-studied { background: color-mix(in srgb, var(--rzc-c, var(--color-accent)) 30%, var(--color-surface)); border-color: var(--rzc-c, var(--color-accent)); }
 .rzc-node.is-deepen { border-style: double; border-width: 3px; }
-.rzc-node.is-locked { opacity: 0.6; border-style: dashed; background: var(--color-surface); font-weight: 500; }
 .rzc-node-t { overflow-wrap: anywhere; }
 .rzc-more { flex: none; font-size: 11px; font-weight: 800; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--rzc-c, var(--color-accent)) 22%, transparent); }
 .rzc-badge {
@@ -84,7 +81,6 @@
 }
 .rzc-badge svg { width: 10px; height: 10px; }
 .rzc-badge.is-deep { background: var(--rz-write); }
-.rzc-badge.is-lock { background: var(--rz-ink-soft); }
 
 /* Teintes de branche */
 .rzc-h0 { --rzc-c: oklch(0.6 0.12 28); }
@@ -101,14 +97,9 @@
 .rzc-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; border: 1.5px solid var(--color-accent); background: var(--color-surface); display: inline-block; }
 .rzc-dot.is-studied { background: var(--rz-good); border-color: var(--rz-good); }
 .rzc-dot.is-deepen { background: var(--rz-write); border-color: var(--rz-write); }
-.rzc-dot.is-locked { border-style: dashed; border-color: var(--rz-ink-soft); }
 
 /* Le panneau du nœud */
 .rzc-side { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.rzc-tabs { display: flex; gap: 4px; padding: 4px; border-radius: 999px; background: color-mix(in srgb, var(--color-surface) 80%, transparent); border: 1px solid var(--rz-line); }
-.rzc-tab { flex: 1; height: 32px; border: 0; border-radius: 999px; background: none; cursor: pointer; font: inherit; font-size: 13.5px; font-weight: 700; color: var(--rz-ink-soft); display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-.rzc-tab:hover { color: var(--color-text); }
-.rzc-tab.on { background: var(--color-accent); color: #fff; }
 .rzc-panel { display: flex; flex-direction: column; gap: 10px; }
 .rzc-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: var(--rz-ink-soft); }
 .rzc-crumb { border: 0; background: none; padding: 0; font: inherit; color: var(--color-accent-700); cursor: pointer; }
@@ -118,7 +109,6 @@
 .rzc-st { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; background: var(--color-accent-100); color: var(--color-accent-700); }
 .rzc-st.is-studied { background: var(--rz-good-bg); color: var(--rz-good); }
 .rzc-st.is-deepen { background: var(--rz-write-bg); color: var(--rz-write-fg); }
-.rzc-st.is-locked { background: var(--color-neutral-100); color: var(--rz-ink-soft); }
 .rzc-panel-p { margin: 0; font-size: 14px; line-height: 1.5; color: var(--rz-ink-soft); }
 .rzc-actions { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
 .rzc-cta { justify-content: center; }
@@ -132,7 +122,6 @@
 }
 .rzc-kid:hover { background: var(--color-accent-100); }
 .rzc-kid > span:first-of-type { flex: 1; min-width: 0; }
-.rzc-kid.is-locked { color: var(--rz-ink-soft); }
 .rzc-kid .rz-muted { font-size: 12px; }
 .rzc-add, .rzc-rename { display: flex; gap: 6px; }
 .rzc-add .input, .rzc-rename .input { flex: 1; min-width: 0; }
@@ -241,3 +230,57 @@ html.rzc-noscroll, html.rzc-noscroll body { overflow: hidden; }
   .rzc.is-full .rzc-body { grid-template-columns: minmax(0, 1fr); }
   .rzc.is-full .rzc-canvas { height: 62vh; flex: none; }
 }
+
+/* ── Épuration : barre d'outils, carte du nœud, historique, agent en colonne ── */
+.rzc-tools { min-height: 34px; }
+.rzc-tool {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; min-width: 32px; padding: 0 8px; border-radius: 10px;
+  border: 1px solid transparent; background: none; color: var(--color-text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.rzc-tool:not(.is-text) { font-size: 17px; }
+.rzc-tool svg { width: 14px; height: 14px; }
+.rzc-tool:hover:not(:disabled) { background: var(--color-accent-100); }
+.rzc-tool.on { background: var(--color-accent-100); border-color: var(--color-accent-300); }
+.rzc-tool:disabled { opacity: 0.3; cursor: default; }
+.rzc-busy { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--color-accent-700); }
+
+.rzc-wrap { position: relative; min-height: 0; display: flex; flex-direction: column; }
+.rzc.is-full .rzc-wrap { flex: 1; }
+.rzc-canvas { cursor: grab; touch-action: none; user-select: none; }
+.rzc-canvas.is-drag { cursor: grabbing; }
+.rzc-canvas .rzc-node { cursor: pointer; }
+
+.rzc-pop {
+  position: absolute; top: 12px; right: 12px; z-index: 5; width: min(320px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 8px; padding: 14px 14px 10px; border-radius: 16px;
+  background: var(--color-surface); border: 1px solid var(--rz-line); box-shadow: 0 10px 30px color-mix(in srgb, var(--color-text) 14%, transparent);
+  animation: rz-rise 0.16s ease both;
+}
+.rzc-pop-x { position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; border: 0; border-radius: 50%; background: none; cursor: pointer; color: var(--rz-ink-soft); font-size: 13px; }
+.rzc-pop-x:hover { background: var(--color-accent-100); color: var(--color-text); }
+.rzc-pop-t { font-family: var(--font-heading); font-size: 20px; line-height: 1.15; padding-right: 24px; }
+.rzc-pop .rzc-crumbs { padding-right: 24px; }
+.rzc-pop .rzc-panel-p { font-size: 13px; }
+.rzc-pop .rz-chips { flex-wrap: wrap; }
+.rzc-pop-step { font-size: 12px; }
+.rzc-pop .rzc-foot { padding-top: 6px; gap: 2px; }
+.rzc-pop .rzc-foot .btn { font-size: 12.5px; padding: 0 8px; }
+.rzc-pop .rzc-foot .btn svg { width: 13px; height: 13px; }
+
+.rzc-hist {
+  position: absolute; top: 12px; left: 12px; z-index: 6; width: min(380px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 16px;
+  background: var(--color-surface); border: 1px solid var(--rz-line); box-shadow: 0 10px 30px color-mix(in srgb, var(--color-text) 14%, transparent);
+}
+.rzc-hist-head { display: flex; align-items: center; justify-content: space-between; }
+.rzc-hist-head .rzc-pop-x { position: static; }
+.rzc-hist .rzc-versions { max-height: none; }
+
+.rzc-side { position: sticky; top: 12px; }
+.rzc-chat-head { display: flex; align-items: baseline; gap: 8px; font-family: var(--font-heading); font-size: 18px; }
+.rzc-chat-head svg { width: 16px; height: 16px; align-self: center; }
+.rzc-chat-head .rz-muted { font-family: var(--font-body); font-size: 12.5px; margin-left: auto; }
+.rzc-chat-log { max-height: calc(100vh - 330px); min-height: 360px; }
+.rzc.is-full .rzc-side { overflow: hidden; display: flex; }
+.rzc.is-full .rzc-chat-log { max-height: none; }
+.rzc-danger-btn { background: var(--rz-bad); border-color: var(--rz-bad); }
