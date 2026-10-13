@@ -44,6 +44,7 @@ public sealed class AdminPolicy
         ["cardcheck"] = ("cardModel", null),
         ["cardfix"] = ("cardModel", null),
         ["prof"] = ("profModel", "profEffort"),
+        ["cortex"] = ("genModel", "genEffort"),
     };
 
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };

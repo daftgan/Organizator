@@ -54,7 +54,7 @@ public sealed class LearningAgent
 
     private static readonly Dictionary<string, KindSpec> Kinds = new(StringComparer.Ordinal)
     {
-        ["lesson"] = new("lesson", "Cours du jour", "sonnet", "medium", TimeSpan.FromSeconds(300), true),
+        ["lesson"] = new("lesson", "Cours du jour", "sonnet", "medium", TimeSpan.FromSeconds(420), true),
         ["exercise"] = new("exercise", "Exercices", "sonnet", "low", TimeSpan.FromSeconds(150), true),
         ["toeic"] = new("toeic", "Bilan express", "sonnet", "low", TimeSpan.FromSeconds(240), true),
         ["sw"] = new("sw", "Bilan oral et écrit", "sonnet", "low", TimeSpan.FromSeconds(150), true),
@@ -63,6 +63,7 @@ public sealed class LearningAgent
         ["cardcheck"] = new("cardcheck", "Correcteur des cartes", "haiku", "", TimeSpan.FromSeconds(50), false),
         ["cardfix"] = new("cardfix", "Cartes clarifiées", "haiku", "", TimeSpan.FromSeconds(120), false),
         ["prof"] = new("prof", "Professeur", "sonnet", "low", TimeSpan.FromSeconds(90), false),
+        ["cortex"] = new("cortex", "Cortex", "sonnet", "low", TimeSpan.FromSeconds(150), false),
     };
 
     // Vrai si un flux stream-json a rendu un resultat sans fiche structuree : on repasse alors en json.
@@ -277,7 +278,8 @@ public sealed class LearningAgent
             Emit(entry, "start", spec.Label);
 
             JsonObject? menu = null;
-            if (request.Kind == "lesson" && !LJ.Bool(request.Params, "timeless"))
+            // Un cours du cortex (sujet de fond) se passe du menu RSS : il fait sa propre recherche.
+            if (request.Kind == "lesson" && !LJ.Bool(request.Params, "timeless") && LJ.Obj(request.Params, "cortex") is null)
             {
                 try
                 {
@@ -515,6 +517,7 @@ public sealed class LearningAgent
         "cardcheck" => CardGenre.ComposeCheck(r),
         "cardfix" => CardGenre.ComposeFix(r),
         "prof" => ProfGenre.Compose(r),
+        "cortex" => CortexGenre.Compose(r),
         _ => throw new InvalidOperationException("Genre inconnu : " + r.Kind),
     };
 
@@ -529,6 +532,7 @@ public sealed class LearningAgent
         "grade" => GradeGenre.Sanitize(output, r),
         "tutor" => TutorGenre.Sanitize(output, r),
         "prof" => ProfGenre.Sanitize(output, r),
+        "cortex" => CortexGenre.Sanitize(output, r),
         _ => throw new InvalidOperationException("Genre inconnu : " + r.Kind),
     };
 
@@ -1543,12 +1547,33 @@ internal static class LessonGenre
         + "3. La fidélité\n"
         + "- En cas de doute sur un fait, omets-le ou présente-le comme une opinion de personnage.\n\n";
 
+    // Cours du cortex : un sujet de fond choisi dans une carte de l'utilisateur, avec une recherche plus large que pour l'actualite.
+    private const string CortexIntro = "Tu es le professeur d'anglais d'Organizator. À la demande, tu prépares un cours d'anglais pour un adulte francophone sur un sujet de fond qu'il a choisi dans son « cortex » (sa carte des savoirs : histoire, philosophie, sciences, bricolage, informatique…), et tu rends uniquement la fiche demandée. Le cours lui apprend vraiment quelque chose sur le sujet, en anglais. Le contenu d'apprentissage est en anglais ; les consignes et explications (champs …Fr) sont en français, en vouvoyant l'utilisateur.\n\n";
+
+    private const string CortexRules = "1. Le sujet\n"
+        + "- Le nœud du cortex fourni est le sujet imposé : traite-le précisément, à sa place dans le chemin de la carte (du général au particulier). Ne déborde pas sur les nœuds voisins : ils feront l'objet d'autres cours.\n"
+        + "- Découverte : les notions essentielles, les dates, les personnes, les idées ou les gestes clés, expliqués simplement avec un exemple concret. Approfondissement : le nœud a déjà été étudié ; va plus loin (causes, débats, nuances, cas précis, erreurs courantes, ce qu'on sait de récent) sans répéter les bases, en t'appuyant sur ce que dit le cours précédent.\n"
+        + "- Sujet pratique (bricolage, cuisine, informatique, jardinage…) : un savoir-faire concret, étapes, outils, sécurité et vocabulaire technique utile.\n\n"
+        + "2. Les sources — une vraie recherche, rendue en moins de cinq minutes\n"
+        + "- Commence par une ou deux WebSearch en anglais, puis ouvre avec WebFetch deux à quatre pages de référence complémentaires. Demande à WebFetch, en anglais, une fiche factuelle en anglais : définitions, dates, noms, chiffres, étapes, deux citations courtes attribuées.\n"
+        + "- Préfère les sources de référence et de vulgarisation lisibles par WebFetch : en.wikipedia.org, britannica.com, plato.stanford.edu, iep.utm.edu, khanacademy.org, worldhistory.org, smithsonianmag.com, nationalgeographic.com, theconversation.com, nasa.gov, phys.org, sciencedaily.com, developer.mozilla.org, docs.python.org, learn.microsoft.com, familyhandyman.com, thisoldhouse.com, bobvila.com, instructables.com, les sites d'universités et de musées.\n"
+        + "- N'essaie pas WebFetch sur bbc.co.uk, bbc.com, theguardian.com, reuters.com, apnews.com, economist.com, independent.co.uk, sky.com, rfi.fr, dw.com, lemonde.fr, theverge.com, wired.com, arstechnica.com ni www.npr.org : ils refusent l'outil.\n"
+        + "- Au plus trois WebSearch et quatre WebFetch. Page inaccessible : passe à une autre, sans réessayer. La date des sources importe peu (published : la date lue sur la page, sinon vide), sauf pour un fait récent.\n\n"
+        + "3. La fidélité\n"
+        + "- Aucun fait (nom, chiffre, date, lieu, citation) que tu n'as pas lu dans une source ouverte. Chaque fait repris figure dans facts, avec l'index de sa source. Points discutés : expose les positions en les attribuant.\n"
+        + "- Les personnages du script d'écoute sont fictifs (un guide, un artisan, un étudiant, une experte) ; ne fais jamais parler une personne réelle, sauf pour une citation lue et attribuée.\n\n";
+
+    private const string CortexNext = "\nCours du cortex : rubric est la rubrique la plus proche du sujet ; nextTopics donne trois sous-thèmes précis du nœud étudié, pour continuer à l'explorer (le premier pour approfondir, les deux autres pour élargir), qui ne reprennent pas les sous-thèmes déjà prévus ; ils deviendront de nouveaux nœuds de la carte : title en français, court (2 à 6 mots), query en mots-clés anglais.\n";
+
     private static readonly string Schema = "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"title\",\"summaryFr\",\"level\",\"minutes\",\"rubric\",\"tone\",\"keywords\",\"plan\",\"sources\",\"facts\",\"warmup\",\"reading\",\"comprehension\",\"listening\",\"authenticAudio\",\"vocabulary\",\"grammar\",\"writing\",\"speaking\",\"cards\",\"nextTopics\"],\"definitions\":{\"question\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"kind\",\"skill\",\"question\",\"options\",\"answer\",\"explanationFr\"],\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"choice\",\"true_false\",\"open\"]},\"skill\":{\"type\":\"string\",\"enum\":[\"gist\",\"detail\",\"inference\",\"vocabulary\"]},\"question\":{\"type\":\"string\",\"description\":\"En anglais\"},\"options\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"choice : 3 ou 4 choix ; true_false : [\\\"True\\\",\\\"False\\\"] ; open : []\"},\"answer\":{\"type\":\"string\",\"description\":\"choice et true_false : le texte exact d'une option ; open : réponse attendue, courte\"},\"explanationFr\":{\"type\":\"string\",\"description\":\"Pourquoi, en français, en citant le passage du texte ou du script\"}}},\"language\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Expressions utiles, en anglais, pour réaliser la tâche\"}},\"properties\":{\"title\":{\"type\":\"string\",\"description\":\"Titre du cours, en anglais\"},\"summaryFr\":{\"type\":\"string\",\"description\":\"Le cours en une phrase, en français\"},\"level\":{\"type\":\"string\",\"enum\":[\"A2\",\"B1\",\"B1+\",\"B2\",\"B2+\",\"C1\"]},\"minutes\":{\"type\":\"integer\",\"description\":\"Durée totale prévue, égale à la somme du plan\"},\"rubric\":{\"type\":\"string\",\"enum\":[\"france\",\"uk\",\"world\",\"europe\",\"usa\",\"tech\",\"science\",\"environment\",\"health\",\"economy\",\"culture\",\"sport\",\"society\",\"lifestyle\"]},\"tone\":{\"type\":\"string\",\"enum\":[\"light\",\"balanced\",\"serious\"]},\"keywords\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"3 à 6 mots-clés du sujet, pour l'historique\"},\"plan\":{\"type\":\"array\",\"description\":\"Déroulé de la séance, dans l'ordre\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"step\",\"minutes\"],\"properties\":{\"step\":{\"type\":\"string\",\"enum\":[\"warmup\",\"reading\",\"listening\",\"authenticAudio\",\"vocabulary\",\"grammar\",\"writing\",\"speaking\",\"review\"]},\"minutes\":{\"type\":\"integer\"}}}},\"sources\":{\"type\":\"array\",\"description\":\"Articles réellement ouverts avec WebFetch et lus\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"title\",\"url\",\"outlet\",\"published\"],\"properties\":{\"title\":{\"type\":\"string\",\"description\":\"Titre exact, dans sa langue\"},\"url\":{\"type\":\"string\",\"description\":\"Adresse https de la page lue\"},\"outlet\":{\"type\":\"string\",\"description\":\"Ex. France 24, AP via Anchorage Daily News\"},\"published\":{\"type\":\"string\",\"description\":\"AAAA-MM-JJ lu sur la page\"}}}},\"facts\":{\"type\":\"array\",\"description\":\"Chaque fait (nom, chiffre, date, citation) repris dans le texte ou le script\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"fact\",\"source\"],\"properties\":{\"fact\":{\"type\":\"string\",\"description\":\"Le fait, en anglais simple, tel que lu\"},\"source\":{\"type\":\"integer\",\"description\":\"Index (à partir de 0) dans sources\"}}}},\"warmup\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"2 ou 3 questions d'échauffement, en anglais, sur l'expérience de l'utilisateur\"},\"reading\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"headline\",\"standfirst\",\"paragraphs\",\"credit\",\"glossary\"],\"properties\":{\"headline\":{\"type\":\"string\"},\"standfirst\":{\"type\":\"string\",\"description\":\"Chapô, une phrase\"},\"paragraphs\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Texte original réécrit au niveau, sans copier les sources\"},\"credit\":{\"type\":\"string\",\"description\":\"Ex. Written for learners from reports by France 24 and AP, 8 October 2026\"},\"glossary\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"term\",\"pos\",\"ipa\",\"meaningEn\",\"meaningFr\",\"example\"],\"properties\":{\"term\":{\"type\":\"string\",\"description\":\"Tel qu'il apparaît dans le texte\"},\"pos\":{\"type\":\"string\",\"enum\":[\"noun\",\"verb\",\"adjective\",\"adverb\",\"phrasal verb\",\"idiom\",\"collocation\",\"other\"]},\"ipa\":{\"type\":\"string\",\"description\":\"Prononciation API britannique\"},\"meaningEn\":{\"type\":\"string\"},\"meaningFr\":{\"type\":\"string\"},\"example\":{\"type\":\"string\",\"description\":\"Nouvel exemple, hors du texte\"}}}}}},\"comprehension\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/definitions/question\"},\"description\":\"Questions sur le texte de lecture\"},\"listening\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"format\",\"title\",\"contextFr\",\"speakers\",\"lines\",\"questions\"],\"properties\":{\"format\":{\"type\":\"string\",\"enum\":[\"dialogue\",\"interview\",\"report\",\"podcast\",\"phone_call\",\"debate\",\"vox_pop\"]},\"title\":{\"type\":\"string\"},\"contextFr\":{\"type\":\"string\",\"description\":\"Ce que l'utilisateur sait avant d'écouter, en français\"},\"speakers\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"id\",\"name\",\"role\",\"accent\",\"gender\"],\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"A, B, C...\"},\"name\":{\"type\":\"string\"},\"role\":{\"type\":\"string\",\"description\":\"Ex. presenter, nurse in Lyon\"},\"accent\":{\"type\":\"string\",\"enum\":[\"en-GB\",\"en-US\",\"en-AU\",\"en-IE\",\"en-CA\",\"en-IN\"]},\"gender\":{\"type\":\"string\",\"enum\":[\"female\",\"male\"]}}}},\"lines\":{\"type\":\"array\",\"description\":\"Le script, réplique par réplique, tel que la synthèse vocale le lira\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"speaker\",\"text\"],\"properties\":{\"speaker\":{\"type\":\"string\",\"description\":\"id d'un speaker\"},\"text\":{\"type\":\"string\",\"description\":\"Une à trois phrases, sans didascalie ni balise\"}}}},\"questions\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/definitions/question\"}}}},\"authenticAudio\":{\"type\":\"object\",\"additionalProperties\":false,\"description\":\"Un épisode de la liste fournie, s'il s'accorde au cours ; sinon tous les champs vides\",\"required\":[\"title\",\"outlet\",\"audioUrl\",\"pageUrl\",\"published\",\"taskFr\",\"questions\"],\"properties\":{\"title\":{\"type\":\"string\"},\"outlet\":{\"type\":\"string\"},\"audioUrl\":{\"type\":\"string\",\"description\":\"mp3 exactement tel que fourni\"},\"pageUrl\":{\"type\":\"string\"},\"published\":{\"type\":\"string\",\"description\":\"AAAA-MM-JJ\"},\"taskFr\":{\"type\":\"string\",\"description\":\"Consigne d'écoute, en français\"},\"questions\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Questions ouvertes, à partir du résumé fourni seulement\"}}},\"vocabulary\":{\"type\":\"array\",\"description\":\"Exercices sur les mots du cours\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"kind\",\"instructionFr\",\"items\"],\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"gap_fill\",\"matching\",\"collocations\",\"word_formation\",\"false_friends\",\"translation\",\"error_correction\"]},\"instructionFr\":{\"type\":\"string\"},\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"prompt\",\"options\",\"answer\",\"explanationFr\"],\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"Phrase à trous (___), mot à associer, phrase à traduire ou à corriger\"},\"options\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Choix proposés, [] si réponse libre\"},\"answer\":{\"type\":\"string\"},\"explanationFr\":{\"type\":\"string\"}}}}}}},\"grammar\":{\"type\":\"object\",\"additionalProperties\":false,\"description\":\"Un point de langue tiré du texte ; tous les champs vides si la séance est trop courte\",\"required\":[\"point\",\"explanationFr\",\"examples\",\"items\"],\"properties\":{\"point\":{\"type\":\"string\",\"description\":\"Ex. present perfect vs past simple\"},\"explanationFr\":{\"type\":\"string\",\"description\":\"Règle et piège pour un francophone, 3 à 5 phrases\"},\"examples\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Phrases du texte qui l'illustrent\"},\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"prompt\",\"answer\"],\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"Phrase à compléter ou à transformer, avec la consigne entre crochets\"},\"answer\":{\"type\":\"string\"}}}}}},\"writing\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"taskFr\",\"genre\",\"words\",\"language\",\"criteria\",\"modelAnswer\"],\"properties\":{\"taskFr\":{\"type\":\"string\",\"description\":\"Consigne, en français, qui relie le sujet à la vie de l'utilisateur\"},\"genre\":{\"type\":\"string\",\"enum\":[\"email\",\"message\",\"comment\",\"opinion\",\"summary\",\"letter\",\"review\",\"story\"]},\"words\":{\"type\":\"integer\",\"description\":\"Longueur visée, en mots\"},\"language\":{\"$ref\":\"#/definitions/language\"},\"criteria\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"3 ou 4 critères de réussite, en français\"},\"modelAnswer\":{\"type\":\"string\",\"description\":\"Réponse modèle au niveau visé\"}}},\"speaking\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"taskFr\",\"prompts\",\"prepSeconds\",\"speakSeconds\",\"language\",\"pronunciation\",\"modelAnswer\"],\"properties\":{\"taskFr\":{\"type\":\"string\",\"description\":\"Consigne, en français : donner son avis, raconter, jouer un rôle\"},\"prompts\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Questions ou relances, en anglais\"},\"prepSeconds\":{\"type\":\"integer\"},\"speakSeconds\":{\"type\":\"integer\"},\"language\":{\"$ref\":\"#/definitions/language\"},\"pronunciation\":{\"type\":\"array\",\"description\":\"2 à 4 mots du cours difficiles pour un francophone\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"word\",\"ipa\",\"tipFr\"],\"properties\":{\"word\":{\"type\":\"string\"},\"ipa\":{\"type\":\"string\"},\"tipFr\":{\"type\":\"string\",\"description\":\"Accent tonique, son th, h aspiré, voyelle longue...\"}}}},\"modelAnswer\":{\"type\":\"string\",\"description\":\"Ce qu'une bonne réponse pourrait dire, au niveau visé\"}}},\"cards\":{\"type\":\"array\",\"description\":\"Cartes de répétition espacée, absentes de la liste des cartes connues\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"kind\",\"front\",\"back\",\"example\"],\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"word\",\"collocation\",\"phrase\",\"false_friend\",\"grammar\",\"pronunciation\"]},\"front\":{\"type\":\"string\",\"description\":\"Côté question : mot ou phrase à trous en anglais, ou sens en français\"},\"back\":{\"type\":\"string\",\"description\":\"Côté réponse\"},\"example\":{\"type\":\"string\",\"description\":\"Phrase d'exemple en anglais, lue à voix haute au verso\"}}}},\"nextTopics\":{\"type\":\"array\",\"description\":\"Trois sujets pour le prochain cours, de rubriques différentes, dont un léger\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"title\",\"pitchFr\",\"rubric\",\"tone\",\"query\"],\"properties\":{\"title\":{\"type\":\"string\",\"description\":\"En anglais, accrocheur\"},\"pitchFr\":{\"type\":\"string\",\"description\":\"Pourquoi c'est intéressant, une phrase en français\"},\"rubric\":{\"type\":\"string\",\"enum\":[\"france\",\"uk\",\"world\",\"europe\",\"usa\",\"tech\",\"science\",\"environment\",\"health\",\"economy\",\"culture\",\"sport\",\"society\",\"lifestyle\"]},\"tone\":{\"type\":\"string\",\"enum\":[\"light\",\"balanced\",\"serious\"]},\"query\":{\"type\":\"string\",\"description\":\"Mots-clés de recherche pour retrouver l'actualité du sujet\"}}}}}}";
 
     public static AgentCall Compose(LearnRequest r, JsonObject? menu)
     {
         var timeless = LJ.Bool(r.Params, "timeless");
-        var system = (timeless ? TimelessIntro + TimelessRules + CourseRules : NewsIntro + NewsRules + CourseRules) + Levels.Quotes;
+        var cortex = !timeless && LJ.Obj(r.Params, "cortex") is not null;
+        var system = (timeless ? TimelessIntro + TimelessRules + CourseRules
+            : cortex ? CortexIntro + CortexRules + CourseRules + CortexNext
+            : NewsIntro + NewsRules + CourseRules) + Levels.Quotes;
         return new AgentCall(timeless ? "" : Web, system, Schema, Prompt(r, menu, timeless));
     }
 
@@ -1578,6 +1603,7 @@ internal static class LessonGenre
 
         var topic = LJ.Obj(p, "topic");
         var title = LJ.Str(topic, "title", 200);
+        var cortex = timeless ? null : LJ.Obj(p, "cortex");
         if (title.Length > 0)
         {
             sb.Append("Sujet imposé (choisi par l'utilisateur) : « ").Append(title).Append(" »");
@@ -1604,6 +1630,8 @@ internal static class LessonGenre
 
             sb.Append(timeless
                 ? ".\n"
+                : cortex is not null
+                ? ". Sujet de fond, tiré du cortex de l'utilisateur : pas besoin d'actualité.\n"
                 : ". Cherchez son dernier développement (moins de 7 jours) ; s'il n'y a rien de neuf, partez de l'article le plus récent (14 jours au plus) et dites-le dans summaryFr.\n");
         }
         else
@@ -1618,6 +1646,13 @@ internal static class LessonGenre
         }
 
         sb.Append("Voix disponibles pour le script : ").Append(string.Join(", ", Levels.Voices(p))).Append(" (voix féminines et masculines).\n");
+
+        if (cortex is not null)
+        {
+            sb.Append('\n').Append(CortexPrompt(cortex));
+            sb.Append("\nFaites une recherche approfondie sur ce nœud, lisez deux à quatre sources, et rendez la fiche du cours.");
+            return sb.ToString();
+        }
 
         if (timeless)
         {
@@ -1679,6 +1714,47 @@ internal static class LessonGenre
         return sb.ToString();
     }
 
+    /// <summary>Le noeud du cortex : carte, chemin depuis la racine, resume, profondeur, voisins deja etudies.</summary>
+    private static string CortexPrompt(JsonObject c)
+    {
+        var sb = new StringBuilder();
+        var path = LJ.Strings(c, "path", 8, 120);
+        sb.Append("Cours du cortex — carte « ").Append(LJ.Str(c, "mapTitle", 120)).Append(" »");
+        if (path.Count > 0)
+        {
+            sb.Append(", chemin : ").Append(string.Join(" › ", path));
+        }
+
+        sb.Append(".\n");
+        var summary = LJ.Str(c, "summary", 600);
+        if (summary.Length > 0)
+        {
+            sb.Append("Ce que recouvre le nœud : ").Append(summary).Append('\n');
+        }
+
+        var deepen = LJ.Str(c, "depth", 20) == "deepen";
+        sb.Append("Profondeur : ").Append(deepen ? "approfondissement (le nœud a déjà été étudié)" : "découverte").Append(".\n");
+        var previous = LJ.Str(c, "previous", 300);
+        if (deepen && previous.Length > 0)
+        {
+            sb.Append("Cours précédent sur ce nœud : ").Append(previous).Append('\n');
+        }
+
+        var children = LJ.Strings(c, "children", 12, 120);
+        if (children.Count > 0)
+        {
+            sb.Append("Sous-thèmes déjà prévus dans la carte (cours à venir, ne pas les traiter ici, ne pas les reproposer) : ").Append(string.Join(" ; ", children)).Append(".\n");
+        }
+
+        var studied = LJ.Strings(c, "studied", 16, 120);
+        if (studied.Count > 0)
+        {
+            sb.Append("Nœuds déjà étudiés dans cette carte (à ne pas refaire, mais à rappeler d'un mot si utile) : ").Append(string.Join(" ; ", studied)).Append(".\n");
+        }
+
+        return sb.ToString();
+    }
+
     public static JsonObject Sanitize(JsonObject o, LearnRequest r, JsonObject? menu, HostLog log)
     {
         var p = r.Params;
@@ -1687,6 +1763,7 @@ internal static class LessonGenre
         var voices = Levels.Voices(p);
         var timeless = LJ.Bool(p, "timeless");
         var imposed = LJ.Str(LJ.Obj(p, "topic"), "title", 200).Length > 0;
+        var cortex = timeless ? null : LJ.Obj(p, "cortex");
 
         // Sources : https, pas un site ferme a WebFetch (l'agent n'a pas pu le lire), date relevee.
         var sources = new JsonArray();
@@ -1703,7 +1780,7 @@ internal static class LessonGenre
                 }
 
                 var published = DateOnly(LJ.Str(s, "published", 40));
-                if (published is { } day && (DateTime.Now.Date - day).TotalDays > (imposed ? 14 : 7))
+                if (cortex is null && published is { } day && (DateTime.Now.Date - day).TotalDays > (imposed ? 14 : 7))
                 {
                     log.Warn($"Revizator lesson : source datee du {day:yyyy-MM-dd}, au-dela de {(imposed ? 14 : 7)} jours ({LearningAgent.Ascii(url)}).");
                 }
@@ -2017,6 +2094,7 @@ internal static class LessonGenre
             ["nextTopics"] = next,
             ["readingWords"] = LJ.Words(readingText),
             ["menuAt"] = MenuAt(menu),
+            ["cortex"] = cortex is null ? null : new JsonObject { ["map"] = LJ.Str(cortex, "map", 60), ["node"] = LJ.Str(cortex, "node", 60), ["depth"] = LJ.Str(cortex, "depth", 20) == "deepen" ? "deepen" : "intro" },
         };
     }
 
@@ -5008,6 +5086,160 @@ internal static class ProfGenre
         value = Regex.Replace(value, @"\n{3,}", "\n\n");
         value = Regex.Replace(value, @"^#{1,6}\s*", "", RegexOptions.Multiline);
         return value.Trim();
+    }
+}
+
+// ============================================================================ cortex
+
+/// <summary>
+/// Le cortex de Revizator (<c>cortex.js</c>) : des cartes des savoirs, un noeud racine et ses grands
+/// themes (histoire, philosophie, bricolage…), d'ou partent des cours d'anglais de fond. L'agent,
+/// sans outil, tient la carte propre : <c>create</c> dresse le plan d'une nouvelle carte,
+/// <c>expand</c> propose des sous-themes d'un noeud, <c>organize</c> rend la carte entiere
+/// reorganisee (doublons fusionnes, noeuds mal places deplaces, intitules harmonises, trous combles).
+/// Rien n'est enregistre : la page fusionne la reponse dans sa carte, sans jamais perdre l'etat
+/// d'un noeud (etudie, a approfondir, cours lies).
+/// </summary>
+internal static class CortexGenre
+{
+    private const int MaxNodes = 160;
+    private static readonly string[] Modes = { "create", "expand", "organize" };
+    private static readonly Regex Ref = new("^[A-Za-z0-9_-]{1,40}$", RegexOptions.CultureInvariant);
+
+    private const string System = "Tu tiens le « cortex » d'un adulte francophone qui apprend l'anglais avec Organizator : des cartes mentales de ce qu'il veut savoir. Chaque carte a un nœud racine (le domaine, ex. « Mon cortex », « Bricolage », « Informatique ») et des nœuds de plus en plus précis ; chaque nœud deviendra un cours d'anglais d'une vingtaine de minutes, préparé à partir de sources de référence. Tu rends uniquement la fiche demandée.\n\n"
+        + "Règles des nœuds\n"
+        + "- title : en français, court (2 à 6 mots), précis, sans article inutile ni ponctuation finale (« La Rome antique », « Choisir une perceuse », « Les boucles en Python »). Un nœud = un sujet qui tient dans un cours ; trop large, découpe-le en sous-nœuds.\n"
+        + "- summaryFr : une phrase, ce que le nœud recouvre et ce qu'on y apprend.\n"
+        + "- query : 3 à 8 mots-clés en anglais pour la recherche du cours.\n"
+        + "- Frères ordonnés du fondamental à l'avancé (ou dans l'ordre chronologique, pour l'histoire) : l'ordre de la liste est l'ordre affiché.\n"
+        + "- Pas de doublon, pas de nœud vide de sens (« Divers », « Autres »), pas plus de 8 enfants par nœud : au-delà, regroupe sous un nœud intermédiaire.\n"
+        + "- ref : l'identifiant d'un nœud existant, tel que fourni ; pour un nouveau nœud, new1, new2… parent : la ref du parent (nouveau ou existant).\n\n"
+        + "Selon le mode\n"
+        + "- create : la carte n'a que sa racine. Dresse un plan de départ : 5 à 8 grands thèmes sous la racine, puis 2 à 4 sous-thèmes pour chacun, progressifs. Tiens compte de la description et des centres d'intérêt. N'inclus pas la racine.\n"
+        + "- expand : propose 3 à 5 sous-thèmes du nœud indiqué (parent = sa ref), qui ne répètent ni ses enfants existants ni d'autres nœuds de la carte. Rends seulement les nouveaux nœuds.\n"
+        + "- organize : rends la carte entière, chaque nœud existant une fois (sa ref), racine comprise (parent vide). Corrige ce qui cloche : doublons et quasi-doublons fusionnés (merged : from = le nœud absorbé, into = celui qui reste), nœuds mal placés déplacés sous le bon parent, intitulés harmonisés (garde le sens et les mots de l'utilisateur, corrige l'orthographe), nœud trop large découpé, groupe trop nombreux regroupé. Tu peux ajouter au plus 4 nouveaux nœuds pour combler un vide évident ou créer un regroupement. Ne change pas l'intitulé de la racine. Ne supprime rien sans le fusionner.\n\n"
+        + "noteFr : une ou deux phrases pour l'utilisateur, en français, qui disent ce que tu as fait.\n\nRéponds uniquement par la fiche demandée.\n";
+
+    private const string Schema = "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"nodes\",\"merged\",\"noteFr\"],\"properties\":{\"nodes\":{\"type\":\"array\",\"description\":\"Noeuds, parents avant enfants, freres dans l'ordre d'affichage\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"ref\",\"parent\",\"title\",\"summaryFr\",\"query\"],\"properties\":{\"ref\":{\"type\":\"string\",\"description\":\"Identifiant existant, ou new1, new2... pour un nouveau noeud\"},\"parent\":{\"type\":\"string\",\"description\":\"ref du parent ; vide pour la racine\"},\"title\":{\"type\":\"string\",\"description\":\"En francais, 2 a 6 mots\"},\"summaryFr\":{\"type\":\"string\",\"description\":\"Une phrase\"},\"query\":{\"type\":\"string\",\"description\":\"Mots-cles de recherche en anglais\"}}}},\"merged\":{\"type\":\"array\",\"description\":\"organize : noeuds fusionnes\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"from\",\"into\"],\"properties\":{\"from\":{\"type\":\"string\"},\"into\":{\"type\":\"string\"}}}},\"noteFr\":{\"type\":\"string\"}}}";
+
+    public static AgentCall Compose(LearnRequest r)
+    {
+        var p = r.Params;
+        var mode = LJ.Pick(LJ.Str(p, "mode", 20), Modes, "organize");
+        var map = LJ.Obj(p, "map");
+        var sb = new StringBuilder();
+        if (r.Context.Length > 0)
+        {
+            sb.Append(r.Context.Trim()).Append("\n\n");
+        }
+
+        sb.Append("Mode : ").Append(mode).Append(".\n");
+        sb.Append("Carte : « ").Append(LJ.Str(map, "title", 120)).Append(" »");
+        var description = LJ.Str(map, "description", 600);
+        if (description.Length > 0)
+        {
+            sb.Append(" — ce que l'utilisateur veut apprendre : ").Append(description);
+        }
+
+        sb.Append(".\n");
+        var wish = LJ.Str(p, "request", 400);
+        if (wish.Length > 0)
+        {
+            sb.Append("Demande de l'utilisateur : ").Append(wish).Append('\n');
+        }
+
+        var node = LJ.Str(p, "node", 40);
+        if (mode == "expand")
+        {
+            sb.Append("Nœud à développer : ").Append(node).Append(".\n");
+        }
+
+        // La carte, en arbre indente : ref, intitule, etat, origine.
+        var nodes = LJ.Objects(p, "nodes").Take(MaxNodes).ToList();
+        var byParent = nodes.GroupBy(n => LJ.Str(n, "parent", 40)).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+        var ids = new HashSet<string>(nodes.Select(n => LJ.Str(n, "id", 40)), StringComparer.Ordinal);
+        sb.Append("\nCarte actuelle (ref | intitulé | état | origine) :\n");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var root in nodes.Where(n => !ids.Contains(LJ.Str(n, "parent", 40))))
+        {
+            Tree(sb, root, byParent, seen, 0);
+        }
+
+        sb.Append(mode switch
+        {
+            "create" => "\nDressez le plan de départ de cette carte.",
+            "expand" => "\nProposez les sous-thèmes de ce nœud.",
+            _ => "\nRendez la carte entière, réorganisée et propre.",
+        });
+        return new AgentCall("", System, Schema, sb.ToString());
+    }
+
+    private static void Tree(StringBuilder sb, JsonObject n, Dictionary<string, List<JsonObject>> byParent, HashSet<string> seen, int depth)
+    {
+        var id = LJ.Str(n, "id", 40);
+        if (depth > 8 || !seen.Add(id))
+        {
+            return;
+        }
+
+        sb.Append(new string(' ', depth * 2)).Append("- ").Append(id).Append(" | ").Append(LJ.Str(n, "title", 100))
+          .Append(" | ").Append(LJ.Str(n, "status", 20)).Append(" | ").Append(LJ.Str(n, "origin", 20)).Append('\n');
+        if (byParent.TryGetValue(id, out var children))
+        {
+            foreach (var c in children)
+            {
+                Tree(sb, c, byParent, seen, depth + 1);
+            }
+        }
+    }
+
+    public static JsonObject Sanitize(JsonObject o, LearnRequest r)
+    {
+        var nodes = new JsonArray();
+        var refs = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var n in LJ.Objects(o, "nodes"))
+        {
+            var id = LJ.Str(n, "ref", 40);
+            var title = LJ.Str(n, "title", 80).TrimEnd('.', ';', ':');
+            var parent = LJ.Str(n, "parent", 40);
+            if (!Ref.IsMatch(id) || title.Length == 0 || (parent.Length > 0 && !Ref.IsMatch(parent)) || !refs.Add(id) || nodes.Count >= MaxNodes)
+            {
+                continue;
+            }
+
+            nodes.Add(new JsonObject
+            {
+                ["ref"] = id,
+                ["parent"] = parent,
+                ["title"] = title,
+                ["summaryFr"] = LJ.Str(n, "summaryFr", 300),
+                ["query"] = LJ.Str(n, "query", 160),
+            });
+        }
+
+        var merged = new JsonArray();
+        foreach (var m in LJ.Objects(o, "merged"))
+        {
+            var from = LJ.Str(m, "from", 40);
+            var into = LJ.Str(m, "into", 40);
+            if (Ref.IsMatch(from) && Ref.IsMatch(into) && from != into && merged.Count < 30)
+            {
+                merged.Add(new JsonObject { ["from"] = from, ["into"] = into });
+            }
+        }
+
+        if (nodes.Count == 0 && merged.Count == 0)
+        {
+            throw new InvalidOperationException("L’agent n’a rendu aucun nœud.");
+        }
+
+        return new JsonObject
+        {
+            ["mode"] = LJ.Pick(LJ.Str(r.Params, "mode", 20), Modes, "organize"),
+            ["nodes"] = nodes,
+            ["merged"] = merged,
+            ["noteFr"] = LJ.Str(o, "noteFr", 400),
+        };
     }
 }
 

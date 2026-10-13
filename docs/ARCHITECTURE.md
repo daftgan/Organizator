@@ -697,9 +697,12 @@ L'espace « réviseur » d'Organizator : l'anglais d'abord (matière `en`). Un n
 | `items.js` | rendu et correction des 15 genres d'items (`R.items`) |
 | `exercise.js` | vue **Exercices**, carte d'accueil « Exercice rapide » |
 | `lesson.js` | carte d'accueil « Le cours d'aujourd'hui », « Cours précédents », vue **Séance** |
+| `cortex.js` | vue **Cortex** (cartes mentales des savoirs, d'où partent des cours de fond), carte d'accueil « Le cortex », source « Mon cortex » du cours du jour |
 | `test.js`, `progress.js` | vues **Bilans** et **Progrès**, carte d'accueil des bilans, estimateurs |
 | `tutor.js` | vue **Tuteur**, carte d'accueil « Parler avec le tuteur » |
 | `prof.js` | le professeur (Oliver) : bouton et panneau flottants sur toutes les vues, info-bulle de la sélection, section « Professeur » des Réglages |
+
+- **Le cortex** (`cortex.js`, `cortex.css`, préfixe `.rzc-`) : des cartes mentales (`R.data.cortex.maps`), une racine et des nœuds de plus en plus précis, dessinées en arbre radial (nœuds HTML positionnés au-dessus d'un SVG de liens, sous-arbres repliables, zoom). États d'un nœud : `locked` (proposé sous un nœud pas encore étudié), `open`, `studied`, `deepen`. Deux modes par carte : `propose` (l'agent propose, les nœuds se débloquent quand leur parent est étudié) et `manual` (rien n'est verrouillé). Agent `R.gen('cortex', { mode: create|expand|organize, map, nodes, node })` (genre silencieux, `genModel`/`genEffort`) → `{ nodes: [{ ref, parent, title, summaryFr, query }], merged, noteFr }` (`CortexGenre`, sans outil) ; la page fusionne la réponse sans perdre l'état ni les cours d'un nœud. Réorganisation automatique (`organize`) 2,5 s après une modification à la main, si la carte l'a activée. Cours : la carte du jour a une source « Actualité du jour » / « Mon cortex » ; un cours du cortex passe `params.cortex` (`map`, `node`, `path`, `summary`, `depth` intro|deepen, `children`, `studied`, `previous`) : l'hôte saute le menu RSS, prend les consignes `CortexIntro`/`CortexRules` (recherche de fond, 3 WebSearch et 4 WebFetch au plus, sources de référence) et renvoie `cortex` dans la fiche ; à la fin de la séance, le nœud passe à `studied` (`deepen` si le cours a été jugé difficile ou réussi à moins de 60 %), ses enfants s'ouvrent et, en mode `propose`, les trois sujets suivants du cours deviennent des sous-nœuds.
 
 ### Le noyau
 
