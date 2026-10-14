@@ -146,8 +146,8 @@
 
   var KINDS = ['word', 'collocation', 'phrase', 'false_friend', 'grammar', 'pronunciation', 'error'];
   var KIND_LABELS = { word: 'Mot', collocation: 'Collocation', phrase: 'Tournure', false_friend: 'Faux ami', grammar: 'Grammaire', pronunciation: 'Prononciation', error: 'Erreur' };
-  var ORIGINS = ['lesson', 'exercise', 'grade', 'tutor', 'test', 'manual'];
-  var ORIGIN_LABELS = { lesson: 'Cours', exercise: 'Exercice', grade: 'Correction', tutor: 'Tuteur', test: 'Bilan', manual: 'Ajout manuel' };
+  var ORIGINS = ['lesson', 'exercise', 'grade', 'tutor', 'pen', 'test', 'manual'];
+  var ORIGIN_LABELS = { lesson: 'Cours', exercise: 'Exercice', grade: 'Correction', tutor: 'Tuteur', pen: 'Correspondance', test: 'Bilan', manual: 'Ajout manuel' };
   var STATE_LABELS = { 'new': 'Nouvelle', learning: 'En apprentissage', review: 'En révision', relearning: 'À réapprendre' };
 
   function list() { return R.data.cards; }

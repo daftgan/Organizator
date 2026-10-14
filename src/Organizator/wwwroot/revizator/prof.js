@@ -855,6 +855,20 @@
 
   /* ══ Actions ══════════════════════════════════════════════════════════ */
 
+  /* Pour les autres modules : demander à Oliver d'expliquer quelque chose (une correction de la correspondance…).
+     question : ce que dit l'apprenant ; passage : le texte dont on parle, joint comme une sélection. */
+  R.prof = {
+    available: function () { return enabled(); },
+    ask: function (question, passage) {
+      if (!enabled()) return false;
+      if (R.prefs.profFresh !== false && chat().length) { cancel(); stopSpeaking(); store().chat = []; P.error = ''; R.save(); }
+      P.selection = String(passage || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+      open(false);
+      ask(question, '');
+      return true;
+    }
+  };
+
   R.act('rz-prof-open', function () { open(); });
   R.act('rz-prof-close', function () { close(); });
   R.act('rz-prof-send', function () { send(); });

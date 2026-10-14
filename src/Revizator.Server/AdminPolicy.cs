@@ -7,7 +7,7 @@ namespace Revizator.Server;
 /// <summary>
 /// Reglages de l'administrateur pour tout le serveur, dans <c>admin.json</c> du dossier de donnees : les
 /// modeles et efforts de Revizator (cours, exercices et bilans, correction, tuteur, discussion au long cours,
-/// correcteur des cartes, professeur, cortex).
+/// correcteur des cartes, professeur, cortex, correspondance).
 /// Deux modes :
 /// <list type="bullet">
 /// <item><description><c>imposed: false</c> (par defaut) : ce sont les reglages de depart d'un nouveau compte ;
@@ -37,6 +37,8 @@ public sealed class AdminPolicy
         ["profEffort"] = "low",
         ["cortexModel"] = "sonnet",
         ["cortexEffort"] = "medium",
+        ["penModel"] = "sonnet",
+        ["penEffort"] = "low",
     };
 
     /// <summary>Genre de generation -> (champ du modele, champ de l'effort), comme <c>GEN_MODEL</c> de la page.</summary>
@@ -52,6 +54,7 @@ public sealed class AdminPolicy
         ["cardfix"] = ("cardModel", "cardEffort"),
         ["prof"] = ("profModel", "profEffort"),
         ["cortex"] = ("cortexModel", "cortexEffort"),
+        ["pen"] = ("penModel", "penEffort"),
     };
 
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };

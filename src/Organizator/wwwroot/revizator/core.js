@@ -117,21 +117,22 @@
     tutorModel: 'haiku', tutorEffort: '', cardModel: 'haiku', cardEffort: '', longModel: 'sonnet', longEffort: 'low', engine: 'auto', voiceUs: 'af_heart', voiceGb: 'bf_emma', speed: 1, retention: 0.9,
     whisperModel: 'small', tutorLive: true, tutorSensitivity: 40, tutorBargeIn: 'words', tutorAsr: 'whisper', tutorWhisper: 'small', tutorPause: 'normal',
     profEnabled: true, profLang: 'auto', profLevel: 'auto', profVoice: true, profModel: 'sonnet', profEffort: 'low',
-    cortexModel: 'sonnet', cortexEffort: 'medium',
+    cortexModel: 'sonnet', cortexEffort: 'medium', penModel: 'sonnet', penEffort: 'low',
     profTone: 'warm', profLength: 'short', profChat: 'some', profAddress: 'vous', profVoices: 'two', profVoiceEn: '', profFresh: true
   };
   var DEFAULT_PROFILE = { onboarded: false, goal: '', interests: '', startLevel: 'B1', weeklyGoal: 4, defaultMinutes: 20, explain: 'auto' };
 
   /* Délais d'attente de l'UI par genre (l'hôte abandonne avant, spec §4.2). */
-  var GEN_WAIT = { lesson: 450000, cortex: 170000, exercise: 180000, toeic: 600000, sw: 180000, grade: 600000, tutor: 90000, cardcheck: 70000, cardfix: 160000, prof: 120000 };
+  var GEN_WAIT = { lesson: 450000, cortex: 170000, exercise: 180000, toeic: 600000, sw: 180000, grade: 600000, tutor: 90000, cardcheck: 70000, cardfix: 160000, prof: 120000, pen: 180000 };
   var GEN_MODEL = {
     lesson: ['lessonModel', 'lessonEffort'], exercise: ['genModel', 'genEffort'], toeic: ['genModel', 'genEffort'],
     sw: ['genModel', 'genEffort'], grade: ['gradeModel', 'gradeEffort'], tutor: ['tutorModel', 'tutorEffort'],
-    cardcheck: ['cardModel', 'cardEffort'], cardfix: ['cardModel', 'cardEffort'], prof: ['profModel', 'profEffort'], cortex: ['cortexModel', 'cortexEffort']
+    cardcheck: ['cardModel', 'cardEffort'], cardfix: ['cardModel', 'cardEffort'], prof: ['profModel', 'profEffort'], cortex: ['cortexModel', 'cortexEffort'],
+    pen: ['penModel', 'penEffort']
   };
   /* Générations qui se font sans bruit : pas de ligne « en préparation » dans la barre, pas de rendu
      à leur départ ni à leur fin (la vue qui les attend se met à jour elle-même), pas de document. */
-  var QUIET_KINDS = { grade: 1, tutor: 1, cardcheck: 1, cardfix: 1, prof: 1, cortex: 1 };
+  var QUIET_KINDS = { grade: 1, tutor: 1, cardcheck: 1, cardfix: 1, prof: 1, cortex: 1, pen: 1 };
   /* Générations qui jugent l'apprenant : leur contexte ne dit pas son niveau supposé (R.context). */
   var BLIND_KINDS = { grade: 1, cardcheck: 1 };
   /* Bilans de placement : contexte neutre (ni métier, ni objectif, ni centres d'intérêt, ni cours récents,
@@ -1954,6 +1955,7 @@
     { key: 'gradeModel', effort: 'gradeEffort', label: 'Correction', help: 'Corrige l’écrit et l’oral et note les bilans : sonnet avec un effort moyen. C’est là que réfléchir paie : une note juste plutôt qu’une note rapide.' },
     { key: 'tutorModel', effort: 'tutorEffort', label: 'Tuteur', help: 'Répond pendant les scénarios du tuteur : un modèle rapide (haiku) garde l’échange fluide. Chaque cran d’effort retarde un peu la première phrase.' },
     { key: 'longModel', effort: 'longEffort', label: 'Discussion au long cours', help: 'Sam, le copain du tuteur : sonnet avec un effort bas, pour une conversation plus riche (anecdotes, avis, rebonds, recherche web). Un effort moyen réfléchit davantage, mais il répond plus lentement ; haiku répond plus vite, en moins fin.' },
+    { key: 'penModel', effort: 'penEffort', label: 'Correspondance', help: 'Vos correspondants de la vue Messages : sonnet avec un effort bas, pour des personnages qui ont de la conversation, des avis et de l’humour, et qui cherchent sur le web quand il faut. Une réponse en 10 à 40 secondes ; haiku répond plus vite, en moins fin.' },
     { key: 'cardModel', effort: 'cardEffort', label: 'Correcteur des cartes', help: 'Relit une réponse refusée pendant les révisions et réécrit les cartes floues : un modèle rapide suffit, sans effort particulier.' },
     { key: 'profModel', effort: 'profEffort', label: 'Professeur', help: 'Explique à la demande, de plusieurs manières, et propose des exercices : sonnet avec un effort bas, une réponse en 10 à 20 secondes.' }
   ];

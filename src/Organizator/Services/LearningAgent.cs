@@ -13,7 +13,8 @@ namespace Organizator.Services;
 /// (<c>lesson</c>), series d'exercices (<c>exercise</c>), modules du bilan express (<c>toeic</c>),
 /// bilan oral et ecrit (<c>sw</c>), correction d'une production (<c>grade</c>), tour du tuteur
 /// (<c>tutor</c>), et le correcteur des cartes : une reponse refusee relue (<c>cardcheck</c>), des
-/// cartes floues reecrites (<c>cardfix</c>) ; et le professeur, une explication a la demande (<c>prof</c>).
+/// cartes floues reecrites (<c>cardfix</c>) ; le professeur, une explication a la demande (<c>prof</c>) ;
+/// et la correspondance, une conversation ecrite au long cours avec un personnage (<c>pen</c>).
 ///
 /// Chaque appel est un <c>claude -p</c> dont le prompt est ecrit sur l'entree standard (en argument,
 /// le cours depasserait la limite de <c>CreateProcess</c>), avec <c>--no-session-persistence</c> (rien
@@ -64,6 +65,7 @@ public sealed class LearningAgent
         ["cardfix"] = new("cardfix", "Cartes clarifiées", "haiku", "", TimeSpan.FromSeconds(120), false),
         ["prof"] = new("prof", "Professeur", "sonnet", "low", TimeSpan.FromSeconds(90), false),
         ["cortex"] = new("cortex", "Cortex", "sonnet", "medium", TimeSpan.FromSeconds(150), false),
+        ["pen"] = new("pen", "Correspondance", "sonnet", "low", TimeSpan.FromSeconds(150), false),
     };
 
     // Vrai si un flux stream-json a rendu un resultat sans fiche structuree : on repasse alors en json.
@@ -518,6 +520,7 @@ public sealed class LearningAgent
         "cardfix" => CardGenre.ComposeFix(r),
         "prof" => ProfGenre.Compose(r),
         "cortex" => CortexGenre.Compose(r),
+        "pen" => PenGenre.Compose(r),
         _ => throw new InvalidOperationException("Genre inconnu : " + r.Kind),
     };
 
@@ -533,6 +536,7 @@ public sealed class LearningAgent
         "tutor" => TutorGenre.Sanitize(output, r),
         "prof" => ProfGenre.Sanitize(output, r),
         "cortex" => CortexGenre.Sanitize(output, r),
+        "pen" => PenGenre.Sanitize(output, r),
         _ => throw new InvalidOperationException("Genre inconnu : " + r.Kind),
     };
 
@@ -5702,6 +5706,259 @@ internal static class CortexGenre
             ["merged"] = merged,
             ["noteFr"] = LJ.Str(o, "noteFr", 400),
         };
+    }
+}
+
+// ============================================================================ correspondance
+
+/// <summary>
+/// La correspondance de Revizator (<c>pen.js</c>) : une conversation ecrite au long cours, comme par
+/// messagerie, avec un personnage (archetype choisi par l'apprenant ou decrit par lui) qui a sa vie, ses
+/// gouts et ses opinions. Elle sert a pratiquer l'ecrit de facon informelle : le personnage converse
+/// vraiment (avis, histoires, sujets nouveaux, recherche web quand il faut decrire ou verifier), et les
+/// corrections du dernier message de l'apprenant vont a part (<c>notes</c>, affichees sous son message),
+/// au degre choisi. Une memoire (<c>memory</c>), reecrite a chaque reponse et renvoyee par la page,
+/// porte ce qui sort de l'historique : la conversation peut durer des semaines. Rien n'est enregistre
+/// par l'hote : la page garde la conversation dans le document <c>pen/&lt;id&gt;</c>.
+/// </summary>
+internal static class PenGenre
+{
+    /// <summary>Messages repris a chaque reponse ; le reste passe par la memoire.</summary>
+    internal const int TurnHistory = 30;
+
+    private const int MemoryMax = 3000;
+    private static readonly string[] Modes = { "open", "reply", "topic" };
+    private static readonly string[] Fixes = { "light", "normal", "thorough" };
+    private static readonly string[] Lengths = { "short", "normal", "long" };
+    private static readonly string[] NoteKinds = { "error", "style" };
+
+    private const string Stage = """
+        Tu corresponds par écrit, en anglais, avec un adulte francophone qui apprend l'anglais : comme par messagerie (WhatsApp, SMS), sur la durée — la conversation peut durer des semaines et passer par tous les sujets. Il s'en sert pour pratiquer son écrit de façon informelle. Tu rends uniquement la fiche demandée.
+
+        Qui tu es
+        - Le personnage décrit plus bas, avec sa vie, ses goûts, ses habitudes et ses opinions. Reste ce personnage d'un message à l'autre, cohérent avec ta mémoire (ce que tu as déjà raconté de toi). Tu n'es ni un professeur ni un assistant : un correspondant, un ami par écrit.
+        - Si l'apprenant te demande sincèrement si tu es une IA, dis-lui franchement que oui (un personnage joué par une IA pour l'aider à pratiquer), puis reprends la conversation avec naturel.
+
+        L'art de la conversation
+        - Réagis vraiment à ce qu'il écrit : creuse un détail qui compte pour lui, rebondis, fais des liens avec ce qu'il t'a dit avant (mémoire).
+        - Tu as des opinions et tu les donnes franchement, argumentées, sans langue de bois : tu peux ne pas être d'accord, le contredire poliment, défendre ton point de vue, et changer d'avis devant un bon argument. Sur un sujet politique très clivant, ton avis reste personnel et nuancé, et tu respectes le sien.
+        - Raconte : ta journée, des anecdotes, des souvenirs, ce que tu as vu, lu ou goûté — inventés mais cohérents avec ton personnage et ta mémoire.
+        - Relance sans interroger : pas une question à chaque message, jamais plusieurs à la suite ; tantôt une question ouverte, tantôt un avis tranché, une histoire ou une idée qui donne envie de répondre.
+        - Quand un sujet s'épuise, lance-en un autre avec naturel : actualité, culture, science, tech, voyages, cuisine, sport, souvenirs, idées, dilemmes, « would you rather »… en tenant compte de ses centres d'intérêt et sans revenir sur un sujet déjà épuisé.
+        - Décris les choses concrètement et précisément (un lieu, un plat, un film, un objet, un phénomène) : c'est en lisant des descriptions précises qu'il apprend du vocabulaire.
+        - S'il écrit en français, cherche ses mots ou demande comment dire quelque chose (« how do you say… », « comment on dit… »), aide-le simplement dans la conversation (le mot, l'expression, un exemple), puis continue.
+
+        Tes messages (messages)
+        - Chaque élément est une bulle de messagerie, dans l'ordre d'envoi. Un anglais naturel et authentique, au niveau de l'apprenant ou un peu au-dessus pour qu'il apprenne : expressions idiomatiques courantes bienvenues, mot rare seulement s'il s'explique par le contexte.
+        - Ni titre, ni markdown, ni liste à puces (sauf si c'est vraiment naturel), ni adresse web. Émoticônes seulement si ton personnage en met, et avec mesure.
+        """;
+
+    private const string Notes = """
+        Les corrections (notes)
+        - Elles portent sur son DERNIER message seulement (donné à part, à la fin) et s'affichent discrètement sous ce message, comme des annotations dans la marge : ne les répète pas dans messages.
+        - said : l'extrait exact de son message, copié tel quel, le plus court possible mais compréhensible ; better : le même extrait bien écrit ; kind : « error » (faute : grammaire, vocabulaire, orthographe, faux ami, calque du français) ou « style » (correct mais peu naturel : une tournure plus idiomatique, plus précise ou plus fluide) ; why : l'explication en 25 mots au plus, dans la langue d'aide indiquée ; category : dans la taxonomie fournie.
+        - Le registre est celui de la messagerie : ne corrige ni l'absence de majuscule en début de message, ni les abréviations et contractions courantes (« gonna », « btw »).
+        - Ne corrige jamais ce qui est juste. Un message sans faute n'a pas de note : c'est fréquent, et c'est bien.
+        - De temps en temps (une fois tous les quatre ou cinq messages au plus), tu peux aussi, en personnage, revenir sur une tournure dans la conversation — une expression qui t'amuse, un faux ami savoureux, une façon plus naturelle de le dire (« haha, quick one: we'd say “I agree”, not “I'm agree” ») —, en une phrase, puis la conversation reprend.
+        """;
+
+    private const string MemoryRules = """
+        La mémoire (memory) et le reste
+        - memory : tes notes pour la suite de la conversation, en anglais, en style télégraphique, 1 500 caractères au plus. Reprends la mémoire reçue et mets-la à jour : ce que tu sais de lui (vie, travail, goûts, opinions, projets, proches), ce que tu lui as raconté de toi (pour rester cohérent), les sujets déjà abordés et ceux à reprendre, vos blagues, ses erreurs qui reviennent. Quand elle déborde, oublie le moins important.
+        - topic : le sujet du moment en 2 à 6 mots, en anglais.
+        - ideas : deux ou trois débuts de réponse qu'il pourrait écrire, en anglais, à sa place, courts (3 à 10 mots), qui ouvrent des directions différentes (raconter, donner son avis, te contredire, changer de sujet) ; ils finissent souvent par « … ».
+        - sources : les pages web que tu as lues pour ta réponse (title, url) ; vide sans recherche.
+        """;
+
+    private static readonly string Schema = ExerciseGenre.Compact("""
+        {"type":"object","additionalProperties":false,"required":["messages","notes","memory","topic","ideas","sources"],"properties":{
+        "messages":{"type":"array","items":{"type":"string"}},
+        "notes":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["said","better","kind","why","category"],"properties":{"said":{"type":"string"},"better":{"type":"string"},"kind":{"type":"string","enum":["error","style"]},"why":{"type":"string"},"category":{"type":"string","enum":@TAX@}}}},
+        "memory":{"type":"string"},"topic":{"type":"string"},
+        "ideas":{"type":"array","items":{"type":"string"}},
+        "sources":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","url"],"properties":{"title":{"type":"string"},"url":{"type":"string"}}}}}}
+        """.Replace("@TAX@", Taxonomy.Enum));
+
+    private static string FixRule(string fix) => fix switch
+    {
+        "light" => "Degré de correction : léger — seulement les fautes qui gênent la compréhension ou qui reviennent ; au plus deux notes, jamais de style.",
+        "thorough" => "Degré de correction : exigeant — toutes les fautes (orthographe et ponctuation comprises) et les améliorations de style utiles ; au plus huit notes. Tu reviens volontiers sur une tournure dans la conversation.",
+        _ => "Degré de correction : normal — les vraies fautes et les tournures nettement peu naturelles (calques du français) ; au plus quatre notes.",
+    };
+
+    private static string LengthRule(string length) => length switch
+    {
+        "short" => "Longueur : comme des SMS — une à trois bulles courtes, une ou deux phrases chacune.",
+        "long" => "Longueur : comme une lettre ou un long message — une ou deux bulles développées, 120 à 250 mots en tout, en paragraphes.",
+        _ => "Longueur : une à trois bulles, 120 mots au plus en tout.",
+    };
+
+    private static string WebRule(bool web, DateTime now)
+        => (web
+            ? "Le web\n- Tu peux chercher sur le web (WebSearch, WebFetch) quand cela sert la conversation : l'actualité, un fait précis ou récent, décrire exactement quelque chose (un lieu, une œuvre, un phénomène), vérifier avant d'affirmer, ou quand il te le demande. Au plus deux recherches et deux pages par réponse ; une page inaccessible se laisse de côté.\n- Raconte ce que tu as appris avec tes mots, en personnage (« I just read that… »), et mets les pages lues dans sources."
+            : "Le web\n- Pas de recherche web pour cette conversation : sur l'actualité récente, reste prudent, tu peux ne pas être au courant.")
+           + "\n- Nous sommes le " + now.ToString("dddd d MMMM yyyy", CultureInfo.GetCultureInfo("fr-FR")) + ".";
+
+    private static List<(string Role, string Text)> History(JsonObject? p)
+        => LJ.Objects(p, "history")
+            .Select(h => (Role: LJ.Pick(LJ.Str(h, "role", 10), new[] { "me", "them" }, "me"), Text: LJ.Str(h, "text", 2000)))
+            .Where(h => h.Text.Length > 0)
+            .TakeLast(TurnHistory)
+            .ToList();
+
+    public static AgentCall Compose(LearnRequest r)
+    {
+        var p = r.Params;
+        var persona = LJ.Obj(p, "persona");
+        var name = LJ.Str(persona, "name", 40);
+        if (name.Length == 0)
+        {
+            name = "Alex";
+        }
+
+        var about = LJ.Str(persona, "about", 2500);
+        var mode = LJ.Pick(LJ.Str(p, "mode", 10), Modes, "reply");
+        var fix = LJ.Pick(LJ.Str(p, "fix", 10), Fixes, "normal");
+        var length = LJ.Pick(LJ.Str(p, "length", 10), Lengths, "normal");
+        var web = LJ.Bool(p, "web");
+        var level = Levels.Normalize(LJ.Str(p, "level", 10));
+        var help = LJ.Pick(LJ.Str(p, "lang", 4), new[] { "fr", "en" }, "fr");
+        var message = LJ.Str(p, "message", 4000);
+        if (mode == "reply" && message.Length == 0)
+        {
+            throw new InvalidOperationException("Message vide : rien à quoi répondre.");
+        }
+
+        var system = string.Join("\n\n",
+            Stage,
+            "Ton personnage\nTu t'appelles " + name + "." + (about.Length > 0 ? " " + about : ""),
+            Notes,
+            WebRule(web, DateTime.Now),
+            MemoryRules) + Levels.Quotes;
+
+        var sb = new StringBuilder();
+        sb.Append(Levels.Line(level, "Niveau estimé de l'apprenant à l'écrit")).Append('\n');
+        sb.Append("Langue d'aide (why, aide sur un mot) : ").Append(help == "fr" ? "français, en vouvoyant" : "anglais simple").Append(".\n");
+        sb.Append(FixRule(fix)).Append('\n');
+        sb.Append(LengthRule(length)).Append('\n');
+        if (r.Context.Length > 0)
+        {
+            sb.Append("\nCe que l'application sait de l'apprenant :\n").Append(r.Context.Trim()).Append('\n');
+        }
+
+        sb.Append("\nTaxonomie (notes.category) : ").Append(Taxonomy.Listing()).Append(".\n");
+
+        var memory = LJ.Str(p, "memory", MemoryMax);
+        sb.Append("\nTa mémoire :\n").Append(memory.Length > 0 ? memory : "(vide : c'est le début de votre correspondance)").Append('\n');
+
+        var history = History(p);
+        if (history.Count > 0)
+        {
+            sb.Append("\nLa conversation (derniers messages) :\n");
+            foreach (var (role, text) in history)
+            {
+                sb.Append(role == "them" ? name + " : " : "Apprenant : ").Append(text.Replace("\r", "").Replace("\n", " / ")).Append('\n');
+            }
+        }
+
+        switch (mode)
+        {
+            case "open":
+                sb.Append("\nVous ne vous êtes encore jamais écrit : ouvre la correspondance. Présente-toi avec naturel, comme un nouveau correspondant (qui tu es, où tu vis, un détail vivant de ta vie du moment), et lance un premier sujet qui donne envie de répondre. notes vide.");
+                break;
+            case "topic":
+                var theme = LJ.Str(p, "theme", 200);
+                sb.Append("\nL'apprenant te demande de lancer un nouveau sujet")
+                  .Append(theme.Length > 0 ? " (thème souhaité : " + theme + ")" : ", au choix")
+                  .Append(" : enchaîne avec naturel (« Totally random, but… ») sur un sujet neuf, qui donne envie d'écrire et sur lequel tu as un avis ou une histoire. notes vide.");
+                break;
+            default:
+                sb.Append("\nSon dernier message (à corriger dans notes) :\n« ").Append(message.Replace("\r", "")).Append(" »\n\nRédigez votre réponse.");
+                break;
+        }
+
+        return new AgentCall(web ? "WebSearch,WebFetch" : "", system, Schema, sb.ToString());
+    }
+
+    public static JsonObject Sanitize(JsonObject o, LearnRequest r)
+    {
+        var p = r.Params;
+        var mode = LJ.Pick(LJ.Str(p, "mode", 10), Modes, "reply");
+        var fix = LJ.Pick(LJ.Str(p, "fix", 10), Fixes, "normal");
+        var length = LJ.Pick(LJ.Str(p, "length", 10), Lengths, "normal");
+        var message = LJ.Str(p, "message", 4000);
+        var maxBubble = length == "long" ? 3000 : 1500;
+
+        var messages = LJ.Strings(o, "messages", 4, maxBubble).Select(Written).Where(m => m.Length > 0).ToList();
+        if (messages.Count == 0)
+        {
+            throw new InvalidOperationException("Votre correspondant n’a rien répondu.");
+        }
+
+        // Une note n'est gardee que si son extrait figure bien dans le dernier message de l'apprenant.
+        var notes = new JsonArray();
+        var max = fix switch { "light" => 2, "thorough" => 8, _ => 4 };
+        var key = LJ.Key(message);
+        if (mode == "reply")
+        {
+            foreach (var n in LJ.Objects(o, "notes"))
+            {
+                var said = LJ.Str(n, "said", 400);
+                var better = LJ.Str(n, "better", 400);
+                var kind = LJ.Pick(LJ.Str(n, "kind", 10), NoteKinds, "error");
+                if (said.Length == 0 || better.Length == 0 || LJ.Key(said) == LJ.Key(better)
+                    || !key.Contains(LJ.Key(said), StringComparison.Ordinal) || (fix == "light" && kind == "style"))
+                {
+                    continue;
+                }
+
+                if (notes.Count >= max)
+                {
+                    break;
+                }
+
+                notes.Add(new JsonObject
+                {
+                    ["said"] = said,
+                    ["better"] = better,
+                    ["kind"] = kind,
+                    ["why"] = LJ.Str(n, "why", 400),
+                    ["category"] = Taxonomy.Normalize(LJ.Str(n, "category", 40)),
+                });
+            }
+        }
+
+        var sources = new JsonArray();
+        foreach (var s in LJ.Objects(o, "sources"))
+        {
+            var url = LJ.Https(LJ.Str(s, "url", 2000));
+            if (url.Length > 0 && sources.Count < 4 && !sources.Any(x => LJ.Str(x, "url", 2000) == url))
+            {
+                var title = LJ.Str(s, "title", 160);
+                sources.Add(new JsonObject { ["title"] = title.Length > 0 ? title : new Uri(url).Host, ["url"] = url });
+            }
+        }
+
+        var memory = LJ.Str(o, "memory", MemoryMax);
+        return new JsonObject
+        {
+            ["messages"] = LJ.Array(messages),
+            ["notes"] = notes,
+            ["memory"] = memory.Length > 0 ? memory : LJ.Str(p, "memory", MemoryMax),
+            ["topic"] = LJ.Str(o, "topic", 80),
+            ["ideas"] = LJ.Array(LJ.Strings(o, "ideas", 3, 120)),
+            ["sources"] = sources,
+        };
+    }
+
+    /// <summary>Une bulle : retours a la ligne gardes (paragraphes), sans titre markdown ni gras appuye.</summary>
+    private static string Written(string text)
+    {
+        var value = Regex.Replace(text.Replace("\r", ""), @"[ \t]+\n", "\n");
+        value = Regex.Replace(value, @"\n{3,}", "\n\n");
+        value = Regex.Replace(value, @"^#{1,6}\s*", "", RegexOptions.Multiline);
+        value = value.Replace("**", "");
+        return value.Trim();
     }
 }
 

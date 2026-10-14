@@ -19,7 +19,8 @@ namespace Organizator.Services;
 /// (<c>.bak</c> de la version precedente, <c>.tmp</c> puis remplacement), relit le <c>.bak</c> si
 /// le fichier est illisible et refuse un contenu de plus de 20 Mo.</description></item>
 /// <item><description><c>learning\</c> : les documents generes par Claude (<c>lessons\</c>,
-/// <c>exercises\</c>, <c>toeic\</c>, <c>sw\</c>, un fichier <c>&lt;id&gt;.json</c> chacun), les
+/// <c>exercises\</c>, <c>toeic\</c>, <c>sw\</c>, un fichier <c>&lt;id&gt;.json</c> chacun ; <c>cortex\</c> et
+/// <c>pen\</c>, les versions des cartes du cortex et les conversations de la correspondance, ecrites par l'UI), les
 /// enregistrements gardes de l'apprenant (<c>audio\&lt;id&gt;.wav</c>) et le cache du menu RSS
 /// (<c>news.json</c>). Le dossier est servi a la page sous <see cref="Host"/>.</description></item>
 /// </list>
@@ -48,6 +49,7 @@ public sealed class LearningStore
         ["toeic"] = "toeic",
         ["sw"] = "sw",
         ["cortex"] = "cortex",
+        ["pen"] = "pen",
     };
 
     // Les documents restent lisibles a l'oeil (accents non echappes) ; learning.json, ecrit a

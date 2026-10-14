@@ -5,8 +5,8 @@
    du PC. Cible : 360 à 430 px de large, au doigt.
    - en-tête d'une ligne, collé en haut : titre, semaine et niveau, réglages ;
    - onglets de Révizator en bas d'écran (comme une application), masqués pendant une séance, une
-     série d'exercices, une révision de cartes, un bilan ou une conversation avec le tuteur : ces
-     vues ont leur propre bouton de retour et prennent tout l'écran ;
+     série d'exercices, une révision de cartes, un bilan, une conversation avec le tuteur ou avec un
+     correspondant : ces vues ont leur propre bouton de retour et prennent tout l'écran ;
    - cibles tactiles de 44 px, champs en 16 px (pas de zoom automatique d'iOS), encoches et
      clavier virtuel pris en compte (100dvh, env(safe-area-inset-*)) ;
    - traductions des mots : au toucher, dans une bulle posée en bas d'écran (pas de survol).
@@ -70,8 +70,10 @@
 
   /* Vues qui prennent tout l'écran : séance, série d'exercices, révision des cartes, bilan en
      cours, conversation avec le tuteur. Elles ont leur bouton de retour. */
-  .rz-only .app:has(.rz-view-session, .rzx-play-head, .rzx-srs-end, .rzt-exam, .rzv-chathead) .rz-tabs { display: none; }
+  .rz-only .app:has(.rz-view-session, .rzx-play-head, .rzx-srs-end, .rzt-exam, .rzv-chathead, .rzm-chathead) .rz-tabs { display: none; }
   .rz-only .app:has(.rz-view-session, .rzx-play-head, .rzx-srs-end, .rzt-exam, .rzv-chathead) .page-host { padding-bottom: calc(24px + var(--mb-safe-b)); }
+  /* Correspondance : la zone de saisie touche le bas de l'écran. */
+  .rz-only .app:has(.rzm-chathead) .page-host { padding-bottom: 0; }
 
   /* ── Cibles tactiles et champs ──────────────────────────────────────── */
   .rz-only .btn { min-height: 44px; }

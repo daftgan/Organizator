@@ -1,0 +1,205 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Révizator — la correspondance (pen.js) : des conversations écrites comme par messagerie.
+   Préfixe .rzm- ; la teinte d'un correspondant passe par --rzm-c (avatar, carte du personnage).
+   La page défile ; la zone de saisie reste collée en bas d'écran.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.rzm { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.rzm-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; }
+.rzm-title { margin: 2px 0 6px; font-family: var(--font-heading); font-size: 30px; line-height: 1.1; }
+.rzm-lead { margin: 0; max-width: 640px; color: var(--rz-ink-soft); line-height: 1.5; }
+.rzm-back { margin-left: -8px; }
+
+/* L'avatar : l'initiale sur la teinte du personnage */
+.rzm-av {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 50%;
+  background: var(--rzm-c, var(--color-accent)); color: #fff; font-family: var(--font-heading); font-size: 19px; line-height: 1;
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.12);
+}
+.rzm-av svg { width: 18px; height: 18px; }
+.rzm-av.is-big { width: 44px; height: 44px; font-size: 21px; }
+
+/* Les conversations */
+.rzm-list { padding: 6px; display: flex; flex-direction: column; }
+.rzm-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border: 0; border-radius: 14px;
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.rzm-row:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
+.rzm-row + .rzm-row { box-shadow: 0 -1px 0 var(--rz-line); }
+.rzm-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.rzm-row-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.rzm-row-top b { font-size: 15px; }
+.rzm-row-topic { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--rz-ink-soft); }
+.rzm-row-time { margin-left: auto; flex: none; font-size: 12px; color: var(--rz-ink-soft); }
+.rzm-row-prev { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--rz-ink-soft); }
+.rzm-row.is-unread .rzm-row-prev { color: var(--color-text); font-weight: 600; }
+.rzm-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--color-accent); }
+.rzm-typing-s { color: var(--color-accent-700, var(--color-accent)); font-style: italic; }
+
+/* Le choix du correspondant */
+.rzm-personas { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.rzm-persona {
+  display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 16px; cursor: pointer; text-align: left;
+  border: 1.5px solid var(--rz-line); background: var(--color-surface); color: inherit; font: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.rzm-persona:hover { border-color: color-mix(in srgb, var(--rzm-c) 55%, transparent); }
+.rzm-persona.on { border-color: var(--rzm-c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rzm-c) 18%, transparent); }
+.rzm-persona-top { display: flex; align-items: center; gap: 10px; }
+.rzm-persona-top b { display: block; font-size: 16px; }
+.rzm-persona-top small { display: block; font-size: 12px; color: var(--rz-ink-soft); }
+.rzm-persona-tag { font-size: 13px; font-weight: 600; color: color-mix(in srgb, var(--rzm-c) 75%, var(--color-text)); }
+.rzm-persona-bio { font-size: 13px; line-height: 1.45; color: var(--rz-ink-soft); }
+
+.rzm-setup { display: flex; flex-direction: column; gap: 14px; }
+.rzm-field { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 13.5px; }
+.rzm-field .input { font-weight: 400; }
+.rzm-opts { display: flex; flex-direction: column; gap: 12px; }
+.rzm-opt { display: grid; grid-template-columns: 130px minmax(0, 1fr); align-items: center; gap: 4px 12px; }
+.rzm-opt > .rz-muted { grid-column: 2; font-size: 12.5px; }
+.rzm-opt-k { font-weight: 600; font-size: 13.5px; }
+.rzm-setup-go { gap: 14px; }
+
+/* L'en-tête de la conversation */
+.rzm-chat { gap: 10px; }
+.rzm-chathead { display: flex; align-items: center; gap: 10px; padding: 4px 4px 10px; box-shadow: 0 1px 0 var(--rz-line); }
+.rzm-who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.rzm-who b { font-size: 16px; line-height: 1.2; }
+.rzm-who-s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--rz-ink-soft); }
+.rzm-head-acts { display: flex; align-items: center; gap: 4px; flex: none; }
+.rzm-head-acts .btn { gap: 6px; }
+.rzm-head-acts .btn.on { background: var(--color-accent-100); color: var(--color-accent-700); }
+.rzm-head-acts .btn svg { width: 16px; height: 16px; }
+
+.rzm-drawer { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
+.rzm-drawer-k { font-weight: 600; font-size: 13.5px; }
+.rzm-drawer-foot { justify-content: space-between; border-top: 1px solid var(--rz-line); padding-top: 10px; }
+.rzm-danger { color: var(--rz-bad); }
+.rzm-themes { display: flex; flex-wrap: wrap; gap: 6px; }
+.rzm-theme {
+  padding: 7px 13px; border-radius: 999px; border: 1px solid var(--rz-line); background: var(--color-surface); color: inherit;
+  font: inherit; font-size: 13.5px; cursor: pointer;
+}
+.rzm-theme:hover { border-color: var(--color-accent); }
+
+/* Les messages */
+.rzm-log { display: flex; flex-direction: column; gap: 3px; padding: 4px 2px 18px; }
+.rzm-day { align-self: center; margin: 12px 0 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; color: var(--rz-ink-soft); background: color-mix(in srgb, var(--color-text) 5%, transparent); }
+.rzm-day::first-letter { text-transform: uppercase; }
+.rzm-msg { display: flex; }
+.rzm-msg.is-me { justify-content: flex-end; }
+.rzm-msg.is-tail { margin-bottom: 7px; }
+.rzm-bubble {
+  position: relative; max-width: min(78%, 600px); padding: 8px 12px 6px; border-radius: 18px; font-size: 15px; line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.rzm-bubble p { margin: 0; }
+.rzm-bubble p + p { margin-top: 7px; }
+.rzm-msg.is-me .rzm-bubble { background: var(--color-accent); color: #fff; }
+.rzm-msg.is-me.is-tail .rzm-bubble { border-bottom-right-radius: 5px; }
+.rzm-msg.is-them .rzm-bubble { background: var(--color-surface); border: 1px solid var(--rz-line); }
+.rzm-msg.is-them.is-tail .rzm-bubble { border-bottom-left-radius: 5px; }
+.rzm-msg.is-new { animation: rzm-in 0.35s ease both; animation-delay: var(--rzm-delay, 0s); }
+@keyframes rzm-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
+.rzm-time { display: block; margin-top: 2px; text-align: right; font-size: 10.5px; opacity: 0.65; }
+.rzm-time svg { width: 11px; height: 11px; vertical-align: -1px; }
+
+/* Les extraits corrigés, dans la bulle de l'apprenant */
+.rzm-mk { color: inherit; background: transparent; text-decoration: underline wavy; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+.rzm-mk.is-error { text-decoration-color: #ffd6c9; }
+.rzm-mk.is-style { text-decoration-style: dotted; text-decoration-color: rgba(255, 255, 255, 0.75); }
+
+/* La marge des corrections, sous le message */
+.rzm-notes { align-self: flex-end; width: min(78%, 600px); margin: -2px 0 10px; font-size: 13.5px; }
+.rzm-notes > summary {
+  display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 2px 4px; cursor: pointer; list-style: none;
+  font-size: 12.5px; font-weight: 600; color: var(--rz-bad);
+}
+.rzm-notes > summary::-webkit-details-marker { display: none; }
+.rzm-notes > summary svg { width: 13px; height: 13px; }
+.rzm-note { margin-top: 6px; padding: 9px 12px; border-radius: 12px; background: var(--rz-bad-bg); border-left: 3px solid var(--rz-bad); }
+.rzm-note.is-style { background: color-mix(in srgb, var(--rz-write) 14%, var(--color-surface)); border-left-color: var(--rz-write); }
+.rzm-note-pair { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.rzm-note-pair svg { width: 13px; height: 13px; flex: none; opacity: 0.6; }
+.rzm-note-said { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--rz-bad) 70%, transparent); color: var(--rz-ink-soft); }
+.rzm-note-better { font-weight: 700; }
+.rzm-note-why { margin-top: 4px; line-height: 1.45; color: var(--color-text); }
+.rzm-note-acts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
+.rzm-link {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 12.5px; font-weight: 600; color: var(--color-accent-700, var(--color-accent));
+}
+.rzm-link:hover { text-decoration: underline; }
+.rzm-link svg { width: 13px; height: 13px; }
+.rzm-note-done { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--rz-good); }
+.rzm-note-done svg { width: 13px; height: 13px; }
+
+/* Sous sa réponse : les sources lues, les idées de réponse */
+.rzm-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: -3px 0 8px 6px; font-size: 12px; color: var(--rz-ink-soft); }
+.rzm-sources svg { width: 13px; height: 13px; }
+.rzm-sources a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.rzm-ideas { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; }
+.rzm-idea {
+  padding: 6px 12px; border-radius: 999px; border: 1px dashed color-mix(in srgb, var(--color-accent) 55%, transparent);
+  background: transparent; color: var(--color-accent-700, var(--color-accent)); font: inherit; font-size: 13px; cursor: pointer;
+}
+.rzm-idea:hover { background: var(--color-accent-100); border-style: solid; }
+
+/* Il écrit… */
+.rzm-typing { padding: 12px 14px; }
+.rzm-dots { display: inline-flex; gap: 4px; }
+.rzm-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--rz-ink-soft); animation: rzm-dot 1.2s ease-in-out infinite; }
+.rzm-dots i:nth-child(2) { animation-delay: 0.15s; }
+.rzm-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes rzm-dot { 0%, 60%, 100% { transform: none; opacity: 0.45; } 30% { transform: translateY(-4px); opacity: 1; } }
+.rzm-state { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-radius: 12px; font-size: 13.5px; color: var(--rz-ink-soft); }
+.rzm-state svg { width: 14px; height: 14px; }
+.rzm-state.is-error { background: var(--rz-bad-bg); color: var(--rz-bad); }
+
+/* La saisie, collée en bas d'écran */
+.rzm-compose {
+  position: sticky; bottom: 0; z-index: 5; display: flex; flex-direction: column; gap: 4px; padding: 10px 0 12px;
+  background: linear-gradient(to bottom, transparent, var(--color-bg) 14px);
+}
+.rzm-compose-in { display: flex; align-items: flex-end; gap: 8px; }
+.rzm-compose-in textarea {
+  flex: 1; min-width: 0; min-height: 46px; max-height: 40vh; resize: none; padding: 11px 16px; border-radius: 22px;
+  font-size: 15px; line-height: 1.45; overflow-y: auto;
+}
+.rzm-send { flex: none; width: 46px; height: 46px; min-height: 46px; padding: 0; border-radius: 50%; justify-content: center; }
+.rzm-send svg { width: 18px; height: 18px; }
+.rzm-compose-meta { display: flex; justify-content: space-between; gap: 10px; padding: 0 16px; font-size: 11.5px; color: var(--rz-ink-soft); }
+
+/* Le point */
+.rzm-past { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.rzm-past li { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13.5px; }
+
+/* Carte d'accueil */
+.rzm-home { display: flex; flex-direction: column; gap: 10px; }
+.rzm-home-p { margin: 0; color: var(--rz-ink-soft); line-height: 1.5; }
+.rzm-home-faces { display: flex; flex-wrap: wrap; gap: 6px; }
+.rzm-home-face {
+  display: inline-flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 8px; border: 0; border-radius: 12px;
+  background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer;
+}
+.rzm-home-face:hover { background: color-mix(in srgb, var(--color-text) 5%, transparent); }
+.rzm-home .rzm-row { padding: 8px 6px; }
+
+/* Oliver se pose au-dessus de la zone de saisie */
+body:has(.rzm-compose) .rzf { --rzf-bottom: 96px; }
+
+@media (max-width: 600px) {
+  .rzm-title { font-size: 25px; }
+  .rzm-opt { grid-template-columns: minmax(0, 1fr); }
+  .rzm-opt > .rz-muted { grid-column: 1; }
+  .rzm-head-acts .btn span { display: none; }
+  .rzm-head-acts .btn { min-width: 40px; padding: 0 8px; }
+  .rzm-chathead { gap: 8px; }
+  .rzm-bubble { max-width: 86%; }
+  .rzm-notes { width: 92%; }
+  .rzm-compose { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .rzm-compose-in textarea { font-size: 16px; }
+  .rzm-compose-meta span:last-child { display: none; }
+  body:has(.rzm-compose) .rzf { --rzf-bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
+}
