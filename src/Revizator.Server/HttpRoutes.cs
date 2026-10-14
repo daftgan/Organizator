@@ -175,7 +175,8 @@ public sealed class HttpRoutes
         {
             NoCache(response);
             response.ContentType = "text/javascript; charset=utf-8";
-            var settings = "window.REVIZATOR_SERVER = { mode: 'revizator', version: '" + ServerConfig.Version + "', wsUrl: '/api/ws' };\n";
+            // version : celle de l'enveloppe (version + commit), qui nomme le service worker et son cache.
+            var settings = "window.REVIZATOR_SERVER = { mode: 'revizator', version: '" + ServerConfig.ShellVersion + "', wsUrl: '/api/ws' };\n";
             await response.WriteAsync(settings).ConfigureAwait(false);
             return;
         }

@@ -12,6 +12,15 @@ public sealed class ServerConfig
     /// <summary>Le deploiement en cours : commit et heure de construction de l'image, heure de demarrage.</summary>
     public static readonly BuildInfo Build = BuildInfo.Load(Path.Combine(AppContext.BaseDirectory, "build-info.json"));
 
+    /// <summary>
+    /// Version de l'enveloppe de la page (service worker du telephone, <c>sw.js?v=…</c>) : la version et le
+    /// commit construit, si bien que chaque deploiement installe un nouveau cache. Sans commit (hors image
+    /// Docker), l'heure de demarrage en tient lieu.
+    /// </summary>
+    public static readonly string ShellVersion = Version + "-" + (Build.Commit.Length > 0
+        ? Build.Commit[..Math.Min(12, Build.Commit.Length)]
+        : Build.StartedAt.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture));
+
     /// <summary>Dossier de donnees : meme disposition que <c>%LOCALAPPDATA%\Organizator\</c> pour Revizator.</summary>
     public required string DataDir { get; init; }
 
