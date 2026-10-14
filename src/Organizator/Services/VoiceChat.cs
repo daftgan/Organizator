@@ -10,7 +10,8 @@ namespace Organizator.Services;
 /// <summary>
 /// Reglages d'une conversation vocale, deja verifies. <paramref name="Mode"/> : <c>free</c> (conversation
 /// libre, <see cref="VoiceChat.SystemPrompt"/>) ou <c>tutor</c> (tuteur d'anglais de Revizator,
-/// <paramref name="Tutor"/> = <c>{ scenario, level, lang, explain, lesson, context, history }</c>).
+/// <paramref name="Tutor"/> = <c>{ scenario, level, lang, explain, lesson, context, history, long?, program? }</c> ;
+/// <paramref name="Web"/> n'y vaut que pour une seance au long cours, <c>long</c>).
 /// <paramref name="Name"/> : nom lisible de la session de Claude Code (vide : « Conversation vocale · persona »).
 /// </summary>
 public sealed record VoiceOptions(string Model, string Effort, string Persona, string Topic, string Instructions, bool Web,
@@ -144,7 +145,7 @@ public sealed class VoiceChat : IDisposable
 
         Directory.CreateDirectory(_dir);
         var conversation = options.IsTutor
-            ? new Conversation(Guid.NewGuid().ToString("N"), options, TutorGenre.VoicePrompt(options.Tutor)) { Preamble = TutorGenre.VoicePreamble(options.Tutor) }
+            ? new Conversation(Guid.NewGuid().ToString("N"), options, TutorGenre.VoicePrompt(options.Tutor, options.Web)) { Preamble = TutorGenre.VoicePreamble(options.Tutor) }
             : new Conversation(Guid.NewGuid().ToString("N"), options, SystemPrompt(options, DateTime.Now));
 
         List<Conversation> previous;

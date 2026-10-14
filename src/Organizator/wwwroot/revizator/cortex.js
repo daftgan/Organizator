@@ -45,7 +45,8 @@
      prefs.cortexTidy, prefs.cortexGrow (vrai par défaut)
      document cortex/<id de carte> { map, index, versions: [{ id, at, label, by: 'user'|'agent'|'lesson', snap }] }
    API pour lesson.js : R.cortex.{ suggest(n), get(map, node), path(map, node), status(map, node),
-     lessonParams(map, node, depth), lessonDone(entry, L), statusLabel(s) }
+     lessonParams(map, node, depth), lessonDone(entry, L), statusLabel(s) } ;
+   pour tutor.js : R.cortex.programs() (les programmes, leurs étapes et leur avancement, en texte)
    ═══════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
@@ -721,7 +722,26 @@
     if (added) schedule(m);
   }
 
+  /* Les programmes en quelques lignes, pour le tuteur au long cours (qui ne s'en sert que si on le lui demande) :
+     titre, carte, avancement, prochaine étape, puis les étapes et leur état. */
+  function programsText() {
+    var out = [];
+    maps().forEach(function (m) {
+      m.nodes.filter(function (x) { return x.kind === 'program'; }).forEach(function (prog) {
+        var steps = descendants(m, prog.id), done = steps.filter(function (x) { return studied(x.status); }).length, nx = nextStep(m, prog);
+        out.push('Programme « ' + prog.title + ' » (carte « ' + m.title + ' ») : ' + done + ' étape' + (done > 1 ? 's' : '') + ' sur ' + steps.length
+          + (nx ? ' ; prochaine étape : « ' + nx.title + ' »' : (steps.length ? ' ; terminé' : '')) + '.' + (prog.summaryFr ? ' ' + clip(prog.summaryFr, 200) : ''));
+        steps.slice(0, 16).forEach(function (x, i) {
+          out.push('  ' + (i + 1) + '. ' + x.title + ' — ' + (x.status === 'studied' ? 'étudiée' : (x.status === 'deepen' ? 'à approfondir' : 'à faire')));
+        });
+        if (steps.length > 16) out.push('  … et ' + (steps.length - 16) + ' autres étapes.');
+      });
+    });
+    return out.join('\n');
+  }
+
   R.cortex = {
+    programs: programsText,
     suggest: suggest,
     get: function (mapId, nodeId) { var m = mapById(mapId); return m ? { map: m, node: node(m, nodeId) } : null; },
     path: function (mapId, nodeId) { var m = mapById(mapId), n = node(m, nodeId); return n ? pathOf(m, n).map(function (x) { return x.title; }) : []; },
