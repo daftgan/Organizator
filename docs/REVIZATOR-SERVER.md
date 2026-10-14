@@ -476,7 +476,7 @@ journalisé) ; l'onglet caché n'est qu'une commodité.
 
 | Type | Charge | Réponse |
 |---|---|---|
-| `learnPolicy` | `{}` | tout compte : `{ models: { lessonModel, lessonEffort, genModel, genEffort, gradeModel, gradeEffort, tutorModel, cardModel, profModel, profEffort }, imposed, changed, changedBy, defaults, admin }` |
+| `learnPolicy` | `{}` | tout compte : `{ models: { lessonModel, lessonEffort, genModel, genEffort, gradeModel, gradeEffort, tutorModel, tutorEffort, longModel, longEffort, cardModel, cardEffort, profModel, profEffort, cortexModel, cortexEffort }, imposed, changed, changedBy, defaults, admin }` |
 | `adminUsers` | `{}` | `{ users: [{ login, created, changed, admin, flagged, sessions, devices, name, lastActivity, hasData, me }], policy }` — `name` : pseudo du classement, `lastActivity` : date de la dernière écriture de son `learning.json` ; rien de son contenu |
 | `adminUserSet` | `{ login, password }` | crée le compte ou change son mot de passe (ses sessions sont fermées, WebSocket compris) ; comme `adminUsers`, plus `created`, `closed` |
 | `adminUserRemove` | `{ login }` | supprime le compte, ferme ses sessions, garde `users/<login>/` ; ni soi-même |

@@ -6,7 +6,8 @@ namespace Revizator.Server;
 
 /// <summary>
 /// Reglages de l'administrateur pour tout le serveur, dans <c>admin.json</c> du dossier de donnees : les
-/// modeles et efforts de Revizator (cours, exercices et bilans, correction, tuteur, correcteur des cartes, professeur).
+/// modeles et efforts de Revizator (cours, exercices et bilans, correction, tuteur, discussion au long cours,
+/// correcteur des cartes, professeur, cortex).
 /// Deux modes :
 /// <list type="bullet">
 /// <item><description><c>imposed: false</c> (par defaut) : ce sont les reglages de depart d'un nouveau compte ;
@@ -27,7 +28,11 @@ public sealed class AdminPolicy
         ["gradeModel"] = "sonnet",
         ["gradeEffort"] = "medium",
         ["tutorModel"] = "haiku",
+        ["tutorEffort"] = "",
+        ["longModel"] = "sonnet",
+        ["longEffort"] = "low",
         ["cardModel"] = "haiku",
+        ["cardEffort"] = "",
         ["profModel"] = "sonnet",
         ["profEffort"] = "low",
         ["cortexModel"] = "sonnet",
@@ -42,9 +47,9 @@ public sealed class AdminPolicy
         ["toeic"] = ("genModel", "genEffort"),
         ["sw"] = ("genModel", "genEffort"),
         ["grade"] = ("gradeModel", "gradeEffort"),
-        ["tutor"] = ("tutorModel", null),
-        ["cardcheck"] = ("cardModel", null),
-        ["cardfix"] = ("cardModel", null),
+        ["tutor"] = ("tutorModel", "tutorEffort"),
+        ["cardcheck"] = ("cardModel", "cardEffort"),
+        ["cardfix"] = ("cardModel", "cardEffort"),
         ["prof"] = ("profModel", "profEffort"),
         ["cortex"] = ("cortexModel", "cortexEffort"),
     };
@@ -152,12 +157,17 @@ public sealed class AdminPolicy
         }
     }
 
-    /// <summary>Modele impose au tuteur a voix haute (<c>voiceStart</c> en mode tuteur), null sinon.</summary>
-    public string? TutorModel()
+    /// <summary>
+    /// Modele et effort imposes au tuteur a voix haute (<c>voiceStart</c> en mode tuteur) : ceux de la discussion
+    /// au long cours si <paramref name="longRun"/>, sinon ceux du tuteur ; null si rien n'est impose.
+    /// </summary>
+    public (string Model, string Effort)? TutorVoice(bool longRun)
     {
         lock (_gate)
         {
-            return _imposed ? _values["tutorModel"] : null;
+            return _imposed
+                ? longRun ? (_values["longModel"], _values["longEffort"]) : (_values["tutorModel"], _values["tutorEffort"])
+                : null;
         }
     }
 
