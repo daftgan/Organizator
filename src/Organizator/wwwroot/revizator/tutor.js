@@ -34,7 +34,13 @@
      capsules[]  { id, at, prompt, url, text, metrics: { seconds, speechSeconds, wpm, articulationWpm, words, pauses, longPauses, unsure } }
    Actions : rz-tutor-* ; saisie : rz-tutor-text (Entrée envoie), rz-tutor-voice ; micros : rzv-mic, rzv-cap.
    Préférences (R.prefs) : tutorLive (mains libres, défaut true), tutorSensitivity (0..100, défaut 40),
-     tutorBargeIn ('words' | 'voice' | 'off', défaut 'words' : couper la parole au tuteur).
+     tutorBargeIn ('words' | 'voice' | 'off', défaut 'words' : couper la parole au tuteur),
+     tutorAsr ('whisper' | 'live', défaut 'whisper' : Whisper transcrit chaque phrase quand vous vous taisez,
+     plutôt que Parakeet en direct), tutorWhisper ('small' | 'base', défaut 'small'),
+     tutorPause ('short' | 'normal' | 'long', défaut 'normal' : silence qui clôt une phrase, 0,65 / 1 / 1,5 s).
+   La discussion au long cours (scénario 'long') : pas de fin d'office, le web (voiceStart web: true), le
+   programme d'étude à la demande (tutor.program), des corrections dites et des conseils de temps en temps ;
+   « let's stop » suffit pour finir : le tuteur dit au revoir (meta.end) et le bilan suit, sans un clic.
    ═══════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
@@ -60,6 +66,16 @@
      Le rôle, l'objectif et le cadre partent en anglais vers le tuteur (il joue en anglais) ;
      l'apprenant les lit en français. */
   var SCENARIOS = [
+    { id: 'long', icon: 'mic', hue: 'listen', title: 'Discussion au long cours', name: 'Sam', long: true,
+      roleFr: 'un interlocuteur curieux de tout, qui cherche sur le web quand il le faut', goalFr: 'Parler anglais aussi longtemps que vous voulez, de tout : il vous corrige à voix haute de temps en temps, vous donne des conseils, et connaît votre programme si vous le lui demandez. « Let’s stop » pour finir.', minutes: '20-60 min',
+      tutorRole: 'Sam, a curious, well-read English conversation partner and tutor, happy to talk about anything for as long as the learner likes',
+      learnerGoal: 'Speak English for a long time about many different topics, and improve along the way thanks to corrections and tips',
+      setting: 'A long, relaxed, hands-free conversation that moves from topic to topic, led by the learner. When a topic runs dry, suggest a new one (the news, their work, their interests, a debate).',
+      voice: { accent: 'en-US', gender: 'male', n: 1 },
+      phrases: ['Can we talk about…?', 'How do you say … in English?', 'Could you look it up?', 'Let’s stop here for today.'],
+      open: ['Hey, good to see you! I’m Sam. What’s on your mind today?', 'Salut, content de vous voir ! Moi c’est Sam. Qu’avez-vous en tête aujourd’hui ?'],
+      follow: [['Interesting! Tell me more about that.', 'Intéressant ! Dites-m’en plus.'], ['What do you think about it?', 'Qu’en pensez-vous ?'],
+        ['Quick tip: we usually say it a bit differently. Shall we go on?', 'Petit conseil : on le dit d’habitude un peu autrement. On continue ?'], ['Shall we switch to another topic?', 'On change de sujet ?']] },
     { id: 'free', icon: 'chat', hue: 'speak', title: 'Conversation libre', name: 'Emma',
       roleFr: 'une Londonienne curieuse, qui parle de tout', goalFr: 'Parler de ce que vous voulez, quelques minutes, sans vous arrêter.', minutes: '5-15 min',
       tutorRole: 'Emma, a friendly and curious English tutor from London who enjoys chatting about anything',
@@ -248,7 +264,7 @@
     if (R.tts.ready()) bridge.call('ttsWarm', { accent: v.accent === 'en-GB' ? 'en-GB' : 'en-US' }, 15000)['catch'](noop);
     if (Date.now() - T.warmAt > 240000) {
       T.warmAt = Date.now();
-      bridge.call('whisperWarm', { model: R.prefs.whisperModel || 'small' }, 15000)['catch'](noop);
+      bridge.call('whisperWarm', { model: liveMode() ? tutorWhisper() : (R.prefs.whisperModel || 'small') }, 15000)['catch'](noop);
     }
   }
 
@@ -277,6 +293,32 @@
       });
     }
     return L.join('\n').slice(0, 8000);
+  }
+
+  /* Le programme d'étude, pour la discussion au long cours : le tuteur ne s'en sert que si on le lui demande.
+     La semaine, les programmes du cortex et leurs étapes, les prochains sujets de cours, les derniers cours,
+     les cartes à revoir et les points faibles. */
+  function programText() {
+    var L = [], w = R.week();
+    L.push('Date : ' + R.today() + '.');
+    L.push('Cette semaine : ' + w.done + ' séance' + (w.done > 1 ? 's' : '') + (w.goal ? ' sur ' + w.goal + ' visées' : '') + ', ' + w.minutes + ' min.');
+    L.push('Niveaux estimés : ' + ['read', 'listen', 'write', 'speak', 'lang'].map(function (k) { return k + ' ' + R.level(k).band; }).join(', ') + '.');
+    var cx = R.cortex;
+    var progs = cx && typeof cx.programs === 'function' ? String(cx.programs() || '').trim() : '';
+    L.push(progs ? 'Programmes (cortex) :\n' + progs : 'Aucun programme dans le cortex pour l’instant.');
+    var next = cx && typeof cx.suggest === 'function' ? arr(cx.suggest(4)) : [];
+    if (next.length) L.push('Prochains sujets de cours proposés : ' + next.map(function (x) { return '« ' + clean(x.node && x.node.title, 80) + ' »'; }).join(', ') + '.');
+    var lessons = arr(R.data.lessons).slice(-6).reverse();
+    if (lessons.length) {
+      L.push('Derniers cours :');
+      lessons.forEach(function (l) { L.push('- ' + (l.day || '') + ' : « ' + clean(l.title, 120) + ' » (' + (l.status === 'done' ? 'fait' : (l.status === 'active' ? 'en cours' : 'pas encore fait')) + ')'); });
+    }
+    var due = null;
+    try { if (R.cards && typeof R.cards.dueCount === 'function') due = Math.max(0, num(R.cards.dueCount(Date.now()), 0)); } catch (e) { due = null; }
+    if (due != null) L.push('Cartes à revoir aujourd’hui : ' + due + '.');
+    var weak = typeof R.weakPoints === 'function' ? arr(R.weakPoints(5)) : [];
+    if (weak.length) L.push('Points faibles : ' + weak.map(function (x) { return clean(x.label, 60) + ' (' + x.count + ')'; }).join(', ') + '.');
+    return L.join('\n').slice(0, 6000);
   }
 
   /* Mesures de fluence d'une réplique dite (Whisper) : gardées pour le niveau de la conversation. */
@@ -718,7 +760,7 @@
   var L = {
     eng: null, chatId: '', stage: null, phase: 'idle', phaseText: '', caption: '', notices: {}, error: '', muted: false,
     turns: {}, sentAt: 0, meter: null, hold: {}, sapi: null, sapiAsked: false,
-    partial: '', draft: null, byId: {}, waiting: [], test: null, testTimer: 0, setMeter: 0
+    partial: '', draft: null, byId: {}, waiting: [], test: null, testTimer: 0, setMeter: 0, autoEnd: null
   };
   var GREETING = '(The learner has just joined. Open the conversation in character: greet them briefly and ask your first question.)';
   var RESUMING = '(The learner is back after a short pause. Answer their last message, in character.)';
@@ -737,6 +779,13 @@
   function sensitivity() { return R.clamp(Math.round(num(R.prefs.tutorSensitivity, 40)), 0, 100); }
   function liveAsr() { return window.OrganizatorLiveAsr || null; }
   function bargeIn() { var v = R.prefs.tutorBargeIn; return v === 'voice' || v === 'off' ? v : 'words'; }
+  /* Transcription des phrases : Whisper quand vous vous taisez (défaut), ou Parakeet en direct. */
+  function asrPref() { return R.prefs.tutorAsr === 'live' ? 'live' : 'whisper'; }
+  function tutorWhisper() { return R.prefs.tutorWhisper === 'base' ? 'base' : 'small'; }
+  var PAUSE_MS = { short: 650, normal: 1000, long: 1500 };
+  function pauseKey() { var v = R.prefs.tutorPause; return PAUSE_MS[v] ? v : 'normal'; }
+  function engineOpts() { return { liveAsr: asrPref() === 'live', whisperModel: tutorWhisper(), endMs: PAUSE_MS[pauseKey()] }; }
+  function isLong(chat) { return !!scOf(chat).long; }
 
   /* Une voix SAPI anglaise (repli quand Kokoro manque) : l'accent du scénario, puis n'importe quel anglais. */
   function askSapi() {
@@ -798,7 +847,7 @@
   }
   function downloadWhisper() {
     if (L.eng && typeof L.eng.downloadWhisper === 'function') return L.eng.downloadWhisper();
-    if (bridge) return bridge.call('whisperDownload', { model: R.prefs.whisperModel || 'small' }, 3600000);
+    if (bridge) return bridge.call('whisperDownload', { model: tutorWhisper() }, 3600000);
     return null;
   }
 
@@ -854,7 +903,7 @@
     L.eng = null;
     stopMeter();
     L.phase = 'idle'; L.phaseText = ''; L.caption = ''; L.notices = {}; L.muted = false; L.turns = {};
-    L.byId = {}; L.waiting = [];
+    L.byId = {}; L.waiting = []; L.autoEnd = null;
     setDraft('');
     if (e) { try { if (typeof e.destroy === 'function') e.destroy(); else e.stop(); } catch (err) { /* déjà arrêté */ } }
     if (L.stage) updateStage();
@@ -887,16 +936,22 @@
     var params = paramsOf(chat, false);
     chat.level = params.level;
     var greeting = !turns.length ? GREETING : (last.role === 'user' ? RESUMING : null);
+    var eo = engineOpts(), long = isLong(chat);
+    var tutorStart = { scenario: params.scenario, level: params.level, lang: params.lang, explain: params.explain, lesson: params.lesson, context: tutorContext(chat), history: historyOf(chat, 30) };
+    /* Au long cours : pas de fin d'office, le web, et le programme d'étude — consulté seulement si on le demande. */
+    if (long) { tutorStart.long = true; tutorStart.program = programText(); }
+    L.autoEnd = null;
     var eng = null;
     var mine = function () { return L.eng === eng && !!eng; };
     try {
       eng = window.OrganizatorVoice.create({
-        container: mountOf(), avatar: { size: 112 }, language: 'en', whisperModel: R.prefs.whisperModel || 'small',
-        sensitivity: sensitivity(), keepAudio: true, detail: true, tts: ttsOf(chat), liveAsr: true, bargeIn: bargeIn(),
+        container: mountOf(), avatar: { size: 112 }, language: 'en', whisperModel: eo.whisperModel, endMs: eo.endMs,
+        sensitivity: sensitivity(), keepAudio: true, detail: true, tts: ttsOf(chat), liveAsr: eo.liveAsr, bargeIn: bargeIn(),
         conversation: {
           start: {
             mode: 'tutor', model: R.prefs.tutorModel || 'haiku', effort: '', name: 'Tuteur · ' + clean(chat.scenario && chat.scenario.title, 80),
-            tutor: { scenario: params.scenario, level: params.level, lang: params.lang, explain: params.explain, lesson: params.lesson, context: tutorContext(chat), history: historyOf(chat, 30) }
+            web: long,
+            tutor: tutorStart
           },
           greeting: greeting
         },
@@ -1018,6 +1073,8 @@
     T.toEnd = true;
     R.save();
     R.render();
+    /* Au long cours, les mots dont Whisper a douté accompagnent la phrase : de quoi, parfois, un conseil de prononciation. */
+    if (isLong(chat) && turn.unsure && turn.unsure.length) return text + '\n(Speech recognition was unsure of: ' + turn.unsure.slice(0, 6).join(', ') + '.)';
     return undefined;
   }
 
@@ -1100,6 +1157,8 @@
     t.tip = clean(meta.tipFr, 400);
     t.end = !!meta.end;
     if (t.end) T.dismissEnd = '';
+    /* Au long cours, end veut dire « l'apprenant a demandé d'arrêter » : le bilan suit l'au revoir, sans un clic. */
+    if (t.end && isLong(chat)) L.autoEnd = { chatId: chat.id, turn: info.turn };
     applyRecast(chat.turns[idx - 1], meta.recast);
     R.save();
     R.render();
@@ -1114,6 +1173,12 @@
     var full = clean(r.full, 1500);
     if (full) t.text = full;
     if (r.heard != null && !t.cut) { t.cut = true; t.heard = clean(r.heard, 1500); }
+    var auto = L.autoEnd;
+    if (auto && auto.chatId === chat.id && auto.turn === r.turn) {
+      L.autoEnd = null;
+      /* L'au revoir a été dit jusqu'au bout : la conversation se clôt. Coupé : l'apprenant a repris la parole, on continue. */
+      if (r.heard == null) { R.save(); endChat(chat); return; }
+    }
     R.save();
     R.render();
   }
@@ -1126,6 +1191,7 @@
     var t = chat.turns[L.turns[r.turn]];
     t.cut = true;
     t.heard = clean(r.heard, 1500);
+    if (L.autoEnd && L.autoEnd.turn === r.turn) L.autoEnd = null;
     R.save();
     R.render();
   }
@@ -1321,8 +1387,8 @@
     var vars = arr(sc.variants).length ? '<div class="rzv-sc-vars">' + sc.variants.map(function (v) {
       return '<button type="button" class="rz-chip" data-act="rz-tutor-start" data-id="' + esc(sc.id) + '" data-variant="' + esc(v.id) + '" title="' + esc('Seulement la scène : ' + v.label) + '">' + esc(v.label) + '</button>';
     }).join('') + '</div>' : '';
-    return '<div class="rzv-sc' + (sc.id === 'news' && lesson ? ' is-featured' : '') + '" data-act="rz-tutor-start" data-id="' + esc(sc.id) + '" role="button" tabindex="0" aria-label="' + esc('Commencer : ' + sc.title) + '">'
-      + '<div class="rzv-sc-top"><span class="rzv-ic rzv-hue-' + esc(sc.hue) + '">' + R.icon(sc.icon) + '</span><span class="rz-kbd" title="Raccourci clavier">' + (i + 1) + '</span></div>'
+    return '<div class="rzv-sc' + ((sc.id === 'news' && lesson) || sc.long ? ' is-featured' : '') + '" data-act="rz-tutor-start" data-id="' + esc(sc.id) + '" role="button" tabindex="0" aria-label="' + esc('Commencer : ' + sc.title) + '">'
+      + '<div class="rzv-sc-top"><span class="rzv-ic rzv-hue-' + esc(sc.hue) + '">' + R.icon(sc.icon) + '</span>' + (i < 9 ? '<span class="rz-kbd" title="Raccourci clavier">' + (i + 1) + '</span>' : '') + '</div>'
       + '<div class="rzv-sc-title">' + esc(sc.title) + '</div>'
       + '<div class="rzv-sc-role">Avec <b>' + esc(sc.name) + '</b>, ' + esc(sc.roleFr) + '.</div>'
       + '<div class="rzv-sc-goal">' + esc(sc.goalFr) + '</div>' + news + vars
@@ -1482,7 +1548,9 @@
       + sc.phrases.map(function (ph) { return '<button type="button" class="rz-phrase rzv-phrase" data-act="rz-tutor-phrase" data-text="' + esc(ph) + '" title="Écouter" lang="en">' + R.icon('speak') + esc(ph) + '</button>'; }).join('')
       + '</div></section>'
       + '<section class="rz-card rzv-opts">' + (liveMode()
-        ? '<div class="rzv-note">Mains libres : le micro reste ouvert pendant la conversation ; le son est transcrit sur ce poste (en direct avec Parakeet v3, sinon Whisper), seule la transcription part vers le tuteur. Sensibilité du micro, coupure de parole et transcription en direct se règlent dans ⚙ › Révizator.</div>'
+        ? '<div class="rzv-note">Mains libres : le micro reste ouvert pendant la conversation ; ' + (asrPref() === 'live' ? 'votre phrase est transcrite en direct (Parakeet v3, sinon Whisper)' : 'quand vous vous taisez, Whisper ' + (tutorWhisper() === 'base' ? 'Base' : 'Small') + ' transcrit votre phrase')
+          + ', seule la transcription part vers le tuteur. Transcription, pause avant qu’il réponde, sensibilité du micro et coupure de parole se règlent dans ⚙ › Révizator.</div>'
+          + (isLong(chat) ? '<div class="rzv-note">Au long cours : il peut chercher sur le web, vous corrige à voix haute de temps en temps, et connaît votre programme si vous le lui demandez. Dites « let’s stop » pour finir : le bilan suit.</div>' : '')
         : '<label class="rzv-toggle"><input type="checkbox" data-role="rz-tutor-voice"' + (tutorData().voiceOff ? '' : ' checked') + '><span>Lire les réponses à voix haute</span></label>')
       + '<div class="rzv-note">Whisper peut lisser vos fautes : la transcription montre ce qu’il a compris ; les mots soulignés sont ceux dont il doute.</div>'
       + (avg ? '<div class="rzv-note">Temps de réponse moyen du tuteur : ' + esc(secs(avg)) + '.</div>' : '') + '</section>'
@@ -1507,7 +1575,7 @@
     if (live) h.push('<div class="rzv-live-slot" data-rzv-slot></div>');
     h.push('<div class="rzv-thread" aria-live="polite">' + turnsHtml(chat)
       + (p && !p.end ? waitHtml(chat, p) : '') + (stuck ? stuckHtml(chat, err) : '')
-      + (live && !p && !turns.length ? '<div class="rzv-live-empty">' + esc(nameOf(chat)) + ' ouvre la conversation. Répondez à voix haute quand vous voulez — et coupez-lui la parole si besoin : il s’arrête et vous écoute.</div>' : '')
+      + (live && !p && !turns.length ? '<div class="rzv-live-empty">' + esc(nameOf(chat)) + ' ouvre la conversation. Répondez à voix haute quand vous voulez — et coupez-lui la parole si besoin : il s’arrête et vous écoute.' + (isLong(chat) ? ' Pour finir, dites simplement « let’s stop ».' : '') + '</div>' : '')
       + '</div>');
     h.push(dockHtml(chat, p, err));
     h.push('</section>' + asideHtml(chat) + '</div>');
@@ -1810,11 +1878,11 @@
   }
 
   function quickScenarios() {
-    var ids = [];
+    var ids = ['long'];
     if (todayLesson()) ids.push('news');
     var last = talked()[0];
     if (last) ids.push(scOf(last).id);
-    ['smalltalk', 'standup', 'news', 'interview'].forEach(function (id) { ids.push(id); });
+    ['long', 'smalltalk', 'standup', 'news', 'interview'].forEach(function (id) { ids.push(id); });
     var out = [];
     ids.forEach(function (id) { if (out.indexOf(id) < 0 && out.length < 3) out.push(id); });
     return out.map(scenarioById);
@@ -1928,6 +1996,22 @@
     R.save();
     R.render();
   });
+  /* Transcription, modèle Whisper, pause avant la réponse : appliqués aussitôt au moteur en marche. */
+  function applyEngineOpts() { if (L.eng) try { L.eng.setOptions(engineOpts()); } catch (e) { /* moteur arrêté */ } }
+  R.act('rz-tutor-set-asr', function (el) {
+    R.prefs.tutorAsr = el.getAttribute('data-value') === 'live' ? 'live' : 'whisper';
+    applyEngineOpts(); R.save(); R.render();
+  });
+  R.act('rz-tutor-set-whisper', function (el) {
+    R.prefs.tutorWhisper = el.getAttribute('data-value') === 'base' ? 'base' : 'small';
+    applyEngineOpts(); R.save(); R.render();
+    if (bridge) bridge.call('whisperWarm', { model: tutorWhisper() }, 15000)['catch'](noop);
+  });
+  R.act('rz-tutor-set-pause', function (el) {
+    var v = el.getAttribute('data-value');
+    R.prefs.tutorPause = PAUSE_MS[v] ? v : 'normal';
+    applyEngineOpts(); R.save(); R.render();
+  });
   /* Le curseur : la valeur part au moteur à chaque cran, sans rendu (le vumètre la suit en direct). */
   R.input('rz-tutor-sens', function (el) {
     R.prefs.tutorSensitivity = R.clamp(Math.round(num(el.value, 40)), 0, 100);
@@ -2015,6 +2099,9 @@
     voice: 'Il se tait au premier son de votre voix : réactif, mais un bruit franc peut aussi le couper.',
     off: 'Il finit toujours sa phrase ; Espace (« Faire taire ») le coupe quand même.'
   };
+  var ASR_LABELS = { whisper: 'Whisper, quand je me tais (conseillé)', live: 'En direct (Parakeet v3)' };
+  var WHISPER_LABELS = { small: 'Small : plus juste', base: 'Base : plus rapide' };
+  var PAUSE_LABELS = { short: 'Courte (0,65 s)', normal: 'Normale (1 s)', long: 'Longue (1,5 s)' };
   R.settingsSection({ id: 'tutor', order: 30, html: function () {
     var app = window.organizatorApp;
     var field = function (label, ctl) { return app && app.setFieldHtml ? app.setFieldHtml(label, ctl) : '<div class="set-field"><div class="set-field-label">' + esc(label) + '</div><div class="set-field-control">' + ctl + '</div></div>'; };
@@ -2034,10 +2121,18 @@
       + '<div class="rzv-sens-state" data-rzv-sens-state><span>Le vumètre s’anime pendant une conversation, ou le temps d’un essai.</span>'
       + '<button type="button" class="btn btn-ghost wm-btn" data-act="rz-tutor-sens-test">Tester le micro</button></div>'
       + '<div class="rz-set-help">Plus haute, il entend une voix douce ou lointaine, mais aussi davantage le bruit ambiant ; plus basse, il ignore le bruit, il faut parler plus franchement. 40 convient à la plupart des pièces.</div>'
+      + field('Transcription de vos phrases', R.h.chips('tutorAsr', ['whisper', 'live'], asrPref(), ['whisper', 'live'].map(function (k) { return ASR_LABELS[k]; }), 'rz-tutor-set-asr'))
+      + '<div class="rz-set-help">' + esc(asrPref() === 'live'
+        ? 'Votre phrase s’écrit pendant que vous parlez (modèle ci-dessous) et part dès que vous vous taisez ; Whisper mesure ensuite les mots douteux et le débit.'
+        : 'Le tuteur attend la fin de votre phrase, puis Whisper la transcrit d’un coup, sur ce poste — plus fidèle à ce que vous avez dit que la transcription en direct. Il commence déjà pendant votre pause : la réponse ne tarde pas.') + '</div>'
+      + field('Modèle Whisper', R.h.chips('tutorWhisper', ['small', 'base'], tutorWhisper(), ['small', 'base'].map(function (k) { return WHISPER_LABELS[k]; }), 'rz-tutor-set-whisper'))
+      + '<div class="rz-set-help">Small reconnaît mieux un anglais à l’accent français ; Base répond plus vite (environ trois fois), au prix de quelques mots mal reconnus. Téléchargé au premier usage.</div>'
+      + field('Pause avant qu’il réponde', R.h.chips('tutorPause', ['short', 'normal', 'long'], pauseKey(), ['short', 'normal', 'long'].map(function (k) { return PAUSE_LABELS[k]; }), 'rz-tutor-set-pause'))
+      + '<div class="rz-set-help">Le silence qui dit « j’ai fini ma phrase ». Plus longue, vous pouvez chercher vos mots sans qu’il vous coupe ; plus courte, la conversation va plus vite.</div>'
       + '<div class="rzv-set-sub">Transcription en direct</div>'
       + (asr ? asr.modelsHtml() : '<div class="asr-note">Indisponible dans cette fenêtre : Whisper transcrit chaque phrase quand vous vous taisez.</div>')
       + '<div class="rz-set-help">Un seul modèle pour l’anglais et le français, plus précis que Whisper et robuste aux accents : votre phrase s’écrit pendant que vous parlez et part au tuteur, ponctuée, dès que vous vous taisez ; Whisper mesure ensuite, sans faire attendre, les mots douteux et le débit. ' + (bridge.mode === 'server' || (bridge.remote && bridge.remote()) ? 'Tout se passe sur le serveur Révizator.' : 'Tout reste sur ce poste.') + '</div>'
-      + '<div class="set-card-foot">Sans modèle en direct, la conversation utilise le même Whisper que l’oral (ci-dessous) ; les réponses viennent du modèle « Tuteur » des agents.</div></div>';
+      + '<div class="set-card-foot">Sans modèle en direct, la conversation mains libres utilise le modèle Whisper choisi plus haut ; les réponses viennent du modèle « Tuteur » des agents.</div></div>';
   } });
   R.act('rz-tutor-history', function () { R.tts.stopAll(); setScreen('history'); goTutor(); });
   R.act('rz-tutor-open', function (el) {

@@ -1895,7 +1895,8 @@ public sealed class BridgeHost
     {
         var settings = _store.LoadSettings();
 
-        // Mode tutor (Revizator) : le prompt vient du tuteur (TutorGenre), sans web ni consignes libres.
+        // Mode tutor (Revizator) : le prompt vient du tuteur (TutorGenre), sans consignes libres ; le web seulement
+        // pour une seance au long cours (tutor.long) qui le demande (web: true).
         var mode = VoiceChat.SanitizeMode(Str(payload, "mode"));
         var tutor = mode == VoiceChat.TutorMode ? (payload["tutor"] as JsonObject)?.DeepClone() as JsonObject ?? new JsonObject() : null;
         var options = new VoiceOptions(
@@ -1904,7 +1905,9 @@ public sealed class BridgeHost
             Persona: VoiceChat.SanitizePersona(Str(payload, "persona") ?? settings.VoicePersona),
             Topic: VoiceChat.SanitizeTopic(Str(payload, "topic") ?? settings.VoiceTopic),
             Instructions: tutor is null ? Limit(Str(payload, "instructions") ?? settings.VoiceInstructions, 2000) : "",
-            Web: tutor is null && (payload["web"] is JsonValue web && web.TryGetValue<bool>(out var allowed) ? allowed : settings.VoiceWeb),
+            Web: tutor is null
+                ? payload["web"] is JsonValue web && web.TryGetValue<bool>(out var allowed) ? allowed : settings.VoiceWeb
+                : TutorGenre.IsLong(tutor) && payload["web"] is JsonValue tutorWeb && tutorWeb.TryGetValue<bool>(out var tutorAllowed) && tutorAllowed,
             Mode: mode,
             Tutor: tutor,
             Name: VoiceChat.SanitizeName(Str(payload, "name")));

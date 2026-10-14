@@ -4900,22 +4900,66 @@ internal static class TutorGenre
         §META {"replyFr":"Oh, vous avez une réservation depuis deux semaines ? Parfait. Puis-je avoir votre nom, s'il vous plaît ?","recast":{"said":"I have a reservation since two weeks","better":"I've had a reservation for two weeks"},"tipFr":"","end":false}
         """;
 
+    /// <summary>Programme d'etude (<c>program</c>) au plus, en caracteres : dans le preambule, consulte a la demande.</summary>
+    internal const int VoiceProgramMax = 6000;
+
+    /// <summary>
+    /// Seance au long cours (<c>long</c>) : pas de fin d'office, des sujets qui s'enchainent, des corrections
+    /// dites avec mesure et un conseil de temps en temps ; <c>end</c> ne vaut que si l'apprenant demande
+    /// d'arreter (la page clot alors la conversation et fait le bilan, sans un clic).
+    /// </summary>
+    private const string LongCorrections = """
+        Pendant l'échange
+        - recast : si la dernière phrase de l'apprenant contient une faute qui gêne ou une erreur typique de francophone, said = l'extrait exact de sa phrase, better = la même idée bien dite, et reprends la bonne forme dans ta réplique ; sinon vides. Ne corrige pas ce qui peut venir de la reconnaissance vocale.
+        - tipFr : le conseil que tu viens de dire (voir plus bas), en une phrase dans la langue d'aide ; sinon une aide très courte s'il a cherché ses mots ; sinon vide.
+        - end : vrai seulement quand l'apprenant demande d'arrêter (« let's stop », « I have to go », « on arrête ») : dis-lui au revoir chaleureusement, en une ou deux phrases, sans question. Sinon faux, même après des dizaines d'échanges.
+
+        Une séance au long cours
+        - Une longue conversation (une heure ou plus) qui passe d'un sujet à l'autre au gré de l'apprenant ; quand un sujet s'essouffle, propose une piste nouvelle (actualité, travail, centres d'intérêt, débat). Ne conclus jamais de toi-même.
+        - Corriger à voix haute, avec mesure : une faute qui gêne ou qui revient, un mot ou une tournure peu naturels (calque, faux ami, temps, préposition) se signalent en une phrase d'anglais simple avant de continuer (« Quick tip: we say “for ten years”, not “since ten years”. ») ; une par réplique au plus, une tous les deux ou trois échanges au plus.
+        - Conseils : toutes les cinq ou six répliques environ, un conseil court tiré de ce qu'il vient de dire (mot plus précis, expression idiomatique, tournure plus naturelle, mot sans doute mal prononcé), puis la conversation reprend.
+        - Une note « (Speech recognition was unsure of: …) » liste des mots mal saisis, souvent mal prononcés : rarement, un conseil de prononciation peut en naître.
+        - Le programme d'étude (« Study programme » dans les notes de l'application) ne sert que s'il t'en parle explicitement.
+        """;
+
+    /// <summary>Le web en seance au long cours : chercher quand il le faut, faire patienter d'une phrase, dire l'essentiel.</summary>
+    internal static string VoiceWeb(DateTime now)
+        => "Tu peux chercher sur le web (WebSearch, WebFetch) : fais-le quand on parle d'actualité, d'un fait précis ou récent, de quelque chose que tu ne sais pas sûrement, ou quand l'apprenant te le demande. "
+         + "Juste avant, dis une phrase très courte pour faire patienter (« Let me check. »), puis donne l'essentiel en une ou deux phrases parlées, sans lire d'adresse ni de liste de sources. "
+         + "Nous sommes le " + now.ToString("dddd d MMMM yyyy", CultureInfo.GetCultureInfo("fr-FR")) + ".";
+
+    /// <summary>Seance au long cours (<c>tutor.long</c>) : <see cref="LongCorrections"/>, web et programme a la demande.</summary>
+    internal static bool IsLong(JsonObject? tutor) => LJ.Bool(tutor, "long");
+
     /// <summary>
     /// Prompt systeme du tuteur en conversation vocale (VoiceChat, mode <c>tutor</c>) : les memes
     /// consignes de fond que le tour ecrit (persona, role du scenario, niveau, recast, aide, fin apres une
     /// quinzaine d'echanges), adaptees a une sortie en flux : la replique en texte parle, puis une ligne
     /// <c>§META {json}</c>. Le contexte et l'historique, plus longs, vont dans le premier message
     /// (<see cref="VoicePreamble"/>) : la ligne de commande reste courte (quelques milliers de caracteres).
+    /// Au long cours (<see cref="IsLong"/>) : <see cref="LongCorrections"/> a la place des corrections,
+    /// et le web si <paramref name="web"/> ; le programme d'etude, lui, va dans le preambule.
     /// </summary>
-    internal static string VoicePrompt(JsonObject? tutor)
-        => string.Join("\n\n",
+    internal static string VoicePrompt(JsonObject? tutor, bool web = false)
+    {
+        var longRun = IsLong(tutor);
+        var parts = new List<string>
+        {
             Persona,
             VoiceStage,
             string.Join("\n", "Ta réplique", ReplyLevel, ReplyReact, ReplySpoken),
-            Corrections,
+            longRun ? LongCorrections : Corrections,
             Opening,
-            VoiceMeta,
-            "La séance\n" + Briefing(tutor).TrimEnd());
+        };
+        if (longRun && web)
+        {
+            parts.Add(VoiceWeb(DateTime.Now));
+        }
+
+        parts.Add(VoiceMeta);
+        parts.Add("La séance\n" + Briefing(tutor).TrimEnd());
+        return string.Join("\n\n", parts);
+    }
 
     /// <summary>
     /// Ce qui precede le premier message de la conversation vocale, une seule fois : ce que l'on sait
@@ -4929,6 +4973,13 @@ internal static class TutorGenre
         if (context.Length > 0)
         {
             sb.Append("(Notes from the app about the learner, not said by the learner:)\n").Append(context).Append("\n\n");
+        }
+
+        var program = IsLong(tutor) ? LJ.Str(tutor, "program", VoiceProgramMax) : "";
+        if (program.Length > 0)
+        {
+            sb.Append("(Study programme, from the app — use it ONLY when the learner explicitly asks about their programme, next step, progress or what to work on; then answer by voice in a few sentences, without listing everything:)\n")
+              .Append(program).Append("\n\n");
         }
 
         var history = History(tutor, VoiceHistoryMax);

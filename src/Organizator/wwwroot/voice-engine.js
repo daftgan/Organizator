@@ -14,10 +14,11 @@
      var eng = OrganizatorVoice.create({
        container, avatar: { size } | false, language, whisperModel, sensitivity (0..100, 40 par défaut),
        keepAudio, detail, liveAsr (true par défaut), bargeIn: 'words' (défaut) | 'voice' | 'off',
+       endMs (silence qui clôt un énoncé, 650 ms par défaut, 400 à 2500 : plus long pour qui cherche ses mots),
        tts: { kokoroVoice, accent, speed, sapiVoice, sapiRate },
        conversation: { start: { …voiceStart }, greeting } | null,   (null : micro + transcription seulement)
        texts: { noiseResume },
-       onUserUtterance(text, info) → false pour ne pas envoyer
+       onUserUtterance(text, info) → false pour ne pas envoyer, ou la chaîne à envoyer à la place du texte
          (info : id, source 'stream'|'whisper', seconds, bargedIn, heard, url, urls, stt — stt seulement
          si Whisper a transcrit l'énoncé lui-même),
        onPartial(text) (texte en direct ; '' à l'effacement, après onUserUtterance s'il y en a un),
@@ -77,7 +78,7 @@
 
   var DEFAULTS = {
     container: null, avatar: {}, language: 'fr', whisperModel: 'base', sensitivity: 40, keepAudio: false, detail: false,
-    liveAsr: true, bargeIn: 'words',
+    liveAsr: true, bargeIn: 'words', endMs: END_MS,
     tts: { kokoroVoice: '', accent: '', speed: 1, sapiVoice: '', sapiRate: 0 },
     conversation: null, texts: {}
   };
@@ -1244,6 +1245,12 @@
       return clamp(E.opts.sensitivity == null ? 40 : Number(E.opts.sensitivity) || 0, 0, 100);
     }
 
+    /* Fin d'énoncé : le silence voulu (endMs). La transcription spéculative part 450 ms avant, jamais
+       plus tôt que SPEC_MS : avec une longue tolérance, une pause pour chercher ses mots ne lance pas
+       une transcription aussitôt annulée. */
+    function endMs() { var v = Number(E.opts.endMs); return isFinite(v) && v > 0 ? clamp(Math.round(v), 400, 2500) : END_MS; }
+    function specMs() { return Math.max(SPEC_MS, endMs() - 450); }
+
     /* Seuil (niveau de la bande voix) = plancher de bruit + marge, jamais sous un plancher absolu ; la
        sensibilité réduit l'un et l'autre. Recalibrage : à 50, marge de 16 dB (12 avant) et plancher
        absolu à −52 dB (−58 avant), mesurés sur la seule bande voix ; 40 par défaut. */
@@ -1313,11 +1320,11 @@
       } else {
         seg.run = 0; seg.silence += ms; seg.gap += ms;
         if (seg.gap > BARGE_GAP_MS) seg.cont = 0;
-        if (!seg.spec && !seg.live && !seg.barge && seg.silence >= SPEC_MS && seg.voiced >= MIN_MS) launchSpec(seg);
+        if (!seg.spec && !seg.live && !seg.barge && seg.silence >= specMs() && seg.voiced >= MIN_MS) launchSpec(seg);
       }
       /* Sans flux (ou flux en panne) : 700 ms de voix continue confirment le barge-in. */
       if (seg.barge === 'pending' && (!seg.live || seg.live.failed || seg.live.decodeError) && seg.cont >= BARGE_VOICE_MS) confirmBarge(seg);
-      if (seg.silence >= END_MS) speechEnd();
+      if (seg.silence >= endMs()) speechEnd();
       else if (seg.ms >= MAX_MS) speechEnd();
     }
 
@@ -1575,13 +1582,15 @@
       info.heard = E.pendingHeard;
       if (info.url == null) info.url = '';
       if (!info.urls) info.urls = [];
-      var sent = cb('onUserUtterance', text, info) !== false;
+      var back = cb('onUserUtterance', text, info);
+      var sent = back !== false;
       if (seg && seg.live) clearPartial(seg.live, true);
       if (!sent) {
         if (E.phase === 'transcribing') setPhase('listening');
         return;
       }
-      say(text, false)['catch'](noop);
+      /* Une chaîne rendue par le rappel part à la place du texte (le texte, suivi d'une note pour Claude). */
+      say(typeof back === 'string' && back.trim() ? back : text, false)['catch'](noop);
       if (seg) detailLater(info.id, seg.frames);
     }
 
