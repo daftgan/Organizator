@@ -67,10 +67,10 @@
      l'apprenant les lit en français. */
   var SCENARIOS = [
     { id: 'long', icon: 'mic', hue: 'listen', title: 'Discussion au long cours', name: 'Sam', long: true,
-      roleFr: 'un interlocuteur curieux de tout, qui cherche sur le web quand il le faut', goalFr: 'Parler anglais aussi longtemps que vous voulez, de tout : il vous corrige à voix haute de temps en temps, vous donne des conseils, et connaît votre programme si vous le lui demandez. « Let’s stop » pour finir.', minutes: '20-60 min',
-      tutorRole: 'Sam, a curious, well-read English conversation partner and tutor, happy to talk about anything for as long as the learner likes',
-      learnerGoal: 'Speak English for a long time about many different topics, and improve along the way thanks to corrections and tips',
-      setting: 'A long, relaxed, hands-free conversation that moves from topic to topic, led by the learner. When a topic runs dry, suggest a new one (the news, their work, their interests, a debate).',
+      roleFr: 'un bon copain anglophone, curieux de tout et drôle, qui sait que votre anglais n’est pas parfait', goalFr: 'Discuter en anglais aussi longtemps que vous voulez, de tout, comme avec un ami : il rebondit, raconte, cherche sur le web, vous reprend gentiment de temps en temps et connaît votre programme si vous le lui demandez. « Let’s stop » pour finir.', minutes: '20-60 min',
+      tutorRole: 'Sam, the learner’s friendly English-speaking buddy',
+      learnerGoal: 'Chat in English for as long as they like, about anything, and improve along the way',
+      setting: 'A long, relaxed chat between friends, moving from topic to topic.',
       voice: { accent: 'en-US', gender: 'male', n: 1 },
       phrases: ['Can we talk about…?', 'How do you say … in English?', 'Could you look it up?', 'Let’s stop here for today.'],
       open: ['Hey, good to see you! I’m Sam. What’s on your mind today?', 'Salut, content de vous voir ! Moi c’est Sam. Qu’avez-vous en tête aujourd’hui ?'],
@@ -463,7 +463,8 @@
       return { id: l.id, title: clean((doc && doc.title) || l.title, 200), summaryFr: clean(doc && doc.summaryFr, 700) };
     }, function () { return { id: l.id, title: clean(l.title, 200), summaryFr: '' }; });
     return lp.then(function (lesson) {
-      chat.lesson = lesson && lesson.title ? lesson : null;
+      /* La discussion au long cours suit les envies de l'apprenant : pas de cours du jour imposé comme sujet. */
+      chat.lesson = lesson && lesson.title && !scOf(chat).long ? lesson : null;
       if (scOf(chat).id !== 'news') return null;
       if (chat.lesson) {
         chat.scenario.setting += ' Start from the topic of today’s lesson, which the learner has studied: “' + chat.lesson.title + '”.';
@@ -949,7 +950,8 @@
         sensitivity: sensitivity(), keepAudio: true, detail: true, tts: ttsOf(chat), liveAsr: eo.liveAsr, bargeIn: bargeIn(),
         conversation: {
           start: {
-            mode: 'tutor', model: R.prefs.tutorModel || 'haiku', effort: '', name: 'Tuteur · ' + clean(chat.scenario && chat.scenario.title, 80),
+            mode: 'tutor', model: long ? (R.prefs.longModel || 'sonnet') : (R.prefs.tutorModel || 'haiku'),
+            effort: long ? (R.prefs.longEffort || '') : (R.prefs.tutorEffort || ''), name: 'Tuteur · ' + clean(chat.scenario && chat.scenario.title, 80),
             web: long,
             tutor: tutorStart
           },

@@ -860,12 +860,13 @@ public sealed class ServerBridge : IDisposable
     {
         var settings = _store.LoadSettings();
         var mode = VoiceChat.SanitizeMode(Str(payload, "mode"));
-        if (mode == VoiceChat.TutorMode && _policy.TutorModel() is { } imposed)
+        var tutor = mode == VoiceChat.TutorMode ? (payload["tutor"] as JsonObject)?.DeepClone() as JsonObject ?? new JsonObject() : null;
+        if (tutor is not null && _policy.TutorVoice(TutorGenre.IsLong(tutor)) is { } imposed)
         {
-            payload["model"] = imposed;
+            payload["model"] = imposed.Model;
+            payload["effort"] = imposed.Effort;
         }
 
-        var tutor = mode == VoiceChat.TutorMode ? (payload["tutor"] as JsonObject)?.DeepClone() as JsonObject ?? new JsonObject() : null;
         var options = new VoiceOptions(
             Model: AgentProvider.RequireModel(Str(payload, "model") ?? settings.VoiceModel),
             Effort: AgentProvider.RequireEffort(AgentProvider.Claude, Str(payload, "effort") ?? settings.VoiceEffort),

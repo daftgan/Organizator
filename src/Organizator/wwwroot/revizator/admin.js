@@ -293,8 +293,8 @@
       { login: 'moi', created: '2026-05-02T10:00:00Z', changed: '2026-05-02T10:00:00Z', admin: true, flagged: false, sessions: 2, devices: ['moi · Organizator (PC)', 'moi · iPhone Safari'], name: 'Dagan', lastActivity: Date.now() - 3600e3, hasData: true, me: true },
       { login: 'lea', created: '2026-09-12T18:00:00Z', changed: '2026-09-12T18:00:00Z', admin: false, flagged: false, sessions: 1, devices: ['lea · Android Chrome'], name: 'Léa', lastActivity: Date.now() - 2 * 86400e3, hasData: true, me: false }
     ],
-    policy: { models: { lessonModel: 'sonnet', lessonEffort: 'medium', genModel: 'sonnet', genEffort: 'low', gradeModel: 'sonnet', gradeEffort: 'medium', tutorModel: 'haiku', cardModel: 'haiku', profModel: 'sonnet', profEffort: 'low' }, imposed: false, changed: '', changedBy: '',
-      defaults: { lessonModel: 'sonnet', lessonEffort: 'medium', genModel: 'sonnet', genEffort: 'low', gradeModel: 'sonnet', gradeEffort: 'medium', tutorModel: 'haiku', cardModel: 'haiku' } }
+    policy: { models: { lessonModel: 'sonnet', lessonEffort: 'medium', genModel: 'sonnet', genEffort: 'low', gradeModel: 'sonnet', gradeEffort: 'medium', tutorModel: 'haiku', tutorEffort: '', longModel: 'sonnet', longEffort: 'low', cardModel: 'haiku', cardEffort: '', profModel: 'sonnet', profEffort: 'low' }, imposed: false, changed: '', changedBy: '',
+      defaults: { lessonModel: 'sonnet', lessonEffort: 'medium', genModel: 'sonnet', genEffort: 'low', gradeModel: 'sonnet', gradeEffort: 'medium', tutorModel: 'haiku', tutorEffort: '', longModel: 'sonnet', longEffort: 'low', cardModel: 'haiku', cardEffort: '' } }
   };
   function shimList() { return { users: JSON.parse(JSON.stringify(SHIM.users)), policy: JSON.parse(JSON.stringify(SHIM.policy)) }; }
   R.shim('learnPolicy', function () { return Object.assign(JSON.parse(JSON.stringify(SHIM.policy)), { admin: true }); });
