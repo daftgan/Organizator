@@ -1,8 +1,8 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    Révizator — service worker de l'application installable (docs/REVIZATOR-SERVER.md § 5.3)
-   Enregistré par app.js, en mode serveur seulement, sous l'adresse sw.js?v=<version du serveur> :
-   une nouvelle version du serveur change l'adresse, donc installe un nouveau service worker, dont le
-   cache porte la version ; l'ancien cache est supprimé à l'activation.
+   Enregistré par app.js, en mode serveur seulement, sous l'adresse sw.js?v=<version>-<commit> :
+   chaque déploiement change l'adresse, donc installe un nouveau service worker, dont le cache porte
+   la version ; l'ancien cache est supprimé à l'activation, et la page qui venait de s'ouvrir se recharge.
    Ne met en cache que l'enveloppe de la page (HTML, CSS, JS, polices, icônes) pour un démarrage
    rapide. Jamais les données : /api, /learn, /tts, /t/, /login, /logout, /pair, /download passent toujours au réseau, sans copie.
    - page (navigation) et revizator-server.js : réseau d'abord (le cookie décide de la page servie),

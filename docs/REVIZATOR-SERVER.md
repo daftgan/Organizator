@@ -101,7 +101,7 @@ Routes :
 | `GET /pair` | non | page **sans script** : avec `?c=<code>`, le code et un bouton « Connecter cet appareil » (rien n'est consommé : un aperçu de lien ne grille pas le code) ; sans, un champ pour le taper ; message selon `?e=` (`bad`, `blocked`, `origin`) |
 | `POST /pair` | code d'appairage | formulaire (`code`, tirets et minuscules tolérés) : le code est consommé, session ouverte pour son compte, cookie `rz_token` et 302 vers `/` ; échec (code inconnu, déjà servi, expiré) : 302 vers `/pair?e=bad`, compté comme un échec de connexion pour l'adresse |
 | `GET /` , `/index.html` | cookie | `wwwroot/index.html` avec deux injections (ci-dessous) ; sans session valide : 302 vers `/login` (un cookie périmé est retiré au passage ; 429 au-delà de la limite d'essais) |
-| `GET /revizator-server.js` | non | généré : `window.REVIZATOR_SERVER = { mode: 'revizator', version, wsUrl: '/api/ws' }` |
+| `GET /revizator-server.js` | non | généré : `window.REVIZATOR_SERVER = { mode: 'revizator', version, wsUrl: '/api/ws' }` — `version` = version de l'enveloppe, `<version>-<commit sur 12>` (`ServerConfig.ShellVersion`), sans commit `<version>-<démarrage en s>` |
 | `GET /<fichier de wwwroot>` | non | fichiers statiques de la page (aucune donnée personnelle) |
 | `GET /api/ws` | cookie ou `?token=` | WebSocket du pont (§ 4) |
 | `GET /learn/…`, `GET /t/<jeton>/learn/…` | cookie / jeton dans le chemin | dossier `learning/` (ce que sert `learn.organizator`) |
@@ -374,8 +374,10 @@ l'onglet Révizator puis l'onglet Dictée (sans « Transcrire les enregistrement
   worker à la racine : met en cache l'enveloppe de la page — HTML, CSS, JS, polices, icônes — pour un
   démarrage rapide ; **jamais** `/api`, `/learn`, `/tts`, `/t/`). Enregistré par `app.js` en
   mode serveur seulement (`bridge.mode === 'server'`, contexte sécurisé), sous l'adresse
-  `sw.js?v=<REVIZATOR_SERVER.version>` : une nouvelle version du serveur installe un nouveau service
-  worker, dont le cache (`revizator-shell-<version>`) remplace l'ancien. Page et `revizator-server.js` :
+  `sw.js?v=<REVIZATOR_SERVER.version>` (version + commit) : **chaque déploiement** installe un nouveau
+  service worker, dont le cache (`revizator-shell-<version>`) remplace l'ancien ; la page, ouverte par
+  l'ancien cache, se recharge une fois quand le nouveau prend la main (`controllerchange`, dans les 30 s
+  du lancement seulement). Page et `revizator-server.js` :
   réseau d'abord (copie hors ligne) ; autres fichiers : copie d'abord, relue en arrière-plan.
 - `mobile.css` n'agit que sous `@media (max-width: 600px)` (et `(hover: none)` / `(pointer: coarse)` pour
   les aides au survol et les raccourcis clavier) : en-tête d'une ligne collé en haut, onglets en bas

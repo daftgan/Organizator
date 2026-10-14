@@ -9620,7 +9620,15 @@
     if (h1) h1.textContent = 'Révizator';
     document.title = 'Révizator';
     if (bridge.mode === 'server' && navigator.serviceWorker && window.isSecureContext) {
-      /* La version dans l'adresse : un nouveau serveur installe un nouveau service worker (sw.js). */
+      /* La version dans l'adresse (version + commit) : chaque déploiement installe un nouveau service worker
+         (sw.js). Celui-ci prend la main dès qu'il est installé ; la page, encore servie par l'ancien cache,
+         se recharge alors une fois — dans les 30 s du lancement seulement, pour ne rien couper en cours. */
+      var swBoot = Date.now(), swHad = !!navigator.serviceWorker.controller, swReloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (!swHad || swReloaded || Date.now() - swBoot > 30000) return;
+        swReloaded = true;
+        location.reload();
+      });
       navigator.serviceWorker.register('sw.js?v=' + encodeURIComponent(String(window.REVIZATOR_SERVER.version || '0')))['catch'](function (e) { console.warn('[organizator] service worker', e); });
     }
   }
