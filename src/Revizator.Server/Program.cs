@@ -256,6 +256,35 @@ static void CheckClaudeToken(HostLog log)
     }
 }
 
+/// <summary>Signalements (vue « Signaler ») : routine reglee ou non, et pourquoi.</summary>
+static void CheckIssueRoutine(ServerConfig config, HostLog log)
+{
+    var url = Environment.GetEnvironmentVariable("REVIZATOR_ISSUE_ROUTINE_URL")?.Trim() ?? "";
+    if (url.Length == 0 && config.IssueRoutineToken.Length == 0)
+    {
+        log.Info("Signalements vers Claude Code : non branches (REVIZATOR_ISSUE_ROUTINE_URL / _TOKEN) ; ils restent en attente");
+        return;
+    }
+
+    if (config.IssueRoutineUrl.Length == 0)
+    {
+        log.Warn("REVIZATOR_ISSUE_ROUTINE_URL n'est pas une adresse de routine (https://api.anthropic.com/v1/claude_code/routines/trig_…/fire) : signalements en attente seulement");
+    }
+    else if (config.IssueRoutineToken.Length == 0)
+    {
+        log.Warn("REVIZATOR_ISSUE_ROUTINE_TOKEN absent : signalements en attente seulement");
+    }
+    else
+    {
+        if (!config.IssueRoutineToken.StartsWith("sk-ant-", StringComparison.Ordinal))
+        {
+            log.Warn("REVIZATOR_ISSUE_ROUTINE_TOKEN ne commence pas par sk-ant- : probablement mal copie");
+        }
+
+        log.Info("Signalements vers Claude Code : branches (lances par les administrateurs)");
+    }
+}
+
 /// <summary>Saisie masquee au terminal (docker exec -it) : les caracteres ne s'affichent pas.</summary>
 static string ReadSecret(string prompt)
 {
@@ -301,6 +330,7 @@ static async Task<int> ServeAsync(ServerConfig config)
         + (config.TrustedProxies.Count == 0 ? "aucun" : string.Join(", ", config.TrustedProxies)));
 
     CheckClaudeToken(log);
+    CheckIssueRoutine(config, log);
 
     // Lance depuis une session Claude Code, le serveur transmettrait ses marqueurs a chaque claude -p.
     var scrubbed = InheritedEnvironment.Scrub();

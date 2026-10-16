@@ -128,6 +128,7 @@
   var REMOTE_TYPES = {};
   ('learnLoad learnSave learnDoc learnDocSave learnDocDelete learnNews learnGenerate learnCancel learnJobs learnWait learnBoard learnPolicy learnItemPool '
     + 'adminUsers adminUserSet adminUserRemove adminUserAdmin adminPolicySave '
+    + 'issueStatus issueSend issueLaunch issueRemove '
     + 'ttsStatus ttsDownload ttsRemove ttsWarm speak speakScript cancelSpeak ttsClearCache '
     + 'whisperStatus whisperDownload whisperRemove whisperWarm transcribe cancelTranscribe '
     + 'asrStatus asrDownload asrRemove asrWarm asrStart asrFeed asrEnd asrReset asrStop '

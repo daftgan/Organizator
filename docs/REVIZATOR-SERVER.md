@@ -79,6 +79,8 @@ Configuration par variables d'environnement :
 | `REVIZATOR_ALLOWED_ORIGINS` | `https://app.organizator` | origines autorisées en CORS et pour `/api/login` (la page d'Organizator dans WebView2) |
 | `REVIZATOR_RELEASES_REPO` | `daftgan/Organizator` | dépôt GitHub dont la dernière Release fournit l'installateur d'Organizator (relue toutes les heures, copiée dans `releases/` du dossier de données) ; `none` : seulement les installateurs déposés dans `releases/` |
 | `REVIZATOR_GITHUB_TOKEN` | — | jeton GitHub en lecture seule du dépôt (dépôt privé), dans `secrets.env` |
+| `REVIZATOR_ISSUE_ROUTINE_URL` | — | point d'entrée API de la routine Claude Code qui reçoit les signalements (`https://api.anthropic.com/v1/claude_code/routines/trig_…/fire`, ou `trig_…` seul) ; toute autre adresse est refusée (le jeton ne part jamais ailleurs). § 6 quinquies |
+| `REVIZATOR_ISSUE_ROUTINE_TOKEN` | — | jeton de cette routine (`sk-ant-oat01-…`, blancs retirés), dans `secrets.env`. Sans l'un des deux : les signalements restent en attente |
 | `REVIZATOR_TRUSTED_PROXIES` | `private` | adresses ou réseaux (`192.168.1.11`, `172.16.0.0/12`, séparés par des virgules ; `private` = réseaux privés et locaux, `none` = aucun) dont `X-Forwarded-For` et `X-Forwarded-Proto` font foi ; une valeur illisible empêche le démarrage |
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | jeton de `claude setup-token`, lu par Claude Code |
 | `REVIZATOR_CLAUDE` | `claude` (dans le `PATH`) | chemin de l'exécutable Claude Code |
@@ -218,6 +220,8 @@ Types acceptés (tout autre type : erreur « Type de message non disponible sur 
   `learnPolicy` (modèles de l'administrateur, § 6 ter), `learnItemPool` (réponses partagées, § 6 quater) ;
 - administration (§ 6 ter, refusée à qui n'administre pas) : `adminUsers`, `adminUserSet`, `adminUserRemove`,
   `adminUserAdmin`, `adminPolicySave` ;
+- signalements (§ 6 quinquies ; tout compte écrit, l'administrateur lance) : `issueStatus`, `issueSend`,
+  `issueLaunch`, `issueRemove` ;
 - voix anglaises : `ttsStatus`, `ttsDownload`, `ttsRemove`, `ttsWarm`, `speak`, `speakScript`,
   `cancelSpeak`, `ttsClearCache` ;
 - reconnaissance : `whisperStatus`, `whisperDownload`, `whisperRemove`, `whisperWarm`, `transcribe`,
@@ -524,6 +528,40 @@ quadratique, accord exact et à un niveau près, biais moyen (en niveaux), écar
 de confusion, fidélité d'un passage à l'autre (même niveau, QWK, écart moyen), notes S&W si le jeu en a, coût ;
 `--out` écrit le détail en JSON. `--limit` prend les échantillons à tour de rôle par niveau. Vérifié avec un
 faux `claude` (`REVIZATOR_CLAUDE`) ; aucun jeu noté réel n'est livré (licences).
+
+## 6 quinquies. Signalements vers Claude Code
+
+Vue **Signaler** (`revizator/issues.js`, `issues.css`), ouverte à tout compte du serveur : un titre
+facultatif et un texte (8 000 caractères au plus ; la dictée s'y branche comme sur toute zone de texte).
+`IssueReports.cs` les garde dans `issues.json` du dossier de données (300 au plus, le plus récent d'abord ;
+`last` = dernier numéro donné, jamais réutilisé). **Seul un administrateur lance vers Claude Code** : ses
+propres signalements partent dès l'envoi ; ceux des autres comptes attendent qu'il les lise (il les voit
+tous, texte compris, dans « À lire · des autres comptes » et sur une carte de l'accueil), puis il les lance
+ou les écarte. Un membre ne voit que les siens, et peut retirer ceux qui attendent encore.
+
+Lancer, c'est déclencher une **routine** de Claude Code (claude.ai/code/routines) par son point d'entrée
+API : `POST https://api.anthropic.com/v1/claude_code/routines/trig_…/fire`, en-têtes
+`Authorization: Bearer <jeton de la routine>`, `anthropic-version: 2023-06-01`,
+`anthropic-beta: experimental-cc-routine-2026-04-01` (contrat daté du point d'entrée, encore
+expérimental), corps `{ "text": … }`. La réponse donne `claude_code_session_id` et
+`claude_code_session_url`, gardés avec le signalement. Le texte remis (bloc `routine-fire-payload` de la
+session) : numéro, auteur et date (heure de Paris), administrateur qui lance s'il n'en est pas l'auteur,
+adresse, version et commit du serveur, version de la page, vue d'où l'on venait, appareil, titre, puis le
+texte tel qu'écrit. La routine elle-même (dépôt, consigne, pull request) se règle sur claude.ai : voir
+`deploy/README.md`, « Signalements vers Claude Code ».
+
+| Type | Payload | Réponse |
+|---|---|---|
+| `issueStatus` | `{}` | `{ enabled, canLaunch, admin, max, pending, issues: [{ id, login, at, title, text, view, state: pending\|sent, sentAt, sentBy, sessionUrl, mine }] }` — un membre : les siens ; un administrateur : tous (100 au plus) |
+| `issueSend` | `{ ref, title, text, view, page, device }` | `{ issue, status, repeated, error? }` — gardé ; lancé aussitôt si l'auteur administre et qu'une routine est réglée (`error` : gardé mais pas lancé). Même `ref` du même compte : le premier est rendu, rien n'est recréé (le point d'entrée n'a pas de clé d'idempotence) |
+| `issueLaunch` | `{ id }` | `{ issue, status }` — administrateur seulement ; déjà lancé : rendu tel quel |
+| `issueRemove` | `{ id }` | `{ status }` — administrateur : n'importe lequel ; membre : les siens encore en attente |
+
+Garde-fous : un membre écrit 10 signalements par heure au plus ; le serveur lance 20 sessions par heure au
+plus (la routine en accepte 30, **Run now** compris). Erreurs de la routine rendues lisibles (401 : jeton à
+régénérer ; 404 : routine introuvable ; 429 : délai de `Retry-After` ; 5xx : réessayer). Sans réponse en
+40 s, rien n'est marqué lancé et la page invite à regarder claude.ai/code avant de relancer (la session a pu
+être créée). Le jeton n'apparaît jamais dans les journaux ni dans la page.
 
 ## 7. Déploiement (`deploy/`)
 
