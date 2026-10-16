@@ -50,6 +50,28 @@ public sealed class ServerConfig
     /// <summary>Jeton GitHub en lecture seule du depot (depot prive) ; vide pour un depot public.</summary>
     public required string GitHubToken { get; init; }
 
+    /// <summary>
+    /// Point d'entree API de la routine de Claude Code qui recoit les signalements (vue « Signaler », voir
+    /// IssueReports) : <c>https://api.anthropic.com/v1/claude_code/routines/trig_…/fire</c>, ou l'identifiant
+    /// <c>trig_…</c> seul. Vide, ou toute autre adresse (le jeton ne part jamais ailleurs) : les signalements restent en attente.
+    /// </summary>
+    public required string IssueRoutineUrl { get; init; }
+
+    /// <summary>Jeton de la routine (<c>sk-ant-oat01-…</c>, montre une fois par claude.ai), blancs retires.</summary>
+    public required string IssueRoutineToken { get; init; }
+
+    /// <summary>Adresse de la routine de signalements, ou "" si la valeur n'en designe pas une.</summary>
+    public static string ParseRoutineUrl(string value)
+    {
+        var v = value.Trim();
+        if (System.Text.RegularExpressions.Regex.IsMatch(v, "^trig_[A-Za-z0-9]{1,80}$"))
+        {
+            return "https://api.anthropic.com/v1/claude_code/routines/" + v + "/fire";
+        }
+
+        return System.Text.RegularExpressions.Regex.IsMatch(v, "^https://api\\.anthropic\\.com/v1/claude_code/routines/trig_[A-Za-z0-9]{1,80}/fire$") ? v : "";
+    }
+
     /// <summary>Reseaux prives et locaux : valeur par defaut de <c>REVIZATOR_TRUSTED_PROXIES</c>.</summary>
     public const string PrivateNetworks = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,fc00::/7,fe80::/10";
 
@@ -116,6 +138,8 @@ public sealed class ServerConfig
             TrustedProxies = ParseNetworks(Read("REVIZATOR_TRUSTED_PROXIES", "private")),
             ReleasesRepo = Read("REVIZATOR_RELEASES_REPO", "daftgan/Organizator") is var repo && repo.Equals("none", StringComparison.OrdinalIgnoreCase) ? "" : repo,
             GitHubToken = Read("REVIZATOR_GITHUB_TOKEN", ""),
+            IssueRoutineUrl = ParseRoutineUrl(Read("REVIZATOR_ISSUE_ROUTINE_URL", "")),
+            IssueRoutineToken = new string(Read("REVIZATOR_ISSUE_ROUTINE_TOKEN", "").Where(c => !char.IsWhiteSpace(c)).ToArray()),
         };
     }
 }

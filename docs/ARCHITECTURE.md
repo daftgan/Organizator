@@ -64,7 +64,7 @@ src/Organizator/
                               bridge.js (pont : WebView2, WebSocket du serveur Révizator, shim), mobile.css (téléphone, chargé par le serveur seulement),
                               manifest.webmanifest, sw.js, icons/ (application installable, servies par le serveur seulement)
     revizator/                la page Révizator : core.js + revizator.css (noyau, API window.Revizator), srs.js, items.js, exercise.js (+ exercise.css),
-                              lesson.js (+ lesson.css), test.js (+ test.css), progress.js (+ progress.css), tutor.js (+ tutor.css), fixtures/ (documents simulés du shim)
+                              lesson.js (+ lesson.css), test.js (+ test.css), progress.js (+ progress.css), tutor.js (+ tutor.css), issues.js (+ issues.css, vue « Signaler »), fixtures/ (documents simulés du shim)
 src/Revizator.Server/
   Revizator.Server.csproj     net8.0, Microsoft.NET.Sdk.Web, exécutable revizator-server ; compile 19 fichiers de src/Organizator/Services par liens (Shared\…),
                               copie src/Organizator/wwwroot sous wwwroot/, natives linux-x64 de Whisper.net (runtimes/linux-x64/) et de sherpa-onnx (sherpa/linux-x64/)
@@ -76,6 +76,7 @@ src/Revizator.Server/
                               /learn, /tts, /t/<jeton>/, en-têtes de sécurité, WebSocket
   WsHub.cs                    connexions WebSocket : file d'envoi par connexion, ping 20 s, 32 Mo, jeton revérifié, fermeture à l'arrêt
   ServerBridge.cs             types autorisés et leurs gestionnaires (ceux de BridgeHost), getState / saveSettings du téléphone, learnChanged
+  IssueReports.cs             signalements de la vue « Signaler » : issues.json, lancement par l'administrateur vers une routine de Claude Code (POST …/routines/trig_…/fire)
   Importer.cs                 import de learning.json et learning/ depuis une copie du dossier de données du PC
   Platform/                   copies réduites d'AgentDraft (Clean/Explain) et de BitbucketPullRequests (NormalizeUrl)
 deploy/                       Dockerfile, docker-compose.yml (stack Komodo), .env.example, README.md (installation), FINALISER.md (liste de contrôle)
@@ -433,6 +434,7 @@ L'hôte peut aussi envoyer des événements non sollicités : `{ event: "<nom>",
 | `learnBoard`      | `{ weeks? }` (12 par défaut, 26 au plus)                       | serveur Révizator seulement : `{ now, me, weeks: [lundi 0 h, ms…], rules: { dailyCap, dayPoints, goalPoints }, players: [{ name, me, hidden (vous seul), since, theta, totalMinutes, weeks: [{ points, minutes, days, sessions, goal, cards, theta }], toeic: [{ at, score }] }] }` — classement des comptes, agrégats seulement (`board.js`, voir `docs/REVIZATOR-SERVER.md` § 6 bis) |
 | `learnItemPool`   | `{}`                                                           | serveur Révizator seulement : `{ bilans: [{ items: [{ s, c, f, g, u, o, x }] }] }` — les réponses aux bilans express des **autres** comptes, sans nom ni date ni texte (40 bilans par compte au plus, mélangés ; vide tant que moins de deux autres comptes y contribuent ; un compte retiré du classement n'y est pas ; la page en garde 150), pour la difficulté apprise (`test.js`, `fitLearned`) |
 | `learnPolicy` / `admin*` | voir `docs/REVIZATOR-SERVER.md` § 6 ter | serveur Révizator seulement : modèles fixés par l'administrateur, comptes (`adminUsers`, `adminUserSet`, `adminUserRemove`, `adminUserAdmin`, `adminPolicySave`) — `admin.js` |
+| `issue*` | voir `docs/REVIZATOR-SERVER.md` § 6 quinquies | serveur Révizator seulement : signalements écrits par tout compte, lancés vers une routine de Claude Code (cloud) par l'administrateur (`issueStatus`, `issueSend`, `issueLaunch`, `issueRemove`) — `issues.js` |
 | `learnCancel` / `learnJobs` / `learnWait` | `{ job }` / `{}` / `{ job }` | `{ cancelled }` / `{ running: [{ job, kind, startedAt, phase, text }], recent: [{ job, kind, id, ok, error, endedAt }] }` / comme `learnGenerate` (reprise d'un travail après rechargement de la page) |
 | `ttsStatus`       | `{}`                                                           | `{ ready, dir, url: "https://tts.organizator/", threads, downloadSize, runtime: { version, downloaded, size }, model: { id: "kokoro-v1_0", label, revision, size, downloaded, downloading, received, total }, voices: [{ id, label, accent: "en-US"\|"en-GB", gender: "F"\|"M", grade }], loaded, cache: { files, bytes, max } }` — voir « Synthèse vocale » |
 | `ttsDownload` / `ttsRemove` / `ttsWarm` | `{}` / `{}` / `{ accent }` | `ttsStatus` une fois tout sur le disque (l'UI attend 1 h) / `{ removed }` (refusé pendant une synthèse ; le cache reste) / `{}` aussitôt |

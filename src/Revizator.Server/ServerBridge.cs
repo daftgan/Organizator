@@ -31,6 +31,8 @@ public sealed class ServerBridge : IDisposable
         "learnGenerate", "learnCancel", "learnJobs", "learnWait", "learnBoard", "learnPolicy", "learnItemPool",
         // administration (refusee a qui n'administre pas le serveur)
         "adminUsers", "adminUserSet", "adminUserRemove", "adminUserAdmin", "adminPolicySave",
+        // signalements : tout compte en ecrit, l'administrateur les lance vers Claude Code (cloud)
+        "issueStatus", "issueSend", "issueLaunch", "issueRemove",
         // voix anglaises
         "ttsStatus", "ttsDownload", "ttsRemove", "ttsWarm", "speak", "speakScript", "cancelSpeak", "ttsClearCache",
         // reconnaissance
@@ -61,6 +63,7 @@ public sealed class ServerBridge : IDisposable
     private readonly LiveAsr _asr;
     private readonly WhisperTranscriber _whisper;
     private readonly VoiceChat _voice;
+    private readonly IssueReports _issues;
 
     // Compte qui a lance un travail des services communs (job de voix ou de transcription, session de
     // reconnaissance, conversation) : ses evenements ne vont qu'a lui. Purge des plus anciens au-dela de 4 000.
@@ -77,6 +80,7 @@ public sealed class ServerBridge : IDisposable
         _users = users;
         _tokens = tokens;
         _policy = new AdminPolicy(config.DataDir, log);
+        _issues = new IssueReports(config, log);
         Func<IReadOnlyList<UserAccount>> accounts = users.List;
         _config = config;
         _log = log;
@@ -121,6 +125,7 @@ public sealed class ServerBridge : IDisposable
         {
             _voice.Dispose();
             _asr.Dispose();
+            _issues.Dispose();
         }
         catch (Exception ex)
         {
@@ -303,6 +308,10 @@ public sealed class ServerBridge : IDisposable
         "adminUserRemove" => AdminUserRemove(payload, login),
         "adminUserAdmin" => AdminUserAdmin(payload, login),
         "adminPolicySave" => AdminPolicySave(payload, login),
+        "issueStatus" => _issues.Status(login, _users.IsAdmin(login)),
+        "issueSend" => await _issues.SendAsync(payload, login, _users.IsAdmin(login)).ConfigureAwait(false),
+        "issueLaunch" => await _issues.LaunchAsync(payload, login, _users.IsAdmin(login)).ConfigureAwait(false),
+        "issueRemove" => await _issues.RemoveAsync(payload, login, _users.IsAdmin(login)).ConfigureAwait(false),
         "ttsStatus" => await Task.Run(_tts.Status).ConfigureAwait(false),
         "ttsDownload" => await DownloadTtsAsync().ConfigureAwait(false),
         "ttsRemove" => new JsonObject { ["removed"] = await _tts.RemoveAsync().ConfigureAwait(false) },
