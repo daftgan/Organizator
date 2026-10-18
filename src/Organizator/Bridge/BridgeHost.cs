@@ -673,6 +673,8 @@ public sealed class BridgeHost
         var keep = Flag(payload, "keep");
         // P(en) coute un passage d'encodeur de plus : accent = false le saute (tuteur, ou l'attente compte).
         var accent = payload["accent"] is not JsonValue accentValue || !accentValue.TryGetValue<bool>(out var accentOn) || accentOn;
+        // Conversation vocale : contexte audio reduit a la phrase (WhisperTranscriber.QuickContext).
+        var quick = Flag(payload, "quick");
 
         if (!string.IsNullOrWhiteSpace(path))
         {
@@ -713,7 +715,7 @@ public sealed class BridgeHost
         }
 
         var result = await _whisper.TranscribeAsync(job, ct => AudioDecoder.FromWav(bytes, ct), model, language,
-            paragraphs: false, what: detail ? "dictee (detail)" : "dictee", detail, reference, accent).ConfigureAwait(true);
+            paragraphs: false, what: detail ? "dictee (detail)" : "dictee", detail, reference, accent, quick).ConfigureAwait(true);
         if (!keep)
         {
             return result;

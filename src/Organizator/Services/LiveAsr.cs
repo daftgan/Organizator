@@ -105,7 +105,8 @@ public sealed class LiveAsr : IDisposable
     public const int TailPaddingSamples = SampleRate * 3 / 10;
 
     // Hors ligne : chaque decodage est un calcul d'un bloc, autant de fils que raisonnable sans affamer l'avatar.
-    public static readonly int Threads = Math.Clamp(Environment.ProcessorCount / 2, 2, 6);
+    // Au moins 4 fils quand la machine les a : sur le serveur a 4 coeurs, la moitie n'en laissait que 2.
+    public static readonly int Threads = Math.Clamp(Math.Max(Environment.ProcessorCount / 2, Math.Min(Environment.ProcessorCount, 4)), 2, 6);
 
     private static readonly FieldInfo? RecognizerHandle = typeof(OfflineRecognizer).GetField("_handle", BindingFlags.Instance | BindingFlags.NonPublic);
     private static readonly CultureInfo French = CultureInfo.GetCultureInfo("fr-FR");

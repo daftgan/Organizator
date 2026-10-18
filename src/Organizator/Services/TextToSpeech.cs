@@ -165,7 +165,8 @@ public sealed class TextToSpeech
     private static readonly TimeSpan ProgressEvery = TimeSpan.FromMilliseconds(250);
 
     // Le gain s'arrete vers 6 fils : au-dela, le calcul deborde sur les coeurs E et LP-E, plus lents.
-    private static readonly int Threads = Math.Clamp(Environment.ProcessorCount / 2, 2, 6);
+    // Au moins 4 fils quand la machine les a : sur le serveur a 4 coeurs, la moitie n'en laissait que 2.
+    private static readonly int Threads = Math.Clamp(Math.Max(Environment.ProcessorCount / 2, Math.Min(Environment.ProcessorCount, 4)), 2, 6);
 
     private static readonly FieldInfo? TtsHandle = typeof(OfflineTts).GetField("_handle", BindingFlags.Instance | BindingFlags.NonPublic);
 

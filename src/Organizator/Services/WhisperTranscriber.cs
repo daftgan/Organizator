@@ -384,8 +384,10 @@ public sealed class WhisperTranscriber
     /// s'il est donne. Le texte attendu ne sert qu'a l'alignement : jamais de <c>prompt</c> a Whisper, qui le
     /// recopierait. <paramref name="accent"/> = false saute la detection libre (P(en) nul), qui coute un passage
     /// d'encodeur de plus. Sans <paramref name="detail"/>, la transcription est exactement celle de la dictee.
+    /// <paramref name="quick"/> (conversation vocale) : contexte audio reduit a la duree de la phrase
+    /// (<see cref="QuickContext"/>), avec reprise en contexte complet si le texte parait invente (<see cref="Suspicious"/>).
     /// </summary>
-    public async Task<JsonObject> TranscribeAsync(string job, Func<CancellationToken, float[]> load, string modelId, string language, bool paragraphs, string what, bool detail, string? reference, bool accent = true)
+    public async Task<JsonObject> TranscribeAsync(string job, Func<CancellationToken, float[]> load, string modelId, string language, bool paragraphs, string what, bool detail, string? reference, bool accent = true, bool quick = false)
     {
         if (string.IsNullOrWhiteSpace(job))
         {
@@ -429,7 +431,20 @@ public sealed class WhisperTranscriber
                 Emit(new JsonObject { ["job"] = job, ["phase"] = "load" });
                 var factory = await Task.Run(() => FactoryFor(model), ct).ConfigureAwait(false);
                 Emit(new JsonObject { ["job"] = job, ["phase"] = "transcribe", ["percent"] = 0 });
-                var run = await Task.Run(() => RunAsync(factory, samples, language, paragraphs, detail, detail && accent, job, ct), ct).ConfigureAwait(false);
+                var context = quick ? QuickContext(seconds) : 0;
+                var run = await Task.Run(() => RunAsync(factory, samples, language, paragraphs, detail, detail && accent, job, context, ct), ct).ConfigureAwait(false);
+                var contextNote = "";
+                if (context > 0)
+                {
+                    contextNote = $", contexte {context / ContextPerSecond} s";
+                    if (Suspicious(run.Text, seconds))
+                    {
+                        // Un contexte reduit fait parfois inventer Whisper (repetitions, phrase hors sujet) : on refait en entier.
+                        contextNote += " suspect, repris en entier";
+                        run = await Task.Run(() => RunAsync(factory, samples, language, paragraphs, detail, detail && accent, job, 0, ct), ct).ConfigureAwait(false);
+                    }
+                }
+
                 var (text, detected) = (run.Text, run.Language);
                 var result = new JsonObject
                 {
@@ -443,7 +458,7 @@ public sealed class WhisperTranscriber
                 var summary = detail ? " ; detail : " + AddDetail(result, run, samples, reference) : "";
                 watch.Stop();
                 result["ms"] = watch.ElapsedMilliseconds;
-                _log.Info($"Whisper : {what} de {seconds:0.0} s transcrit en {watch.ElapsedMilliseconds} ms ({model.Id}, {detected}, {text.Length} caracteres, {Threads} fils){summary}");
+                _log.Info($"Whisper : {what} de {seconds:0.0} s transcrit en {watch.ElapsedMilliseconds} ms ({model.Id}, {detected}, {text.Length} caracteres, {Threads} fils{contextNote}){summary}");
                 return result;
             }
             finally
@@ -511,7 +526,55 @@ public sealed class WhisperTranscriber
     /// </summary>
     internal static readonly int Threads = Math.Clamp(Math.Max(Environment.ProcessorCount / 2, Math.Min(Environment.ProcessorCount, 4)), 2, 8);
 
-    private async Task<RunResult> RunAsync(WhisperFactory factory, float[] samples, string language, bool paragraphs, bool detail, bool accent, string job, CancellationToken ct)
+    /// <summary>Trames d'encodeur par seconde d'audio : 1 500 pour les 30 s d'une fenetre de Whisper.</summary>
+    private const int ContextPerSecond = 50;
+
+    /// <summary>
+    /// Contexte audio d'une phrase de conversation : sa duree plus 3 s de marge, 10 s au moins ; 0 (fenetre entiere)
+    /// au-dela de 26 s. Whisper traite toujours 30 s d'audio, completees par du silence : sur le serveur, 2,6 s
+    /// pour 5 s de parole comme pour 11. Un encodeur de 10 s en fait trois fois moins.
+    /// </summary>
+    internal static int QuickContext(double seconds)
+        => seconds > 26 ? 0 : Math.Clamp((int)Math.Ceiling((seconds + 3) * ContextPerSecond), 10 * ContextPerSecond, 30 * ContextPerSecond);
+
+    /// <summary>
+    /// Texte probablement invente : rien (pour une phrase d'une seconde ou plus), plus de 5 mots par seconde,
+    /// ou un mot ou un groupe de deux ou trois mots repete trois fois de suite.
+    /// </summary>
+    internal static bool Suspicious(string text, double seconds)
+    {
+        var words = Regex.Split((text ?? "").ToLowerInvariant(), @"[^\p{L}\p{N}']+").Where(w => w.Length > 0).ToList();
+        if (words.Count == 0)
+        {
+            return seconds >= 1;
+        }
+
+        if (words.Count > Math.Max(6, seconds * 5))
+        {
+            return true;
+        }
+
+        for (var n = 1; n <= 3; n++)
+        {
+            for (var i = 0; i + 3 * n <= words.Count; i++)
+            {
+                var repeated = true;
+                for (var k = 0; k < n && repeated; k++)
+                {
+                    repeated = words[i + k] == words[i + n + k] && words[i + k] == words[i + 2 * n + k];
+                }
+
+                if (repeated)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<RunResult> RunAsync(WhisperFactory factory, float[] samples, string language, bool paragraphs, bool detail, bool accent, string job, int context, CancellationToken ct)
     {
         var last = Stopwatch.StartNew();
         var threads = Threads;
@@ -528,6 +591,11 @@ public sealed class WhisperTranscriber
                 last.Restart();
                 Emit(new JsonObject { ["job"] = job, ["phase"] = "transcribe", ["percent"] = percent });
             });
+        if (context > 0)
+        {
+            builder = builder.WithAudioContextSize(context);
+        }
+
         if (detail)
         {
             // Horodatage et probabilite de chaque jeton ; toujours sans prompt (voir TranscribeAsync).

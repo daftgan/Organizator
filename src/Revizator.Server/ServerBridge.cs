@@ -722,6 +722,8 @@ public sealed class ServerBridge : IDisposable
         var detail = Flag(payload, "detail") || reference.Length > 0;
         var keep = Flag(payload, "keep");
         var accent = payload["accent"] is not JsonValue accentValue || !accentValue.TryGetValue<bool>(out var accentOn) || accentOn;
+        // Conversation vocale : contexte audio reduit a la phrase (WhisperTranscriber.QuickContext).
+        var quick = Flag(payload, "quick");
 
         if (!string.IsNullOrWhiteSpace(Str(payload, "path")))
         {
@@ -749,7 +751,7 @@ public sealed class ServerBridge : IDisposable
         }
 
         var result = await _whisper.TranscribeAsync(job, ct => AudioDecoder.FromWav(bytes, ct), model, language,
-            paragraphs: false, what: detail ? "dictee (detail)" : "dictee", detail, reference, accent).ConfigureAwait(false);
+            paragraphs: false, what: detail ? "dictee (detail)" : "dictee", detail, reference, accent, quick).ConfigureAwait(false);
         if (!keep)
         {
             return result;
