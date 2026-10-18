@@ -15,6 +15,7 @@
        container, avatar: { size } | false, language, whisperModel, sensitivity (0..100, 40 par défaut),
        keepAudio, detail, liveAsr (true par défaut), bargeIn: 'words' (défaut) | 'voice' | 'off',
        endMs (silence qui clôt un énoncé, 650 ms par défaut, 400 à 2500 : plus long pour qui cherche ses mots),
+       keepAwake (false par défaut : vrai, l'écran reste allumé tant que le moteur tourne — Screen Wake Lock),
        tts: { kokoroVoice, accent, speed, sapiVoice, sapiRate },
        conversation: { start: { …voiceStart }, greeting } | null,   (null : micro + transcription seulement)
        texts: { noiseResume },
@@ -23,7 +24,8 @@
          si Whisper a transcrit l'énoncé lui-même),
        onPartial(text) (texte en direct ; '' à l'effacement, après onUserUtterance s'il y en a un),
        onUtteranceDetail(id, stt | null, { url }) (detail/keepAudio en flux : Whisper en arrière-plan),
-       onSentence(text, { turn, index, replay? }),
+       onSentence(text, { turn, index, replay?, timing? }) (timing : première phrase d'une réponse seulement,
+         en ms entières ≥ 0 : { total, silence, stt, think, voice, spoken } — voir timingOf),
        onReply({ turn, sentences, full }), onMeta(meta, { turn }), onReplyDone({ turn, full, heard }),
        onInterrupt({ turn, heard }), onPhase(phase, { text }), onNotice(notice | null, { kind }), onError(err)
      });
@@ -33,8 +35,13 @@
      eng.feed(Float32Array) (essais).
      OrganizatorVoice.isJunk(text), .whisper() (dernier état Whisper connu), .tts() (dernier état Kokoro),
      .asr() / .asrStatus(force) / .downloadAsr(lang | id du modèle) (transcription en direct), .active() (le moteur démarré).
+     eng.state().wakeLock : 'held' | 'off' | 'unsupported' | 'error' (verrou d'écran, option keepAwake).
    Un seul AudioContext pour toute la page ; un seul moteur actif : en créer ou en démarrer un autre
    arrête le premier (qui passe en phase `idle`).
+   Page cachée (écran éteint, autre application) : rien ne s'arrête ici. Au retour, et quand le système
+   coupe le son (piste micro terminée ou muette, contexte suspendu ou interrompu sur iOS), le contexte
+   reprend et le micro est rouvert. Une réponse dont la liaison au serveur a été coupée (évènement
+   `connection` du pont) et qui ne donne plus signe de vie après le retour est close en erreur.
    ═══════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
@@ -64,6 +71,13 @@
   var DUCK = 0.25, DUCK_S = 0.08, UNDUCK_S = 0.15, BARGE_VOICE_MS = 700, BARGE_GAP_MS = 120;
   var ECHO_SHARE = 0.7, ECHO_AFTER_MS = 1500, ECHO_SENTENCES = 3;
 
+  /* Veille. Micro rouvert au plus toutes les 5 s (au-delà : avis « Réessayer »), contexte relancé au plus
+     une fois par seconde sur ses propres changements d'état. Réponse coupée par une perte de liaison :
+     close après 60 s sans nouvelle depuis le retour, et, si aucune phrase n'était arrivée, pas avant que
+     la limite du serveur (3 min par tour, plus une marge) soit passée — Claude peut réfléchir longtemps. */
+  var MIC_RETRY_MS = 5000, CTX_RETRY_MS = 1000;
+  var LOST_MS = 60000, TURN_MS = 200000, LOST_POLL_MS = 5000;
+
   /* Ce que Whisper « entend » dans le silence ou le bruit : génériques de vidéos, didascalies. */
   var JUNK = [
     /sous-?titr/i, /merci d.avoir regard/i, /merci de (votre|nous avoir) (attention|regard)/i, /abonnez-?vous/i,
@@ -78,7 +92,7 @@
 
   var DEFAULTS = {
     container: null, avatar: {}, language: 'fr', whisperModel: 'base', sensitivity: 40, keepAudio: false, detail: false,
-    liveAsr: true, bargeIn: 'words', endMs: END_MS,
+    liveAsr: true, bargeIn: 'words', endMs: END_MS, keepAwake: false,
     tts: { kokoroVoice: '', accent: '', speed: 1, sapiVoice: '', sapiRate: 0 },
     conversation: null, texts: {}
   };
@@ -332,6 +346,8 @@
     AUD.sink = ctx.createGain();
     AUD.sink.gain.value = 0;
     AUD.sink.connect(ctx.destination);
+    /* Suspendu ou interrompu par le système (iOS : écran verrouillé, appel) : le moteur actif le relance. */
+    if (ctx.addEventListener) ctx.addEventListener('statechange', function () { if (active && active._wake) active._wake(true); });
     if (ctx.audioWorklet && window.Blob && window.URL) {
       var url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
       AUD.workletReady = ctx.audioWorklet.addModule(url).then(function () { URL.revokeObjectURL(url); return true; },
@@ -746,6 +762,9 @@
       ttsJobs: {}, kokoroFails: 0, warned: {},
       wrap: null, face: null, anim: null, raf: 0, restUntil: 0,
       notices: {},
+      /* Veille : verrou d'écran tenu, demande en vol, refus ; derniers essais (micro, contexte) ;
+         chien de garde d'une réponse coupée par une perte de liaison. */
+      wake: null, wakeReq: null, wakeError: false, micTryAt: -Infinity, ctxTryAt: -Infinity, lostTimer: 0,
       offs: []
     };
     var api = {};
@@ -835,8 +854,11 @@
       });
     }
 
-    /* Envoie ce que l'utilisateur a dit ; `hidden` : message de service (salut, reprise après un bruit). */
-    function say(text, hidden) {
+    /* Envoie ce que l'utilisateur a dit ; `hidden` : message de service (salut, reprise après un bruit) ;
+       `spoken` : { end, detect } d'une phrase dite (absent : message tapé ou caché). Les instants de la
+       réponse (performance.now) vont dans reply.at : end (l'utilisateur s'est tu), detect (fin d'énoncé
+       détectée), sent (voiceSay), text (première phrase reçue), play (première phrase jouée). */
+    function say(text, hidden, spoken) {
       if (!E.conv) {
         var err = new Error('la conversation n’a pas démarré.');
         if (E.phase !== 'error') setPhase('listening');
@@ -846,7 +868,8 @@
       var payload = { conversationId: E.conv.id, text: text };
       if (E.pendingHeard != null) payload.heard = E.pendingHeard;
       E.pendingHeard = null;
-      var reply = E.reply = { turn: null, sentences: [], played: 0, done: false, full: '', hidden: !!hidden };
+      var reply = E.reply = { turn: null, sentences: [], played: 0, done: false, full: '', hidden: !!hidden,
+        at: { end: spoken ? spoken.end : null, detect: spoken ? spoken.detect : null, sent: performance.now(), text: null, play: null } };
       setPhase('thinking');
       return bridge.call('voiceSay', payload, 30000).then(function (r) {
         var turn = r && r.turn;
@@ -875,6 +898,7 @@
       if (!reply || reply.done) return;
       if (reply.turn == null && turn != null) reply.turn = turn;
       else if (turn != null && reply.turn !== turn) return;
+      reply.lastEv = performance.now();
 
       if (p.phase === 'thinking') {
         if (!E.playing) setPhase('thinking');
@@ -883,10 +907,12 @@
       } else if (p.phase === 'sentence') {
         var text = String(p.text || '').trim();
         if (!text) return;
+        if (reply.at.text == null) reply.at.text = reply.lastEv;
         reply.sentences.push(text);
         reply.full = p.full ? String(p.full) : reply.sentences.join(' ');
         cb('onReply', { turn: reply.turn, sentences: reply.sentences.slice(), full: reply.full });
-        enqueue({ text: text, turn: reply.turn, index: reply.sentences.length - 1 });
+        /* La première phrase emporte les instants de la réponse : sa lecture clôt la mesure. */
+        enqueue({ text: text, turn: reply.turn, index: reply.sentences.length - 1, at: reply.sentences.length === 1 ? reply.at : null });
       } else if (p.phase === 'meta') {
         reply.meta = p.meta || {};
         cb('onMeta', reply.meta, { turn: reply.turn });
@@ -1136,13 +1162,35 @@
     }
 
     function showSentence(it) {
+      var at = !it.replay && it.index === 0 && it.at && it.at.play == null ? it.at : null;
+      if (at) at.play = performance.now();
       /* Les mots des dernières phrases dites : ce que le micro peut en renvoyer n'est pas l'utilisateur. */
       E.spoken.push(wordsOf(it.text));
       if (E.spoken.length > ECHO_SENTENCES) E.spoken.splice(0, E.spoken.length - ECHO_SENTENCES);
       if (E.started && E.phase !== 'user') setPhase('speaking');
       kick();
-      if (it.replay) cb('onSentence', it.text, { turn: null, index: 0, replay: true });
-      else cb('onSentence', it.text, { turn: it.turn, index: it.index });
+      if (it.replay) { cb('onSentence', it.text, { turn: null, index: 0, replay: true }); return; }
+      var info = { turn: it.turn, index: it.index };
+      if (at) info.timing = timingOf(at);
+      cb('onSentence', it.text, info);
+    }
+
+    /* Temps de réponse, en ms : total = début de la réponse entendue − fin de la phrase dite (message
+       tapé ou caché : − envoi) ; silence = fin de phrase détectée − fin réelle (≈ endMs) ; stt =
+       transcription restante jusqu'à l'envoi (~0 si la spéculative avait fini) ; think = Claude jusqu'à
+       sa première phrase ; voice = synthèse et décodage de cette phrase. Phrase dite : la somme des quatre
+       fait le total ; sinon silence et stt valent 0. */
+    function timingOf(at) {
+      var spoken = at.end != null && at.detect != null;
+      function ms(a, b) { return Math.max(0, Math.round(b - a)); }
+      return {
+        total: ms(spoken ? at.end : at.sent, at.play),
+        silence: spoken ? ms(at.end, at.detect) : 0,
+        stt: spoken ? ms(at.detect, at.sent) : 0,
+        think: ms(at.sent, at.text),
+        voice: ms(at.text, at.play),
+        spoken: spoken
+      };
     }
 
     function finishReply() {
@@ -1193,6 +1241,15 @@
         .then(function (stream) {
           if (!E.started || E.destroyed || E.stream) { stream.getTracks().forEach(function (t) { t.stop(); }); return null; }
           E.stream = stream;
+          /* Piste coupée ou rendue par le système (iOS : écran verrouillé, appel) : voir wakeAudio. Une
+             piste arrêtée par la page n'émet pas `ended`, et un ancien flux est ignoré. */
+          stream.getAudioTracks().forEach(function (tr) {
+            if (!tr.addEventListener) return;
+            var check = function () { if (E.stream === stream) wakeAudio(false); };
+            tr.addEventListener('ended', check);
+            tr.addEventListener('mute', check);
+            tr.addEventListener('unmute', check);
+          });
           return AUD.workletReady.then(function (ok) {
             if (!E.started || E.stream !== stream) return;
             E.source = ctx.createMediaStreamSource(stream);
@@ -1440,6 +1497,9 @@
       var vad = E.vad, seg = vad.seg;
       vad.inSpeech = false; vad.seg = null; vad.above = 0;
       if (!seg) return;
+      /* L'utilisateur s'est tu à la dernière trame voisée ; la fin d'énoncé est détectée maintenant. */
+      seg.detectAt = performance.now();
+      seg.endAt = seg.detectAt - seg.silence;
       var lv = seg.live;
       if (seg.voiced < MIN_MS) {
         cancelSpec(seg);
@@ -1470,6 +1530,7 @@
       t.seconds = seg.ms / 1000;
       t.echo = seg.echo;
       t.id = seg.id;
+      t.endAt = seg.endAt; t.detectAt = seg.detectAt;
       E.parts.push(t);
       setPhase('transcribing');
       if (E.anim) E.anim.nodAt = performance.now();
@@ -1564,16 +1625,19 @@
         }
         var stt = mergeStt(good);
         var urls = good.map(function (g) { return g.r && g.r.url; }).filter(Boolean);
+        /* Plusieurs parts : l'énoncé finit avec la dernière. */
+        var last = parts[parts.length - 1];
         deliver(text, {
           id: parts[0].id || uid('vu'), source: 'whisper',
           seconds: Math.round(parts.reduce(function (s, t) { return s + (t.seconds || 0); }, 0) * 100) / 100,
           stt: stt, url: urls[0] || '', urls: urls
-        }, null);
+        }, null, { end: last.endAt, detect: last.detectAt });
       });
     }
 
-    /* Un énoncé reconnu part tout de suite ; en flux, Whisper mesure ensuite (detail/keepAudio). */
-    function deliver(text, info, seg) {
+    /* Un énoncé reconnu part tout de suite ; en flux, Whisper mesure ensuite (detail/keepAudio).
+       `spoken` : { end, detect } de l'énoncé, pour le temps de réponse. */
+    function deliver(text, info, seg, spoken) {
       var barged = E.bargedIn;
       E.bargedIn = false;
       if (E.reply) interrupt(false);
@@ -1590,7 +1654,7 @@
         return;
       }
       /* Une chaîne rendue par le rappel part à la place du texte (le texte, suivi d'une note pour Claude). */
-      say(typeof back === 'string' && back.trim() ? back : text, false)['catch'](noop);
+      say(typeof back === 'string' && back.trim() ? back : text, false, spoken)['catch'](noop);
       if (seg) detailLater(info.id, seg.frames);
     }
 
@@ -1742,7 +1806,7 @@
         restorePhase();
         return;
       }
-      deliver(text, { id: seg.id, source: 'stream', seconds: Math.round(seg.ms / 10) / 100 }, seg);
+      deliver(text, { id: seg.id, source: 'stream', seconds: Math.round(seg.ms / 10) / 100 }, seg, { end: seg.endAt, detect: seg.detectAt });
     }
 
     function showPartial(lv, text) {
@@ -1976,6 +2040,110 @@
       });
     }
 
+    /* ══ Veille : écran allumé, son repris, réponse perdue ════════════════ */
+
+    /* Verrou d'écran (option keepAwake) : pris au démarrage, rendu à l'arrêt. Le navigateur le rend
+       de lui-même quand la page est cachée : repris au retour. API absente ou refus (économie
+       d'énergie) : sans bruit, l'état le dit. Une demande en vol dont on ne veut plus est rendue dès
+       qu'elle aboutit (moteur arrêté ou détruit entre-temps). */
+    function wakeApi() {
+      var wl = navigator.wakeLock;
+      return wl && typeof wl.request === 'function' ? wl : null;
+    }
+
+    function wantWake() { return !!(E.started && !E.destroyed && E.opts.keepAwake); }
+
+    function releaseWake(s) {
+      try { var p = s && s.release && s.release(); if (p && p['catch']) p['catch'](noop); } catch (e) { /* déjà rendu */ }
+    }
+
+    function takeWake() {
+      var wl = wakeApi();
+      if (!wl || !wantWake() || E.wake || E.wakeReq || document.visibilityState === 'hidden') return;
+      var req;
+      try { req = E.wakeReq = Promise.resolve(wl.request('screen')); } catch (e) { E.wakeReq = null; E.wakeError = true; warnOnce('wakeLock', e); return; }
+      req.then(function (s) {
+        if (E.wakeReq !== req || !wantWake()) { if (E.wakeReq === req) E.wakeReq = null; releaseWake(s); return; }
+        E.wakeReq = null; E.wakeError = false; E.wake = s;
+        if (s && s.addEventListener) s.addEventListener('release', function () { if (E.wake === s) E.wake = null; });
+      }, function (e) {
+        if (E.wakeReq !== req) return;
+        E.wakeReq = null; E.wakeError = true;
+        warnOnce('wakeLock', e);
+      });
+    }
+
+    function dropWake() {
+      var s = E.wake;
+      E.wake = null; E.wakeReq = null; E.wakeError = false;
+      if (s) releaseWake(s);
+    }
+
+    function wakeState() {
+      if (!wakeApi()) return 'unsupported';
+      if (E.wake) return 'held';
+      return E.wakeError && wantWake() ? 'error' : 'off';
+    }
+
+    /* Le système a coupé le son (iOS : écran verrouillé, appel, Siri ; Android : rien, la capture et la
+       lecture continuent écran éteint) : contexte relancé s'il ne tourne pas, micro rouvert si sa piste
+       est terminée — page visible seulement (cachée, iOS le refuserait), une fois toutes les 5 s au
+       plus, sinon l'avis « Réessayer ». `fromCtx` : appelé par le changement d'état du contexte lui-même
+       (une relance qui échoue n'en produit pas d'autre ; celle qui réussit, une seule). */
+    function wakeAudio(fromCtx) {
+      if (!E.started || E.destroyed || active !== api) return;
+      var ctx = AUD.ctx, now = performance.now();
+      if (ctx && ctx.state !== 'running' && ctx.state !== 'closed' && (!fromCtx || now - E.ctxTryAt >= CTX_RETRY_MS)) {
+        E.ctxTryAt = now;
+        try { ctx.resume()['catch'](noop); } catch (e) { /* contexte fermé */ }
+      }
+      var tr = E.stream && E.stream.getAudioTracks()[0];
+      if (!E.stream || (tr && tr.readyState !== 'ended') || document.visibilityState === 'hidden') return;
+      if (now - E.micTryAt < MIC_RETRY_MS) {
+        if (!E.notices.mic) notice('mic', { kind: 'mic-unavailable', text: 'Le micro a été coupé par le système.', action: { label: 'Réessayer', run: retryMic } });
+        return;
+      }
+      /* L'énoncé coupé par le système est abandonné ; ce qui était déjà transcrit part quand même. */
+      E.micTryAt = now;
+      abortSegment();
+      restorePhase();
+      flushParts();
+      retryMic();
+    }
+
+    function onVisible() {
+      if (document.visibilityState === 'hidden' || !E.started || E.destroyed) return;
+      takeWake();
+      wakeAudio(false);
+    }
+
+    /* Liaison au serveur coupée (évènement `connection` du pont, page servie par le serveur ou
+       Organizator relié à lui) : les évènements `voice` émis pendant la coupure sont perdus, la
+       conversation, elle, survit. La réponse en attente à ce moment est marquée ; au retour, un chien
+       de garde la clôt si elle ne donne plus signe de vie (LOST_MS, TURN_MS). */
+    function onConnection(p) {
+      var st = p && p.state, reply = E.reply;
+      if (st !== 'online') { clearTimeout(E.lostTimer); E.lostTimer = 0; }
+      if (!E.started || !reply || reply.done) return;
+      if (st === 'offline') reply.cut = true;
+      else if (st === 'online' && reply.cut) { reply.back = performance.now(); watchLost(reply); }
+    }
+
+    function watchLost(reply) {
+      clearTimeout(E.lostTimer);
+      E.lostTimer = setTimeout(function () {
+        E.lostTimer = 0;
+        if (!E.started || E.reply !== reply || reply.done) return;
+        var now = performance.now(), quiet = now - Math.max(reply.back || 0, reply.lastEv || 0);
+        var due = quiet >= LOST_MS && (reply.sentences.length > 0 || now - reply.at.sent >= TURN_MS);
+        /* Une phrase reçue joue encore : on la laisse finir. */
+        if (!due || E.playing || E.queue.length) { watchLost(reply); return; }
+        /* Comme une coupure : l'hôte apprend ce qui a été entendu (et arrête le tour s'il courait encore). */
+        interrupt(false);
+        cb('onError', { kind: 'reply', message: 'la connexion au serveur a été coupée pendant la réponse.', lost: true });
+      }, LOST_POLL_MS);
+    }
+
     /* ══ Avatar : montage et boucle ═══════════════════════════════════════ */
 
     function mountAvatar() {
@@ -2045,6 +2213,7 @@
         warmTts();
         kick();
       }
+      takeWake();
       var p = startConversation();
       p['catch'](noop);
       return p;
@@ -2065,6 +2234,8 @@
       E.conv = null;
       stopAudio(false);
       E.started = false;
+      dropWake();
+      clearTimeout(E.lostTimer); E.lostTimer = 0;
       if (active === api) active = null;
       E.micLevel = 0;
       E.restUntil = performance.now() + REST_MS;
@@ -2073,6 +2244,8 @@
     };
 
     api._stopFromOther = function () { api.stop(); };
+    /* Appelé par le contexte audio partagé quand le système le suspend ou l'interrompt. */
+    api._wake = function (fromCtx) { wakeAudio(fromCtx); };
 
     api.destroy = function () {
       if (E.destroyed) return;
@@ -2124,7 +2297,8 @@
         voiceRatio: E.voiceRatio, live: !!(E.asr && E.asr.session != null), bargeIn: bargeMode(), ducked: E.ducked,
         volume: AUD.outGain ? AUD.outGain.gain.value : 1,
         playing: !!E.playing, fallback: !!(E.playing && E.playing.fallback), replying: !!E.reply, conversationId: E.conv ? E.conv.id : null, started: E.started,
-        tts: useKokoro() ? 'kokoro' : 'sapi', amp: E.anim ? E.anim.amp : 0, sampleRate: AUD.ctx ? AUD.ctx.sampleRate : 0
+        tts: useKokoro() ? 'kokoro' : 'sapi', amp: E.anim ? E.anim.amp : 0, sampleRate: AUD.ctx ? AUD.ctx.sampleRate : 0,
+        wakeLock: wakeState()
       };
     };
 
@@ -2134,6 +2308,7 @@
       E.opts = mergeOpts(E.opts, patch);
       if ('whisperModel' in patch && patch.whisperModel !== before.whisperModel) checkWhisper(true);
       if ('tts' in patch) { E.kokoroFails = 0; if (E.started) warmTts(); }
+      if ('keepAwake' in patch) { if (wantWake()) takeWake(); else dropWake(); }
       if (E.started && (('language' in patch && asrLang(patch.language) !== asrLang(before.language)) || ('liveAsr' in patch && patch.liveAsr !== before.liveAsr))) {
         ensureAsr();
         checkAsr();
@@ -2157,6 +2332,10 @@
     E.offs.push(bridge.on('whisper', onWhisper));
     E.offs.push(bridge.on('tts', onTts));
     E.offs.push(bridge.on('asr', onAsr));
+    E.offs.push(bridge.on('connection', onConnection));
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', onVisible);
+    E.offs.push(function () { document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('pageshow', onVisible); });
     asrListeners.push(onAsrModel);
     E.offs.push(function () { var i = asrListeners.indexOf(onAsrModel); if (i >= 0) asrListeners.splice(i, 1); });
     mountAvatar();
