@@ -115,7 +115,7 @@
   var DEFAULT_PREFS = {
     lessonModel: 'sonnet', lessonEffort: 'medium', genModel: 'sonnet', genEffort: 'low', gradeModel: 'sonnet', gradeEffort: 'medium',
     tutorModel: 'haiku', tutorEffort: '', cardModel: 'haiku', cardEffort: '', longModel: 'sonnet', longEffort: 'low', engine: 'auto', voiceUs: 'af_heart', voiceGb: 'bf_emma', speed: 1, retention: 0.9,
-    whisperModel: 'small', tutorLive: true, tutorSensitivity: 40, tutorBargeIn: 'words', tutorAsr: 'whisper', tutorWhisper: 'small', tutorPause: 'normal',
+    whisperModel: 'small', tutorLive: true, tutorSensitivity: 40, tutorBargeIn: 'words', tutorAsr: 'whisper', tutorWhisper: 'small', tutorPause: 'normal', tutorAwake: true,
     profEnabled: true, profLang: 'auto', profLevel: 'auto', profVoice: true, profModel: 'sonnet', profEffort: 'low',
     cortexModel: 'sonnet', cortexEffort: 'medium',
     profTone: 'warm', profLength: 'short', profChat: 'some', profAddress: 'vous', profVoices: 'two', profVoiceEn: '', profFresh: true
@@ -395,6 +395,7 @@
     if (['whisper', 'live'].indexOf(out.prefs.tutorAsr) < 0) out.prefs.tutorAsr = 'whisper';
     if (['small', 'base'].indexOf(out.prefs.tutorWhisper) < 0) out.prefs.tutorWhisper = 'small';
     if (['short', 'normal', 'long'].indexOf(out.prefs.tutorPause) < 0) out.prefs.tutorPause = 'normal';
+    out.prefs.tutorAwake = out.prefs.tutorAwake !== false;
     out.skills = obj(s.skills) || {};
     out.toeic = Object.assign({}, d.toeic, obj(s.toeic) || {});
     out.toeic.calib = Object.assign({ L: [], R: [] }, obj(out.toeic.calib) || {});

@@ -25,8 +25,14 @@
          level, lesson: { id, title, summaryFr } | null,
          turns: [{ role: 'user'|'tutor', text, at, recast: { said, better } | null, url,
                    typed, unsure: [mot], seconds, wpm, sttMs,      (réplique de l'apprenant)
-                   fr, tip, ms, end, live, cut, heard }],          (réplique du tuteur ; cut : coupée,
+                   fr, tip, ms, end, live, cut, heard, lat }],     (réplique du tuteur ; cut : coupée,
                                                                      heard = ce qui en a été entendu)
+         Temps de réponse du tuteur (ms) : en mains libres, avec un moteur qui le mesure (info.timing de
+         onSentence), de la fin de la phrase de l'apprenant — ou de l'envoi : message écrit, accueil — au
+         début de la lecture, décomposé dans lat { silence, stt, think, voice, spoken } (ms entiers : attente
+         de fin de phrase, transcription restante, Claude jusqu'à sa première phrase, synthèse de celle-ci ;
+         spoken vrai = phrase dite). Sans lat (anciennes répliques, vieux moteur, tour par tour) : mesuré
+         depuis l'envoi au tuteur, une fois la phrase transcrite.
          summary: { errors: [{ said, better, explanationFr, category }], phrases: [string], feedbackFr, levelEstimate } | null,
          endedAt, closed, applied, logged, cardsAdded }
      tutor.pendingCards[]  cartes gardées tant que R.cards n'existe pas (versées dès qu'il paraît)
@@ -37,7 +43,12 @@
      tutorBargeIn ('words' | 'voice' | 'off', défaut 'words' : couper la parole au tuteur),
      tutorAsr ('whisper' | 'live', défaut 'whisper' : Whisper transcrit chaque phrase quand vous vous taisez,
      plutôt que Parakeet en direct), tutorWhisper ('small' | 'base', défaut 'small'),
-     tutorPause ('short' | 'normal' | 'long', défaut 'normal' : silence qui clôt une phrase, 0,65 / 1 / 1,5 s).
+     tutorPause ('short' | 'normal' | 'long', défaut 'normal' : silence qui clôt une phrase, 0,65 / 1 / 1,5 s),
+     tutorAwake (défaut true : l'écran reste allumé pendant la conversation mains libres — option keepAwake du
+     moteur, Screen Wake Lock, reprise au retour au premier plan ; bascule aussi dans le pupitre).
+   Veille : rien ici ne coupe la conversation quand la page est cachée ou l'écran éteint (seuls quitter le chat,
+   la vue ou la page Révizator la mettent en pause) ; le moteur se remet d'aplomb au retour. Sur Android elle
+   continue écran éteint ; sur iPhone, le système coupe le micro au verrouillage, d'où tutorAwake.
    La discussion au long cours (scénario 'long') : pas de fin d'office, le web (voiceStart web: true), le
    programme d'étude à la demande (tutor.program), des corrections dites et des conseils de temps en temps ;
    « let's stop » suffit pour finir : le tuteur dit au revoir (meta.end) et le bilan suit, sans un clic.
@@ -59,7 +70,7 @@
   var T = R.ui.tutor = {
     screen: 'pick', chatId: '', openId: '', pending: null, error: null, fr: {}, draft: '', toEnd: false,
     focusText: false, newKey: '', blobs: {}, capJust: '', capNote: '', news: null, newsAt: 0, micNote: '',
-    dismissEnd: '', recChat: '', warmAt: 0
+    dismissEnd: '', recChat: '', warmAt: 0, lat: {}
   };
 
   /* ══ Scénarios ══════════════════════════════════════════════════════════
@@ -187,6 +198,8 @@
   function noop() { /* sans importance */ }
   function plural(n, one, many) { return n + ' ' + (n > 1 ? (many || one + 's') : one); }
   function secs(ms) { return String(Math.round(num(ms, 0) / 100) / 10).replace('.', ',') + ' s'; }
+  /* Une durée au dixième, toujours avec sa décimale (« 1,0 s »), l'unité insécable : les temps de réponse. */
+  function dur(ms) { return (Math.max(0, num(ms, 0)) / 1000).toFixed(1).replace('.', ',') + '\u00a0s'; }
   function clock(s) { s = Math.max(0, Math.round(num(s, 0))); return Math.floor(s / 60) + ':' + (s % 60 < 10 ? '0' : '') + (s % 60); }
   function round1(v) { return Math.round(num(v, 0) * 10) / 10; }
   /* Typographie française à l'affichage : insécables autour des guillemets et avant ? ! : ; (rien ne coupe « mot »). */
@@ -761,7 +774,7 @@
   var L = {
     eng: null, chatId: '', stage: null, phase: 'idle', phaseText: '', caption: '', notices: {}, error: '', muted: false,
     turns: {}, sentAt: 0, meter: null, hold: {}, sapi: null, sapiAsked: false,
-    partial: '', draft: null, byId: {}, waiting: [], test: null, testTimer: 0, setMeter: 0, autoEnd: null
+    partial: '', draft: null, byId: {}, waiting: [], test: null, testTimer: 0, setMeter: 0, autoEnd: null, awake: ''
   };
   var GREETING = '(The learner has just joined. Open the conversation in character: greet them briefly and ask your first question.)';
   var RESUMING = '(The learner is back after a short pause. Answer their last message, in character.)';
@@ -785,7 +798,10 @@
   function tutorWhisper() { return R.prefs.tutorWhisper === 'base' ? 'base' : 'small'; }
   var PAUSE_MS = { short: 650, normal: 1000, long: 1500 };
   function pauseKey() { var v = R.prefs.tutorPause; return PAUSE_MS[v] ? v : 'normal'; }
-  function engineOpts() { return { liveAsr: asrPref() === 'live', whisperModel: tutorWhisper(), endMs: PAUSE_MS[pauseKey()] }; }
+  /* Garder l'écran allumé pendant la conversation (keepAwake du moteur, Screen Wake Lock) : sur iPhone,
+     l'écran verrouillé coupe le micro ; sur Android, la conversation continue écran éteint. */
+  function awakePref() { return R.prefs.tutorAwake !== false; }
+  function engineOpts() { return { liveAsr: asrPref() === 'live', whisperModel: tutorWhisper(), endMs: PAUSE_MS[pauseKey()], keepAwake: awakePref() }; }
   function isLong(chat) { return !!scOf(chat).long; }
 
   /* Une voix SAPI anglaise (repli quand Kokoro manque) : l'accent du scénario, puis n'importe quel anglais. */
@@ -820,6 +836,7 @@
     el.innerHTML = '<div class="rzv-live-ava"><div class="rzv-live-mount"></div><span class="rzv-live-ph" aria-hidden="true"></span></div>'
       + '<div class="rzv-live-main"><div class="rzv-live-state"><span class="rzv-live-dot" aria-hidden="true"></span><span class="rzv-live-label" lang="en"></span>'
       + '<span class="rzv-live-sub"></span><span class="rzv-live-meter" title="Niveau du micro" aria-hidden="true"><i></i></span></div>'
+      + '<div class="rzv-live-facts" hidden></div>'
       + '<div class="rzv-live-cap" lang="en" aria-live="polite"></div><div class="rzv-live-notice" hidden></div></div>';
     L.stage = el;
     return el;
@@ -852,6 +869,59 @@
     return null;
   }
 
+  /* ── Temps de réponse ──
+     Le moteur joint à la première phrase de chaque réponse info.timing = { total, silence, stt, think, voice,
+     spoken } (ms) : total va de la fin de la phrase de l'apprenant (spoken), ou de l'envoi (message écrit,
+     accueil), au début de la lecture ; les parts — attente de fin de phrase (tutorPause), transcription
+     restante, Claude jusqu'à sa première phrase, synthèse de celle-ci — se chevauchent (la transcription
+     part pendant la pause), leur somme n'est pas le total. Gardé dans la réplique : ms = total, lat = les
+     parts. Sans timing (vieux moteur, rejeu) : ms depuis l'envoi, sans lat — comme les anciennes répliques,
+     que les moyennes « fin de phrase → réponse » laissent de côté. */
+  function latOf(tm) {
+    var ms = function (v) { return Math.max(0, Math.round(num(v, 0))); };
+    return { silence: ms(tm.silence), stt: ms(tm.stt), think: ms(tm.think), voice: ms(tm.voice), spoken: !!tm.spoken };
+  }
+  function latDetail(t) {
+    var l = t.lat || {}, parts = [];
+    if (l.spoken || l.silence) parts.push('attente de fin de phrase ' + dur(l.silence));
+    if (l.spoken || l.stt) parts.push('transcription ' + dur(l.stt));
+    parts.push('tuteur (Claude) ' + dur(l.think), 'voix ' + dur(l.voice));
+    return (l.spoken ? 'Fin de votre phrase' : 'Envoi') + ' → début de la réponse\u00a0: ' + dur(t.ms) + ' · ' + parts.join(' · ');
+  }
+  /* Les mesures d'une conversation : la dernière (phrase dite ou non), moyenne et médiane des phrases dites. */
+  function latStats(chat) {
+    var last = null, l = [];
+    arr(chat && chat.turns).forEach(function (t) {
+      if (!t || t.role !== 'tutor' || !(t.ms > 0) || !t.lat) return;
+      last = t;
+      if (t.lat.spoken) l.push(t.ms);
+    });
+    if (!last) return null;
+    l.sort(function (a, b) { return a - b; });
+    var n = l.length, mid = Math.floor(n / 2);
+    return {
+      last: last, n: n, avg: n ? l.reduce(function (a, b) { return a + b; }, 0) / n : 0,
+      median: !n ? 0 : (n % 2 ? l[mid] : (l[mid - 1] + l[mid]) / 2)
+    };
+  }
+
+  /* Sous l'état de l'avatar : la dernière mesure (et la moyenne), et si l'écran est tenu allumé. */
+  var AWAKE_TEXT = {
+    held: 'Écran maintenu allumé', unsupported: 'Ce navigateur ne peut pas garder l’écran allumé',
+    error: 'L’écran n’a pas pu être maintenu allumé'
+  };
+  function stageFactsHtml(chat, held) {
+    var h = '', m = chat ? latStats(chat) : null;
+    if (m) {
+      var tip = latDetail(m.last) + (m.n ? '. Moyenne sur ' + plural(m.n, 'phrase dite', 'phrases dites') + '\u00a0: ' + dur(m.avg) + '.' : '');
+      h += '<span class="rzv-live-fact" title="' + esc(tip) + '">' + R.icon('clock')
+        + '<span>' + esc('Dernière réponse\u00a0: ' + dur(m.last.ms) + (m.n > 1 ? ' · moyenne ' + dur(m.avg) : '')) + '</span></span>';
+    }
+    var aw = !held && awakePref() ? AWAKE_TEXT[L.awake] || '' : '';
+    if (aw) h += '<span class="rzv-live-fact' + (L.awake === 'held' ? '' : ' is-warn') + '">' + R.icon('sun') + '<span>' + esc(aw) + '</span></span>';
+    return h;
+  }
+
   /* L'état de l'avatar, le sous-titre, l'avis : écrits sur place, sans rendu de la vue. */
   function updateStage() {
     var el = stageEl(), chat = chatById(L.chatId) || current();
@@ -867,6 +937,9 @@
     var cap = q('.rzv-live-cap');
     var capText = held ? '' : (ph === 'speaking' || ph === 'thinking' || ph === 'tool' ? L.caption : '');
     if (cap.textContent !== capText) cap.textContent = capText;
+    var facts = q('.rzv-live-facts'), fh = stageFactsHtml(chat, held);
+    if (facts.getAttribute('data-html') !== fh) { facts.innerHTML = fh; facts.setAttribute('data-html', fh); }
+    facts.hidden = !fh;
     var box = q('.rzv-live-notice');
     var n = L.error ? { kind: 'error', text: L.error } : currentNotice();
     var html = '';
@@ -895,6 +968,9 @@
       var i = L.stage && L.stage.querySelector('.rzv-live-meter i');
       if (i) i.style.transform = 'scaleX(' + Math.max(0.04, lv).toFixed(3) + ')';
       if (st && !!st.muted !== L.muted) { L.muted = !!st.muted; updateStage(); R.render(); }
+      /* L'écran tenu allumé ou non (wakeLock : held, off, unsupported, error ; absent d'un vieux moteur). */
+      var aw = st && typeof st.wakeLock === 'string' ? st.wakeLock : '';
+      if (aw !== L.awake) { L.awake = aw; updateStage(); }
     }, 90);
   }
   function stopMeter() { if (L.meter) { clearInterval(L.meter); L.meter = null; } }
@@ -904,12 +980,14 @@
     L.eng = null;
     stopMeter();
     L.phase = 'idle'; L.phaseText = ''; L.caption = ''; L.notices = {}; L.muted = false; L.turns = {};
-    L.byId = {}; L.waiting = []; L.autoEnd = null;
+    L.byId = {}; L.waiting = []; L.autoEnd = null; L.awake = '';
     setDraft('');
     if (e) { try { if (typeof e.destroy === 'function') e.destroy(); else e.stop(); } catch (err) { /* déjà arrêté */ } }
     if (L.stage) updateStage();
   }
-  /* Quitter l'écran ou la page : le moteur s'arrête, et ne repart qu'à la demande (Reprendre). */
+  /* Quitter l'écran, la vue ou la page Révizator : le moteur s'arrête, et ne repart qu'à la demande (Reprendre).
+     Pas la mise en veille ni la page cachée (aucun visibilitychange ici) : la conversation continue, le moteur
+     se remet d'aplomb au retour ; s'il a été perdu entre-temps, l'avis propose de reprendre. */
   function pauseLive() {
     if (!L.eng) return;
     L.hold[L.chatId] = true;
@@ -947,7 +1025,7 @@
     try {
       eng = window.OrganizatorVoice.create({
         container: mountOf(), avatar: { size: 112 }, language: 'en', whisperModel: eo.whisperModel, endMs: eo.endMs,
-        sensitivity: sensitivity(), keepAudio: true, detail: true, tts: ttsOf(chat), liveAsr: eo.liveAsr, bargeIn: bargeIn(),
+        sensitivity: sensitivity(), keepAudio: true, detail: true, tts: ttsOf(chat), liveAsr: eo.liveAsr, bargeIn: bargeIn(), keepAwake: eo.keepAwake,
         conversation: {
           start: {
             mode: 'tutor', model: long ? (R.prefs.longModel || 'sonnet') : (R.prefs.tutorModel || 'haiku'),
@@ -1148,7 +1226,13 @@
     if (!chat || info.turn == null) return;
     var idx = liveTurn(chat, info.turn, clean(text, 1500));
     var t = chat.turns[idx];
-    if (!t.ms) { t.ms = Math.max(1, Date.now() - L.sentAt); R.render(); }
+    if (t.ms) return;
+    /* Première phrase : le temps de réponse mesuré par le moteur, sinon depuis l'envoi (voir latOf). */
+    var tm = info.timing;
+    if (tm && num(tm.total, 0) > 0) { t.ms = Math.round(tm.total); t.lat = latOf(tm); }
+    else t.ms = Math.max(1, Date.now() - L.sentAt);
+    updateStage();
+    R.render();
   }
 
   function liveMeta(meta, info) {
@@ -1315,13 +1399,24 @@
     return esc(text.slice(0, n)) + (rest.trim() ? '<span class="rzv-unheard" title="Coupé : vous ne l’avez pas entendu">' + esc(rest) + '</span>' : '');
   }
 
+  /* Le temps de réponse d'une réplique : décomposé (lat), la pastille est un bouton qui ouvre une ligne de
+     détail sous le nom — au doigt, pas de survol ; sinon une simple mention. */
+  function latHtml(chat, t, i) {
+    if (!t.ms) return '';
+    if (!t.lat) return '<span class="rzv-lat" title="Temps de réponse du tuteur">' + esc(dur(t.ms)) + '</span>';
+    var open = !!T.lat[chat.id + ':' + i];
+    return '<button type="button" class="rzv-lat is-btn" data-act="rz-tutor-lat" data-chat="' + esc(chat.id) + '" data-i="' + i + '" aria-expanded="' + open + '"'
+      + ' title="' + esc(latDetail(t)) + '" aria-label="' + esc('Temps de réponse du tuteur\u00a0: ' + dur(t.ms) + ', détail') + '">' + R.icon('clock') + esc(dur(t.ms)) + '</button>';
+  }
+
   function tutorTurnHtml(chat, t, i) {
     var key = sayKey(chat, i), k = chat.id + ':' + i;
     var on = !!T.fr[k];
     var live = liveOn(chat);
     var h = '<div class="rzv-turn is-tutor' + (T.newKey === k ? ' is-new' : '') + (t.cut ? ' is-cut' : '') + '"><span class="rzv-ava" aria-hidden="true">' + esc(initialOf(chat)) + '</span><div class="rzv-col"><div class="rzv-bubble">'
       + '<div class="rzv-who"><span>' + esc(nameOf(chat)) + '</span>' + (t.cut ? '<span class="rzv-cutk" title="Vous lui avez coupé la parole">' + R.icon('cross') + 'coupé</span>' : '')
-      + (t.ms ? '<span class="rzv-lat" title="Temps de réponse du tuteur">' + esc(secs(t.ms)) + '</span>' : '') + '</div>'
+      + latHtml(chat, t, i) + '</div>'
+      + (t.ms && t.lat && T.lat[k] ? '<div class="rzv-latd">' + esc(latDetail(t)) + '</div>' : '')
       + '<div class="rzv-say" data-rz-say="' + esc(key) + '" data-rz-idx="0" data-rzv-live="' + esc(k) + '" lang="en">' + sayHtml(t) + '</div>'
       + (on && t.fr ? '<div class="rzv-fr" lang="fr">' + esc(t.fr) + '</div>' : '')
       + (t.tip ? '<div class="rzv-tip">' + R.icon('spark') + '<span>' + esc(t.tip) + '</span></div>' : '')
@@ -1503,6 +1598,9 @@
       + '<div class="rzv-live-ctl">'
       + '<button type="button" class="btn btn-secondary" data-act="rz-tutor-hush" title="Faire taire le tuteur (Espace)"' + (L.eng ? '' : ' disabled') + '>' + R.icon('stop') + ' Faire taire</button>'
       + '<button type="button" class="btn ' + (muted ? 'btn-primary' : 'btn-secondary') + ' rzv-mute" data-act="rz-tutor-mute" aria-pressed="' + (muted ? 'true' : 'false') + '" title="' + (muted ? 'Rouvrir le micro (M)' : 'Couper le micro (M)') + '"' + (L.eng ? '' : ' disabled') + '>' + R.icon('mic') + (muted ? ' Micro coupé' : ' Micro ouvert') + '</button>'
+      + '<button type="button" class="btn btn-secondary rzv-awake" data-act="rz-tutor-awake" aria-pressed="' + awakePref() + '" title="' + esc(awakePref()
+        ? 'L’écran reste allumé pendant la conversation (désactiver : il se met en veille comme d’habitude)'
+        : 'L’écran se met en veille comme d’habitude (activer : il reste allumé ; sur iPhone, l’écran verrouillé coupe le micro)') + '">' + R.icon('sun') + ' Écran allumé</button>'
       + '</div></div>'
       + '<div class="rzv-hint">' + hint + '</div>'
       + '<div class="rzv-write"><input class="input" type="text" data-role="rz-tutor-text" data-focus-key="rzv-text" placeholder="Écrire plutôt… (Entrée envoie)" maxlength="1000" lang="en" autocomplete="off" value="' + esc(T.draft) + '">'
@@ -1542,6 +1640,12 @@
     var sc = scOf(chat), va = variantOf(chat.scenario.id);
     var ms = arr(chat.turns).filter(function (t) { return t.role === 'tutor' && t.ms; }).map(function (t) { return t.ms; });
     var avg = ms.length ? ms.reduce(function (a, b) { return a + b; }, 0) / ms.length : 0;
+    /* Mesurées de la fin de vos phrases (lat.spoken) : celles-là d'abord ; sinon l'ancienne moyenne, depuis l'envoi. */
+    var lm = latStats(chat), latNote = '';
+    if (lm && lm.n) {
+      latNote = 'Entre la fin de votre phrase et le début de sa réponse : ' + (lm.n > 1 ? dur(lm.avg) + ' en moyenne, ' + dur(lm.median) + ' en médiane (' + plural(lm.n, 'réponse') + ')' : dur(lm.avg))
+        + '. Le détail de chaque réponse s’ouvre depuis sa durée, à côté du nom du tuteur.';
+    } else if (avg) latNote = 'Temps de réponse moyen du tuteur : ' + secs(avg) + '.';
     return '<aside class="rzv-aside">'
       + '<section class="rz-card rzv-brief"><div class="rz-kicker">' + R.icon('target') + ' Votre objectif</div><p class="rzv-p">' + esc(sc.goalFr) + '</p>'
       + '<div class="rzv-brief-role">Avec <b>' + esc(nameOf(chat)) + '</b>, ' + esc(va && va.roleFr ? va.roleFr : sc.roleFr) + '.</div>'
@@ -1555,7 +1659,7 @@
           + (isLong(chat) ? '<div class="rzv-note">Au long cours : il peut chercher sur le web, vous corrige à voix haute de temps en temps, et connaît votre programme si vous le lui demandez. Dites « let’s stop » pour finir : le bilan suit.</div>' : '')
         : '<label class="rzv-toggle"><input type="checkbox" data-role="rz-tutor-voice"' + (tutorData().voiceOff ? '' : ' checked') + '><span>Lire les réponses à voix haute</span></label>')
       + '<div class="rzv-note">Whisper peut lisser vos fautes : la transcription montre ce qu’il a compris ; les mots soulignés sont ceux dont il doute.</div>'
-      + (avg ? '<div class="rzv-note">Temps de réponse moyen du tuteur : ' + esc(secs(avg)) + '.</div>' : '') + '</section>'
+      + (latNote ? '<div class="rzv-note">' + esc(latNote) + '</div>' : '') + '</section>'
       + '</aside>';
   }
 
@@ -1620,13 +1724,15 @@
     var s = chat.summary;
     var st = statsOf(chat);
     var lt = lastTutorIdx(chat);
+    var lm = latStats(chat);
     var h = [];
     h.push('<div class="rzv-subhead"><button type="button" class="btn btn-ghost rzv-back" data-act="rz-tutor-pick">' + R.icon('back') + ' Scénarios</button></div>');
     h.push(headHtml(R.icon('flag') + ' Bilan · ' + esc(chat.scenario.title), 'Bilan de la conversation',
       esc('Avec ' + nameOf(chat) + ', ' + ago(chat.endedAt || lastAt(chat)) + '.'), s.levelEstimate ? R.h.level(s.levelEstimate, 'Niveau de cette conversation') : ''));
     h.push('<div class="rzv-stats">'
       + statHtml(st.minutes, 'min de conversation') + statHtml(st.turns, st.turns > 1 ? 'répliques' : 'réplique')
-      + statHtml(st.words, 'mots de votre part') + (st.wpm ? statHtml(st.wpm, 'mots/min à l’oral') : statHtml(st.typed, st.typed > 1 ? 'répliques écrites' : 'réplique écrite')) + '</div>');
+      + statHtml(st.words, 'mots de votre part') + (st.wpm ? statHtml(st.wpm, 'mots/min à l’oral') : statHtml(st.typed, st.typed > 1 ? 'répliques écrites' : 'réplique écrite'))
+      + (lm && lm.n ? statHtml(dur(lm.median), 'de la fin de vos phrases à sa réponse (médiane)') : '') + '</div>');
     if (lt >= 0) {
       var t = chat.turns[lt];
       h.push('<div class="rzv-lastword"><span class="rzv-ava" aria-hidden="true">' + esc(initialOf(chat)) + '</span><span class="rzv-say" data-rz-say="' + esc(sayKey(chat, lt)) + '" data-rz-idx="0" lang="en">' + esc(t.text) + '</span>'
@@ -1964,6 +2070,19 @@
     R.save();
     R.render();
   });
+  R.act('rz-tutor-lat', function (el) {
+    var k = el.getAttribute('data-chat') + ':' + el.getAttribute('data-i');
+    T.lat[k] = !T.lat[k];
+    R.render();
+  });
+  /* Écran allumé : la bascule du pupitre et celle des réglages ; appliquée au moteur en marche, sans le redémarrer. */
+  R.act('rz-tutor-awake', function () {
+    R.prefs.tutorAwake = !awakePref();
+    if (L.eng) try { L.eng.setOptions({ keepAwake: awakePref() }); } catch (e) { /* moteur arrêté */ }
+    R.save();
+    if (L.stage) updateStage();
+    R.render();
+  });
   R.act('rz-tutor-tr', function (el) {
     var k = el.getAttribute('data-chat') + ':' + el.getAttribute('data-i');
     T.fr[k] = !T.fr[k];
@@ -2110,7 +2229,9 @@
     var on = R.prefs.tutorLive !== false;
     var sw = app && app.switchHtml ? app.switchHtml(on, 'rz-tutor-set-live', 'Tuteur mains libres')
       : '<button type="button" class="switch' + (on ? ' on' : '') + '" data-act="rz-tutor-set-live" role="switch" aria-checked="' + on + '" aria-label="Tuteur mains libres"></button>';
-    var sens = sensitivity(), barge = bargeIn(), asr = liveAsr();
+    var sens = sensitivity(), barge = bargeIn(), asr = liveAsr(), awake = awakePref();
+    var awSw = app && app.switchHtml ? app.switchHtml(awake, 'rz-tutor-awake', 'Garder l’écran allumé')
+      : '<button type="button" class="switch' + (awake ? ' on' : '') + '" data-act="rz-tutor-awake" role="switch" aria-checked="' + awake + '" aria-label="Garder l’écran allumé"></button>';
     setTimeout(function () { sensMeterSoon(); sensMeterFrame(); }, 0);
     return '<div class="set-card rzv-set"><div class="set-card-head"><span class="set-card-title">Tuteur</span></div>'
       + field('Tuteur mains libres', sw)
@@ -2131,6 +2252,10 @@
       + '<div class="rz-set-help">Small reconnaît mieux un anglais à l’accent français ; Base répond plus vite (environ trois fois), au prix de quelques mots mal reconnus. Téléchargé au premier usage.</div>'
       + field('Pause avant qu’il réponde', R.h.chips('tutorPause', ['short', 'normal', 'long'], pauseKey(), ['short', 'normal', 'long'].map(function (k) { return PAUSE_LABELS[k]; }), 'rz-tutor-set-pause'))
       + '<div class="rz-set-help">Le silence qui dit « j’ai fini ma phrase ». Plus longue, vous pouvez chercher vos mots sans qu’il vous coupe ; plus courte, la conversation va plus vite.</div>'
+      + field('Garder l’écran allumé', awSw)
+      + typo('<div class="rz-set-help">Pendant la conversation mains libres, l’écran ne se met pas en veille ; la veille habituelle reprend dès qu’elle s’arrête. '
+        + 'Sans elle, sur Android, la conversation peut continuer écran éteint (selon le téléphone et l’économie d’énergie) ; sur iPhone, le système coupe le micro dès que l’écran se verrouille : gardez alors cette option. '
+        + 'Certains navigateurs ne savent pas tenir l’écran allumé : le bandeau du tuteur le dit. La bascule existe aussi dans la conversation.</div>')
       + '<div class="rzv-set-sub">Transcription en direct</div>'
       + (asr ? asr.modelsHtml() : '<div class="asr-note">Indisponible dans cette fenêtre : Whisper transcrit chaque phrase quand vous vous taisez.</div>')
       + '<div class="rz-set-help">Un seul modèle pour l’anglais et le français, plus précis que Whisper et robuste aux accents : votre phrase s’écrit pendant que vous parlez et part au tuteur, ponctuée, dès que vous vous taisez ; Whisper mesure ensuite, sans faire attendre, les mots douteux et le débit. ' + (bridge.mode === 'server' || (bridge.remote && bridge.remote()) ? 'Tout se passe sur le serveur Révizator.' : 'Tout reste sur ce poste.') + '</div>'
