@@ -443,7 +443,7 @@ public sealed class WhisperTranscriber
                 var summary = detail ? " ; detail : " + AddDetail(result, run, samples, reference) : "";
                 watch.Stop();
                 result["ms"] = watch.ElapsedMilliseconds;
-                _log.Info($"Whisper : {what} de {seconds:0.0} s transcrit en {watch.ElapsedMilliseconds} ms ({model.Id}, {detected}, {text.Length} caracteres){summary}");
+                _log.Info($"Whisper : {what} de {seconds:0.0} s transcrit en {watch.ElapsedMilliseconds} ms ({model.Id}, {detected}, {text.Length} caracteres, {Threads} fils){summary}");
                 return result;
             }
             finally
@@ -504,10 +504,17 @@ public sealed class WhisperTranscriber
     /// </summary>
     private sealed record RunResult(string Text, string Language, List<SpokenWord>? Words, double? English, string? FreeLanguage, long LanguageMs);
 
+    /// <summary>
+    /// Fils de calcul d'une transcription : la moitie des coeurs logiques (8 au plus), mais au moins 4 quand la
+    /// machine les a. Sur le serveur (conteneur a 4 coeurs), la moitie ne laissait que 2 fils : une phrase en
+    /// Whisper Small prenait 9 s, quelle que soit sa duree (une transcription a la fois : rien ne se dispute les coeurs).
+    /// </summary>
+    internal static readonly int Threads = Math.Clamp(Math.Max(Environment.ProcessorCount / 2, Math.Min(Environment.ProcessorCount, 4)), 2, 8);
+
     private async Task<RunResult> RunAsync(WhisperFactory factory, float[] samples, string language, bool paragraphs, bool detail, bool accent, string job, CancellationToken ct)
     {
         var last = Stopwatch.StartNew();
-        var threads = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
+        var threads = Threads;
         var builder = factory.CreateBuilder()
             .WithThreads(threads)
             .WithLanguage(language)

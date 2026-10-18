@@ -1591,7 +1591,9 @@
       t.promise = segmentWav(frames, AUD.ctx.sampleRate).then(function (data) {
         if (t.cancelled) return null;
         var p = { job: job, data: data, model: o.whisperModel || 'base', language: o.language || 'fr' };
-        if (o.detail) p.detail = true;
+        /* Jamais la détection libre de la langue (P(en), indice d'accent) : personne ne la lit ici, et elle coûte
+           un passage d'encodeur de plus — 4,3 s sur les 9 s d'une phrase, mesuré sur le serveur (4 cœurs). */
+        if (o.detail) { p.detail = true; p.accent = false; }
         if (o.keepAudio) p.keep = true;
         return bridge.call('transcribe', p, 120000);
       }).then(function (r) { return r || null; })['catch'](function (e) {
