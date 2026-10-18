@@ -1302,11 +1302,11 @@
       return clamp(E.opts.sensitivity == null ? 40 : Number(E.opts.sensitivity) || 0, 0, 100);
     }
 
-    /* Fin d'énoncé : le silence voulu (endMs). La transcription spéculative part 450 ms avant, jamais
-       plus tôt que SPEC_MS : avec une longue tolérance, une pause pour chercher ses mots ne lance pas
-       une transcription aussitôt annulée. */
+    /* Fin d'énoncé : le silence voulu (endMs). La transcription spéculative part 700 ms avant, jamais
+       plus tôt que SPEC_MS (300 ms) : la transcription a de l'avance sur la fin de la pause, et une longue
+       tolérance (1,5 s) ne lance pas pour autant une transcription à chaque mot cherché. */
     function endMs() { var v = Number(E.opts.endMs); return isFinite(v) && v > 0 ? clamp(Math.round(v), 400, 2500) : END_MS; }
-    function specMs() { return Math.max(SPEC_MS, endMs() - 450); }
+    function specMs() { return Math.max(SPEC_MS, endMs() - 700); }
 
     /* Seuil (niveau de la bande voix) = plancher de bruit + marge, jamais sous un plancher absolu ; la
        sensibilité réduit l'un et l'autre. Recalibrage : à 50, marge de 16 dB (12 avant) et plancher
@@ -1594,6 +1594,8 @@
         /* Jamais la détection libre de la langue (P(en), indice d'accent) : personne ne la lit ici, et elle coûte
            un passage d'encodeur de plus — 4,3 s sur les 9 s d'une phrase, mesuré sur le serveur (4 cœurs). */
         if (o.detail) { p.detail = true; p.accent = false; }
+        /* Contexte audio réduit à la durée de la phrase (l'hôte refait en entier un texte suspect). */
+        p.quick = true;
         if (o.keepAudio) p.keep = true;
         return bridge.call('transcribe', p, 120000);
       }).then(function (r) { return r || null; })['catch'](function (e) {
