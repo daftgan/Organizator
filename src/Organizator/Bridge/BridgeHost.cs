@@ -260,6 +260,11 @@ public sealed class BridgeHost
             var result = await DispatchAsync(type!, payload).ConfigureAwait(true);
             Reply(id, true, result, null);
         }
+        catch (TranscriptionCancelledException ex)
+        {
+            // Annulation demandee par la page (transcription speculative) : WhisperTranscriber l'a deja notee.
+            Reply(id, false, null, ex.Message);
+        }
         catch (Exception ex)
         {
             _log.Error("Echec du traitement d'un message web", ex);
