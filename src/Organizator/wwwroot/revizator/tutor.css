@@ -411,6 +411,49 @@
 .rzv-set-sub { margin: 14px 0 2px; padding-top: 10px; border-top: 2px solid var(--color-neutral-200); font-size: 13px; font-weight: 700; }
 .rzv-set .asr-models { margin-bottom: 4px; }
 
+/* ── Mode calme (petit écran, mains libres) : le pupitre se replie, un toucher le rappelle ──
+   tutor.js pose body.rzv-calm ; le pupitre se referme en hauteur (grid-template-rows 1fr → 0fr) en glissant
+   vers le bas et en s'estompant, et une petite pastille rappelle qu'un toucher le fait revenir. */
+.rzv-dock-in { display: contents; }
+.rzv-calm-tip { display: none; }
+@media (max-width: 600px) {
+  .rzv-dock.is-live {
+    display: grid; grid-template-rows: 1fr;
+    transition: grid-template-rows 0.5s cubic-bezier(0.22, 0.8, 0.24, 1), padding 0.5s cubic-bezier(0.22, 0.8, 0.24, 1),
+      box-shadow 0.4s ease, background-color 0.4s ease;
+  }
+  .rzv-dock.is-live > .rzv-dock-in {
+    display: flex; flex-direction: column; align-items: center; gap: 9px; min-height: 0; overflow: hidden;
+    transition: opacity 0.3s ease, transform 0.5s cubic-bezier(0.22, 0.8, 0.24, 1), filter 0.4s ease;
+  }
+  body.rzv-calm .rzv-dock.is-live {
+    grid-template-rows: 0fr; padding-top: 0; padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    background-color: transparent; box-shadow: none; pointer-events: none;
+  }
+  body.rzv-calm .rzv-dock.is-live > .rzv-dock-in { opacity: 0; transform: translateY(18px) scale(0.98); filter: blur(2px); }
+
+  .rzv-calm-tip {
+    display: flex; align-items: center; gap: 8px; position: fixed; left: 50%; z-index: 30;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px)); transform: translate(-50%, 14px); opacity: 0; pointer-events: none;
+    padding: 8px 15px; border-radius: 999px; white-space: nowrap; font-size: 12.5px; font-weight: 600; color: var(--rz-ink-soft);
+    background: color-mix(in srgb, var(--color-surface) 84%, transparent); border: 1px solid color-mix(in srgb, var(--color-neutral-400) 30%, transparent);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: var(--shadow-md);
+    transition: opacity 0.2s ease, transform 0.3s ease;
+  }
+  .rzv-calm-tip i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--color-accent-2-500); animation: rzv-breathe 1.6s ease-in-out infinite; }
+  body.rzv-calm .rzv-calm-tip { animation: rzv-calm-tip 7s cubic-bezier(0.22, 0.8, 0.24, 1) 0.3s forwards; }
+}
+/* La pastille arrive en douceur, reste lisible quelques secondes, puis se fait discrète. */
+@keyframes rzv-calm-tip {
+  0% { opacity: 0; transform: translate(-50%, 14px); }
+  8% { opacity: 1; transform: translate(-50%, 0); }
+  60% { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0.45; transform: translate(-50%, 0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .rzv-dots i, .rzv-lat.is-wait svg { animation: none; opacity: 0.7; }
+  .rzv-dock.is-live, .rzv-dock.is-live > .rzv-dock-in, .rzv-calm-tip { transition-duration: 0.01s; }
+  body.rzv-calm .rzv-dock.is-live > .rzv-dock-in { transform: none; filter: none; }
+  .rzv-calm-tip i { animation: none; }
 }

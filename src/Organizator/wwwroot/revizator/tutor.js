@@ -981,6 +981,7 @@
     stopMeter();
     L.phase = 'idle'; L.phaseText = ''; L.caption = ''; L.notices = {}; L.muted = false; L.turns = {};
     L.byId = {}; L.waiting = []; L.autoEnd = null; L.awake = '';
+    calmStop();
     setDraft('');
     if (e) { try { if (typeof e.destroy === 'function') e.destroy(); else e.stop(); } catch (err) { /* déjà arrêté */ } }
     if (L.stage) updateStage();
@@ -1060,6 +1061,8 @@
     }
     L.eng = eng;
     L.sentAt = Date.now();
+    calmBind();
+    calmSoon(CALM_FIRST_MS);
     startMeter();
     updateStage();
     var p;
@@ -1243,6 +1246,8 @@
     t.tip = clean(meta.tipFr, 400);
     t.end = !!meta.end;
     if (t.end) T.dismissEnd = '';
+    /* Le tuteur propose de conclure : le pupitre revient, avec ses boutons. */
+    if (t.end && !isLong(chat)) calmWake();
     /* Au long cours, end veut dire « l'apprenant a demandé d'arrêter » : le bilan suit l'au revoir, sans un clic. */
     if (t.end && isLong(chat)) L.autoEnd = { chatId: chat.id, turn: info.turn };
     applyRecast(chat.turns[idx - 1], meta.recast);
@@ -1593,7 +1598,7 @@
   function liveDockHtml(chat, endBar) {
     var muted = L.muted;
     var hint = '<span class="rzv-live-hint">Parlez quand vous voulez, il vous écoute · <span class="rz-kbd">Espace</span> le faire taire · <span class="rz-kbd">M</span> micro · <span class="rz-kbd">R</span> réécouter · <span class="rz-kbd">T</span> traduire · <span class="rz-kbd">Échap</span> sortir</span>';
-    return '<div class="rzv-dock is-live">' + endBar
+    return '<div class="rzv-dock is-live"><div class="rzv-dock-in">' + endBar
       + '<div class="rzv-dock-row">' + modesHtml(true, null)
       + '<div class="rzv-live-ctl">'
       + '<button type="button" class="btn btn-secondary" data-act="rz-tutor-hush" title="Faire taire le tuteur (Espace)"' + (L.eng ? '' : ' disabled') + '>' + R.icon('stop') + ' Faire taire</button>'
@@ -1604,7 +1609,71 @@
       + '</div></div>'
       + '<div class="rzv-hint">' + hint + '</div>'
       + '<div class="rzv-write"><input class="input" type="text" data-role="rz-tutor-text" data-focus-key="rzv-text" placeholder="Écrire plutôt… (Entrée envoie)" maxlength="1000" lang="en" autocomplete="off" value="' + esc(T.draft) + '">'
-      + '<button type="button" class="btn btn-secondary" data-act="rz-tutor-send"' + (L.eng ? '' : ' disabled') + '>' + R.icon('arrow') + ' Envoyer</button></div></div>';
+      + '<button type="button" class="btn btn-secondary" data-act="rz-tutor-send"' + (L.eng ? '' : ' disabled') + '>' + R.icon('arrow') + ' Envoyer</button></div></div></div>';
+  }
+
+  /* ══ Mode calme (téléphone) ═════════════════════════════════════════════
+     Pendant une conversation mains libres sur un petit écran, le pupitre se replie quelques secondes après
+     le départ (puis 6 s après chaque toucher) : la conversation prend tout l'écran. Un toucher n'importe où le
+     fait revenir. Il reste ouvert tant qu'on écrit dedans ou que le tuteur propose de conclure. L'état vit sur
+     <body> (classe rzv-calm), jamais réécrit par le rendu ; les transitions sont dans mobile.css. */
+  var CALM = { on: false, timer: 0, bound: false, tip: null };
+  var CALM_FIRST_MS = 2500, CALM_IDLE_MS = 6000;
+  function calmScreen() { return !!(window.matchMedia && window.matchMedia('(max-width: 600px)').matches); }
+  function calmWanted() { return calmScreen() && T.screen === 'chat' && R.viewId() === 'tutor' && liveOn(current()); }
+  function calmBlocked() {
+    var a = document.activeElement;
+    if (a && a.closest && a.closest('.rzv-dock')) return true;
+    return !!document.querySelector('.rzv-dock.is-live .rzv-endbar');
+  }
+  function calmTip() {
+    if (CALM.tip) return CALM.tip;
+    var el = document.createElement('div');
+    el.className = 'rzv-calm-tip';
+    el.setAttribute('aria-hidden', 'true');
+    el.innerHTML = '<i></i><span>Touchez l’écran pour les commandes</span>';
+    document.body.appendChild(el);
+    CALM.tip = el;
+    return el;
+  }
+  function setCalm(on) {
+    on = !!on && calmWanted();
+    if (CALM.on === on) return;
+    CALM.on = on;
+    if (on) calmTip();
+    document.body.classList.toggle('rzv-calm', on);
+  }
+  function calmSoon(ms) {
+    clearTimeout(CALM.timer);
+    if (!calmWanted()) { setCalm(false); return; }
+    CALM.timer = setTimeout(function () {
+      if (!calmWanted()) { setCalm(false); return; }
+      if (calmBlocked()) { calmSoon(CALM_IDLE_MS); return; }
+      setCalm(true);
+    }, ms);
+  }
+  function calmWake() {
+    if (!calmWanted()) { setCalm(false); return; }
+    setCalm(false);
+    calmSoon(CALM_IDLE_MS);
+  }
+  function calmStop() { clearTimeout(CALM.timer); CALM.timer = 0; setCalm(false); }
+  function calmBind() {
+    if (CALM.bound) return;
+    CALM.bound = true;
+    /* En capture : le toucher qui réveille le pupitre fait aussi ce qu'il touche (une bulle à traduire…). */
+    document.addEventListener('pointerdown', function () { if (CALM.on || CALM.timer) calmWake(); }, true);
+    document.addEventListener('focusin', function (e) {
+      if (e.target && e.target.closest && e.target.closest('.rzv-dock')) { clearTimeout(CALM.timer); setCalm(false); }
+    }, true);
+    document.addEventListener('focusout', function (e) {
+      if (e.target && e.target.closest && e.target.closest('.rzv-dock')) calmSoon(CALM_IDLE_MS);
+    }, true);
+    if (window.matchMedia) {
+      var mq = window.matchMedia('(max-width: 600px)');
+      var onChange = function () { if (!calmScreen()) calmStop(); else if (calmWanted()) calmSoon(CALM_IDLE_MS); };
+      if (mq.addEventListener) mq.addEventListener('change', onChange); else if (mq.addListener) mq.addListener(onChange);
+    }
   }
 
   function dockHtml(chat, p, err) {
@@ -1866,6 +1935,7 @@
         updateStage();
       }
       placeDraft(host);
+      if (CALM.on && !calmWanted()) calmStop();
       if (T.toTop) { T.toTop = false; T.toEnd = false; window.scrollTo(0, 0); }
       /* Une nouvelle réplique : la page descend jusqu'au pupitre (jamais vers le haut). */
       if (T.toEnd) {

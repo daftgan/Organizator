@@ -470,7 +470,7 @@ public sealed class WhisperTranscriber
         catch (OperationCanceledException)
         {
             _log.Info($"Whisper : {what} interrompu a la demande");
-            throw new InvalidOperationException("Transcription interrompue.");
+            throw new TranscriptionCancelledException("Transcription interrompue.");
         }
         catch (DllNotFoundException ex)
         {
@@ -1021,3 +1021,9 @@ public sealed class WhisperTranscriber
         }
     }
 }
+
+/// <summary>
+/// Une transcription abandonnee a la demande de la page (transcription speculative du moteur vocal, quand
+/// l'utilisateur reprend la parole) : ce n'est pas une panne. Le pont la journalise comme une information.
+/// </summary>
+public sealed class TranscriptionCancelledException(string message) : InvalidOperationException(message);

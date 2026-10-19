@@ -230,6 +230,11 @@ public sealed class ServerBridge : IDisposable
             var result = await DispatchAsync(type, payload, connection, login).ConfigureAwait(false);
             return Reply(id, true, result, null);
         }
+        catch (TranscriptionCancelledException ex)
+        {
+            // Annulation demandee par la page (transcription speculative) : WhisperTranscriber l'a deja notee.
+            return Reply(id, false, null, ex.Message);
+        }
         catch (Exception ex)
         {
             _log.Error("Echec du traitement d'un message web" + (type is null ? "" : " (" + type + ")"), ex);
