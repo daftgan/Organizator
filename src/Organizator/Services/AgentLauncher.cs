@@ -334,7 +334,7 @@ public sealed class AgentLauncher
         return string.Join("\r\n", lines);
     }
 
-    private static string FirstLine(string value)
+    internal static string FirstLine(string value)
     {
         var index = value.IndexOfAny(new[] { '\r', '\n' });
         return index < 0 ? value : value[..index];

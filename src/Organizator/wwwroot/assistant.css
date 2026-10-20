@@ -1,0 +1,124 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   assistant.css — le panneau de l'assistant (assistant.js)
+   Même cadre que le panneau d'une tâche (.panel, .log, .msg) : un fil, puis la zone de saisie.
+   Les actions de l'agent sont des cartes : faite (Annuler), proposée (Appliquer / Refuser, Lancer).
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.rz-only #assistant-btn, .rz-only #live-btn { display: none !important; }
+
+.as-head { display: flex; align-items: center; flex: none; }
+.as-reset.is-armed { color: #f3b38a; }
+
+.as-log { padding-bottom: 14px; }
+
+/* Pied : état de la réponse, saisie, puis modèle et bouton. */
+.as-foot {
+  flex: none; display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 16px 14px; background: rgba(255, 255, 255, 0.05);
+}
+.as-status {
+  font-family: var(--font-mono); font-size: 11.5px; color: #f0b35b;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.as-input {
+  display: block; width: 100%; box-sizing: border-box; resize: none; min-height: 56px; max-height: 200px;
+  font-family: var(--font-body); font-size: 13.5px; line-height: 1.5;
+}
+.as-actions { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.as-meta { overflow: hidden; text-overflow: ellipsis; }
+.as-actions .dark-btn { display: inline-flex; align-items: center; gap: 6px; }
+.as-actions .dark-btn svg { width: 13px; height: 13px; }
+.as-send:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Accueil d'une discussion vide. */
+.as-empty { color: rgba(255, 255, 255, 0.62); font-size: 13px; line-height: 1.6; }
+.as-empty p { margin: 0 0 10px; }
+.as-empty strong { color: rgba(255, 255, 255, 0.92); }
+.as-ideas { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 14px; }
+.as-idea {
+  border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.86); border-radius: 999px; padding: 7px 14px;
+  font: inherit; font-size: 12.5px; cursor: pointer; text-align: left;
+}
+.as-idea:hover { background: rgba(255, 255, 255, 0.12); border-color: var(--color-accent-400); }
+
+.as-more {
+  display: block; margin: 0 auto 16px; border: none; background: none; cursor: pointer;
+  color: var(--color-accent-300); font: inherit; font-size: 12px;
+}
+.as-more:hover { color: #fff; }
+
+.as-tools { margin: -6px 0 14px; }
+
+.as-notice {
+  margin: 0 0 14px; padding: 8px 12px; border-radius: 10px; font-size: 12.5px;
+  background: rgba(255, 255, 255, 0.05); color: rgba(255, 255, 255, 0.62);
+}
+.as-notice.is-error { background: rgba(178, 58, 46, 0.22); color: #f2b8b0; }
+
+.as-end {
+  margin: -12px 0 18px; text-align: right;
+  font-family: var(--font-mono); font-size: 10.5px; color: rgba(255, 255, 255, 0.3);
+}
+
+/* Réponse en préparation : trois points. */
+.as-wait { display: flex; gap: 5px; margin: 0 0 16px 2px; }
+.as-wait span {
+  width: 6px; height: 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.45);
+  animation: as-dot 1.2s ease-in-out infinite;
+}
+.as-wait span:nth-child(2) { animation-delay: 0.15s; }
+.as-wait span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes as-dot { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+
+/* ── Cartes d'action ─────────────────────────────────────────────────── */
+.as-card {
+  margin: 0 0 16px; padding: 11px 14px; border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12); border-left: 3px solid var(--color-accent-2-400);
+  background: rgba(255, 255, 255, 0.04); font-size: 13px; color: rgba(255, 255, 255, 0.84);
+}
+.as-card.is-proposal { border-left-color: var(--color-accent-400); }
+.as-card.is-proposed { background: rgba(198, 113, 57, 0.12); border-color: rgba(198, 113, 57, 0.45); border-left-color: var(--color-accent-400); }
+.as-card.is-undone, .as-card.is-refused { opacity: 0.6; }
+.as-card.is-undone .as-card-title, .as-card.is-refused .as-card-title { text-decoration: line-through; }
+.as-card.is-failed { border-left-color: #b23a2e; }
+.as-card-head { display: flex; align-items: baseline; gap: 10px; }
+.as-card-title { font-weight: 650; color: rgba(255, 255, 255, 0.95); }
+.as-card-state {
+  margin-left: auto; flex: none; font-family: var(--font-mono); font-size: 10.5px;
+  letter-spacing: 0.06em; text-transform: uppercase; color: rgba(255, 255, 255, 0.45);
+}
+.as-card.is-proposed .as-card-state { color: #f3b38a; }
+.as-card.is-applied .as-card-state, .as-card.is-launched .as-card-state { color: #7fc79a; }
+.as-card.is-failed .as-card-state { color: #f2a097; }
+.as-card-subject { margin-top: 3px; overflow-wrap: anywhere; }
+.as-card-detail { margin-top: 3px; font-family: var(--font-mono); font-size: 11.5px; color: rgba(255, 255, 255, 0.5); overflow-wrap: anywhere; }
+.as-card-reason { margin-top: 6px; color: rgba(255, 255, 255, 0.72); font-style: italic; }
+.as-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.as-card-actions .dark-btn { padding: 6px 12px; font-size: 12.5px; }
+.as-card-actions .dark-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.as-see { font-size: 12px; }
+
+/* Avant / après d'un mot-clé : le texte proposé se lit d'office, l'actuel se déplie. */
+.as-diff { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.as-diff-label {
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45); margin-bottom: 4px;
+}
+.as-diff-new, .as-diff-old {
+  white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; line-height: 1.5;
+  padding: 8px 10px; border-radius: 8px; max-height: 320px; overflow-y: auto;
+}
+.as-diff-new { background: rgba(127, 199, 154, 0.1); border: 1px solid rgba(127, 199, 154, 0.28); color: rgba(255, 255, 255, 0.9); }
+.as-diff-old { margin-top: 6px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.6); }
+.as-diff-toggle {
+  margin-top: 4px; padding: 0; border: none; background: none; cursor: pointer;
+  color: var(--color-accent-300); font: inherit; font-size: 11.5px;
+}
+.as-diff-toggle:hover { color: #fff; }
+
+/* Lancement proposé : agent, sous-tâches, mots-clés, dossier. */
+.as-launch { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; }
+.as-launch-row { display: flex; gap: 10px; font-size: 12.5px; }
+.as-launch-key { flex: none; width: 92px; color: rgba(255, 255, 255, 0.45); }
+.as-launch-val { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }

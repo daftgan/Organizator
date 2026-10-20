@@ -46,6 +46,8 @@
        dite doit être transcrite en moins d'une seconde. */
     voiceModel: 'sonnet', voiceEffort: 'low', voiceVoice: '', voiceRate: 1, voicePersona: 'Alma', voiceTopic: 'libre',
     voiceInstructions: '', voiceWeb: true, voiceWhisperModel: 'base', voiceSensitivity: 40, voiceBargeIn: 'words',
+    /* Assistant (assistant.js) : relire des consignes et ranger la file demande mieux qu'un modèle rapide. */
+    assistantModel: 'sonnet', assistantEffort: 'medium',
     /* Serveur Révizator (docs/REVIZATOR-SERVER.md) : vide = Révizator reste sur ce PC. */
     revizatorServerUrl: '', revizatorServerToken: '', revizatorServerLogin: ''
   };
@@ -94,8 +96,9 @@
   var ARTICLE_ID = '__article__';
   var ARTICLE_AI_ID = '__article_ai__';
   var FEEDBACK_CONTEXT = "Tu travailles sur le code source d'Organizator, l'application depuis laquelle l'utilisateur t'envoie ses remarques ; le dossier courant est son dépôt.\n"
-    + 'Avant de modifier quoi que ce soit, lis README.md et docs/ARCHITECTURE.md : structure, contrat JS ↔ hôte, construction (MSBuild 18 via Organizator.sln, jamais un .csproj seul) et publication (publish.ps1).\n'
-    + "L'application tourne probablement pendant ton travail (publish\\Organizator.exe) : ne la ferme pas sans prévenir l'utilisateur, et préserve ses données dans %LOCALAPPDATA%\\Organizator.\n"
+    + "Commence par git fetch : d'autres sessions fusionnent sur GitHub et la branche main locale peut être en retard sur origin/main — pars de la dernière version.\n"
+    + 'Avant de modifier quoi que ce soit, lis CLAUDE.md, README.md et docs/ARCHITECTURE.md : règles du projet, structure, contrat JS ↔ hôte, construction (MSBuild 18 via Organizator.sln, jamais un .csproj seul) et publication (une fusion sur main publie la version, que les PC reçoivent par le serveur Révizator ; publish.ps1 sert aux essais).\n'
+    + "L'application installée tourne probablement pendant ton travail (%LOCALAPPDATA%\\Programs\\Organizator\\Organizator.exe) : ne la ferme pas sans prévenir l'utilisateur, et préserve ses données dans %LOCALAPPDATA%\\Organizator.\n"
     + 'Réponds en français.';
 
   var ICON = {
@@ -348,6 +351,7 @@
       voiceInstructions: S.settings.voiceInstructions, voiceWeb: S.settings.voiceWeb,
       voiceWhisperModel: S.settings.voiceWhisperModel, voiceSensitivity: S.settings.voiceSensitivity,
       voiceBargeIn: S.settings.voiceBargeIn,
+      assistantModel: S.settings.assistantModel, assistantEffort: S.settings.assistantEffort,
       revizatorServerUrl: S.settings.revizatorServerUrl, revizatorServerToken: S.settings.revizatorServerToken,
       revizatorServerLogin: S.settings.revizatorServerLogin
     })['catch'](function (e) { toast('Réglages non sauvegardés : ' + e.message); });
@@ -1775,6 +1779,21 @@
     });
   }
 
+  /* Le « Travail déjà fait » d'une tâche, sans formulaire (lancement par l'assistant) : vide quand il
+     n'y a rien à transmettre, ou quand la lecture échoue — la conversation part alors sans. */
+  function recapTextFor(task) {
+    var entries = priorTasksOf(task);
+    var convs = recapConvos(entries);
+    if (!convs.length) return Promise.resolve('');
+    return bridge.call('getRecaps', {
+      sessions: convs.map(function (c) { return { sessionId: c.id, cwd: c.cwd, provider: providerOf(c) }; })
+    }, 60000).then(function (res) {
+      var answers = {};
+      ((res && res.sessions) || []).forEach(function (s) { if (s && s.sessionId) answers[s.sessionId] = s; });
+      return buildRecap(entries, answers).text;
+    }, function () { return ''; });
+  }
+
   function recapKindLabel(kind) {
     if (kind === 'parent') return 'Tâche parente';
     if (kind === 'sibling') return 'Sous-tâche précédente';
@@ -1962,6 +1981,13 @@
     S.ui.newConvoModel = String(S.settings[modelSettingKey(id)] || '');
     S.ui.newConvoEffort = String(S.settings[effortSettingKey(id)] || '');
     S.ui.newConvoCustom = false;
+  }
+
+  /* Où s'ouvrent les conversations, selon le réglage Terminal : « dans PowerShell », « dans la fenêtre Conversations »… */
+  function whereWords() {
+    if (S.settings.terminal === 'app') return 'dans la fenêtre Conversations';
+    if (S.settings.terminal === 'wt' && S.env.hasWt) return 'dans Windows Terminal';
+    return 'dans PowerShell';
   }
 
   function agentTag(c) {
@@ -3100,7 +3126,7 @@
       return '<div class="log-state st-working"><span class="st-dot"></span><span>L’agent travaille…</span>'
         + (a.detail ? '<span class="log-tool">' + esc(a.detail) + '</span>' : '') + '</div>';
     }
-    if (st === 'waiting') return '<div class="log-state st-waiting"><span class="st-dot"></span><span>L’agent attend votre réponse dans PowerShell.</span></div>';
+    if (st === 'waiting') return '<div class="log-state st-waiting"><span class="st-dot"></span><span>L’agent attend votre réponse ' + esc(whereWords()) + '.</span></div>';
     if (st === 'error') return '<div class="log-state st-error"><span class="st-dot"></span><span>' + esc(stateText(c)) + '</span></div>';
     return '';
   }
@@ -3242,6 +3268,8 @@
         renderReviewsBtn();
         renderNotifsBtn();
         renderNotifs();
+        renderLiveBtn();
+        RENDER_HOOKS.forEach(function (fn) { try { fn(); } catch (e) { console.error('[organizator] rendu', e); } });
       }
     });
     syncDictate();
@@ -3755,7 +3783,7 @@
       h.push('<input class="dark-input model-input" type="text" data-role="new-model" data-focus-key="new-model" spellcheck="false" '
         + 'placeholder="Identifiant de modèle, ex. ' + esc(p.example) + '" value="' + esc(S.ui.newConvoModel) + '">');
     }
-    if (cur === 'copilot') h.push('<div class="model-hint">' + esc(copilotCatalogHint()) + '</div>');
+    if (cur === 'copilot') h.push('<div class="model-hint">' + esc(catalogHint('copilot')) + '</div>');
     h.push('</div>');
     h.push('<div class="new-form-block"><div class="new-form-label">Effort</div>');
     h.push(effortSelectHtml(cur, S.ui.newConvoEffort, 'new-effort', 'new-effort', true));
@@ -3952,7 +3980,7 @@
     }
     if (S.ui.launchBusy) return 'Lancement…';
     var n = batchChosen(task).length;
-    return n ? 'Lancer ' + n + (n > 1 ? ' conversations' : ' conversation') + ' dans PowerShell' : 'Aucune sous-tâche cochée';
+    return n ? 'Lancer ' + n + (n > 1 ? ' conversations' : ' conversation') + ' ' + whereWords() : 'Aucune sous-tâche cochée';
   }
 
   /* Formulaire de lancement : agent, modèle, effort, dossier ; `launchLabel` nomme le bouton. */
@@ -4029,7 +4057,7 @@
       var reportCount = reportsOf([c]).length;
       return '<div class="convo">'
         + '<button type="button" class="convo-open" data-act="resume-convo" data-id="' + esc(c.id)
-        + '" title="Reprendre cette session dans PowerShell">'
+        + '" title="Reprendre cette session ' + esc(whereWords()) + '">'
         + '<div class="convo-title">' + esc(c.title || 'Nouvelle session')
         + (reportCount ? '<span class="convo-artifacts" title="' + esc(reportCount + (reportCount > 1 ? ' rapports produits' : ' rapport produit')) + '">'
           + ICON.artifacts + ' ' + esc(reportCount) + '</span>' : '')
@@ -4100,7 +4128,7 @@
     var h = [];
 
     if (S.ui.newConvoOpen) {
-      h.push(newFormHtml('Lancer dans PowerShell'));
+      h.push(newFormHtml('Lancer ' + whereWords()));
     } else {
       h.push('<button type="button" class="new-convo-btn" data-act="new-convo">+ Nouvelle conversation</button>');
     }
@@ -4162,7 +4190,7 @@
     }
 
     if (S.ui.newConvoOpen) {
-      h.push(newFormHtml('Envoyer ' + n + (n > 1 ? ' remarques' : ' remarque') + ' dans PowerShell'));
+      h.push(newFormHtml('Envoyer ' + n + (n > 1 ? ' remarques' : ' remarque') + ' ' + whereWords()));
     } else {
       /* Envoi direct : agent, modèle et effort par défaut, dans le dépôt. Le bouton dit où et avec quoi. */
       var provider = defaultProviderId();
@@ -4204,137 +4232,15 @@
      ce que l'agent écrit ne devient du HTML actif, seuls les liens http(s) deviennent cliquables
      (ouverts dans le navigateur). Un message très long — la tâche entière et ses pièces jointes,
      une liste de remarques — se replie après LOG_FOLD_LINES lignes ; « Afficher tout » le déplie. */
-  var TOOL_LINE = /^\s*\[outil\s*:\s*([^\]]*)\]\s*$/;
-  var LIST_LINE = /^(\s*)([-*+•]|\d{1,3}[.)])\s+(.*)$/;
   var LOG_FOLD_LINES = 14;
   var LOG_FOLD_CHARS = 1400;
   /* Rendu Markdown d'un message, par texte : le journal est relu toutes les deux secondes. */
   var logHtmlMemo = {};
   var logHtmlMemoSize = 0;
 
-  function mdLinkHtml(url, label) {
-    return '<a class="md-link" draggable="false" data-act="open-url" data-url="' + esc(url)
-      + '" title="' + esc(url) + '">' + esc(label) + '</a>';
-  }
-
-  /* Une ligne : code entre accents graves, liens, gras, italique, barré. Le code et les liens sont
-     mis de côté avant l'échappement, pour que leur contenu ne soit pas réinterprété. */
-  function mdInline(raw) {
-    var keep = [];
-    function hold(html) { keep.push(html); return '\u0000' + (keep.length - 1) + '\u0000'; }
-    var s = String(raw == null ? '' : raw).replace(/\u0000/g, '');
-    s = s.replace(/`([^`\n]+)`/g, function (m, code) { return hold('<code>' + esc(code) + '</code>'); });
-    s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, function (m, label, url) { return hold(mdLinkHtml(url, label)); });
-    s = s.replace(/https?:\/\/[^\s<>"'`\u0000]+/g, function (m) {
-      var url = m.replace(/[.,;:!?)\]]+$/, '');
-      return hold(mdLinkHtml(url, url)) + m.slice(url.length);
-    });
-    s = esc(s)
-      .replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/(^|[^\w])__([^_\n]+?)__(?!\w)/g, '$1<strong>$2</strong>')
-      .replace(/(^|[^\w*])\*([^*\s][^*\n]*?)\*(?![\w*])/g, '$1<em>$2</em>')
-      .replace(/~~([^~\n]+?)~~/g, '<del>$1</del>');
-    return s.replace(/\u0000(\d+)\u0000/g, function (m, i) { return keep[+i]; });
-  }
-
-  /* Appels d'outils consécutifs : un nom par outil, dans l'ordre d'apparition, avec leur nombre.
-     Un outil MCP (« mcp__bitbucket__get_diff ») se lit par son dernier segment. */
-  function logToolsHtml(names) {
-    var order = [], n = {};
-    names.forEach(function (x) { if (!n[x]) { n[x] = 0; order.push(x); } n[x]++; });
-    return '<div class="msg-tools" title="' + esc(names.length + (names.length > 1 ? ' appels d’outils : ' : ' appel d’outil : ') + order.join(', ')) + '">'
-      + '<span class="msg-tools-icon">' + ICON.tool + '</span>'
-      + order.map(function (x) {
-        var short = /^mcp__/.test(x) ? x.split('__').pop() : x;
-        return '<span class="msg-tool">' + esc(short) + (n[x] > 1 ? '<span class="msg-tool-n">×' + n[x] + '</span>' : '') + '</span>';
-      }).join('') + '</div>';
-  }
-
-  function mdTableHtml(rows) {
-    function cells(line) {
-      return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); });
-    }
-    var head = cells(rows[0]);
-    return '<div class="md-table-wrap"><table class="md-table"><thead><tr>'
-      + head.map(function (c) { return '<th>' + mdInline(c) + '</th>'; }).join('') + '</tr></thead><tbody>'
-      + rows.slice(1).map(function (r) {
-        return '<tr>' + cells(r).map(function (c) { return '<td>' + mdInline(c) + '</td>'; }).join('') + '</tr>';
-      }).join('') + '</tbody></table></div>';
-  }
-
-  /* Blocs : code délimité, lignes d'outils, titres, filets, tableaux, citations, listes (cases à
-     cocher comprises, numérotation gardée d'un bloc à l'autre), paragraphes. */
-  function mdBlocksHtml(text) {
-    var lines = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n');
-    var out = [], para = [], list = null, i = 0;
-    function flushPara() { if (para.length) { out.push('<p>' + para.map(mdInline).join('<br>') + '</p>'); para = []; } }
-    function flushList() { if (list) { out.push('<' + list.tag + ' class="md-list">' + list.items.join('') + '</' + list.tag + '>'); list = null; } }
-    function flush() { flushPara(); flushList(); }
-    while (i < lines.length) {
-      var line = lines[i];
-      var fence = /^\s*(`{3,}|~{3,})\s*[\w+#.-]*\s*$/.exec(line);
-      if (fence) {
-        flush();
-        var close = new RegExp('^\\s*' + (fence[1].charAt(0) === '`' ? '`' : '~') + '{' + fence[1].length + ',}\\s*$');
-        var code = [];
-        for (i++; i < lines.length && !close.test(lines[i]); i++) code.push(lines[i]);
-        i++;
-        out.push('<pre class="md-code"><code>' + esc(code.join('\n')) + '</code></pre>');
-        continue;
-      }
-      if (TOOL_LINE.test(line)) {
-        flush();
-        var names = [];
-        while (i < lines.length && (TOOL_LINE.test(lines[i]) || (!lines[i].trim() && TOOL_LINE.test(lines[i + 1] || '')))) {
-          var t = TOOL_LINE.exec(lines[i]);
-          if (t) names.push(t[1].trim() || '?');
-          i++;
-        }
-        out.push(logToolsHtml(names));
-        continue;
-      }
-      if (!line.trim()) { flush(); i++; continue; }
-      var h = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
-      if (h) { flush(); out.push('<div class="md-h md-h' + Math.min(h[1].length, 4) + '">' + mdInline(h[2]) + '</div>'); i++; continue; }
-      if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { flush(); out.push('<hr class="md-hr">'); i++; continue; }
-      if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1] || '')) {
-        flush();
-        var rows = [line];
-        for (i += 2; i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i]); i++) rows.push(lines[i]);
-        out.push(mdTableHtml(rows));
-        continue;
-      }
-      if (/^\s{0,3}>/.test(line)) {
-        flush();
-        var quote = [];
-        for (; i < lines.length && /^\s{0,3}>/.test(lines[i]); i++) quote.push(lines[i].replace(/^\s{0,3}>\s?/, ''));
-        out.push('<blockquote class="md-quote">' + quote.map(mdInline).join('<br>') + '</blockquote>');
-        continue;
-      }
-      var li = LIST_LINE.exec(line);
-      if (li) {
-        flushPara();
-        var tag = /\d/.test(li[2]) ? 'ol' : 'ul';
-        var depth = Math.min(3, Math.floor(li[1].replace(/\t/g, '  ').length / 2));
-        if (list && list.tag !== tag && !depth) flushList();
-        if (!list) list = { tag: tag, items: [] };
-        var box = /^\[([ xX])\]\s+(.*)$/.exec(li[3]);
-        var item = box ? '<span class="md-box">' + (box[1] === ' ' ? '☐' : '☑') + '</span> ' + mdInline(box[2]) : mdInline(li[3]);
-        /* Lignes suivantes en retrait : la suite du même élément. */
-        for (i++; i < lines.length && /^\s{2,}\S/.test(lines[i]) && !LIST_LINE.test(lines[i]) && !TOOL_LINE.test(lines[i]); i++) {
-          item += '<br>' + mdInline(lines[i].trim());
-        }
-        list.items.push('<li' + (depth ? ' class="md-d' + depth + '"' : '')
-          + (tag === 'ol' && !depth ? ' value="' + parseInt(li[2], 10) + '"' : '') + '>' + item + '</li>');
-        continue;
-      }
-      flushList();
-      para.push(line.trim());
-      i++;
-    }
-    flush();
-    return out.join('');
-  }
+  /* Le rendu Markdown (liens, ligne, tableaux, blocs, outils regroupés) est dans md.js, chargé avant
+     app.js : la fenêtre Conversations s'en sert aussi. */
+  var mdBlocksHtml = window.OrganizatorMd.blocks;
 
   function logMsgHtml(text) {
     var key = String(text == null ? '' : text);
@@ -4377,9 +4283,9 @@
     } else if (tr.error) {
       body = '<div class="log-note">Journal illisible : ' + esc(tr.error) + '</div>';
     } else if (!tr.exists) {
-      body = '<div class="log-note">Cette session n’a pas encore de messages. Reprenez-la dans PowerShell pour commencer.</div>';
+      body = '<div class="log-note">Cette session n’a pas encore de messages. Reprenez-la ' + esc(whereWords()) + ' pour commencer.</div>';
     } else if (!tr.messages || !tr.messages.length) {
-      body = '<div class="log-note">Cette session n’a pas encore de messages. Reprenez-la dans PowerShell pour commencer.</div>';
+      body = '<div class="log-note">Cette session n’a pas encore de messages. Reprenez-la ' + esc(whereWords()) + ' pour commencer.</div>';
     } else {
       body = logMessagesHtml(c, tr.messages) + logStateHtml(c);
     }
@@ -4389,8 +4295,21 @@
       + '<div class="foot-cwd" title="' + esc(c.cwd) + '">'
       + (footState ? '<span class="foot-state st-' + esc(displayState(c)) + '">' + esc(footState) + '</span> · ' : '')
       + esc(agentTag(c) + ' · ' + (c.cwd || '—')) + '</div>'
-      + '<button type="button" class="resume-btn" data-act="resume-convo" data-id="' + esc(c.id) + '">Reprendre dans PowerShell</button>'
+      + '<button type="button" class="resume-btn" data-act="resume-convo" data-id="' + esc(c.id) + '">'
+      + esc(S.settings.terminal === 'app' ? 'Ouvrir dans la fenêtre Conversations' : 'Reprendre ' + whereWords()) + '</button>'
       + '</div>';
+  }
+
+  /* Panneaux fournis par un module chargé après app.js (assistant.js) : ils prennent la place de
+     celui d'une tâche (S.ui.termTaskId = leur identifiant) et tiennent eux-mêmes leur DOM —
+     `render(host, isNew)` ne réécrit que ce qui a changé, si bien qu'une réponse qui s'écrit ou une
+     relecture des sessions ne reconstruisent pas la zone de saisie. */
+  var PANELS = Object.create(null);
+  /* Appelés à la fin de chaque rendu complet (bouton de l'assistant dans l'en-tête). */
+  var RENDER_HOOKS = [];
+
+  function registerPanel(def) {
+    if (def && def.id && typeof def.render === 'function') PANELS[def.id] = def;
   }
 
   function renderPanel() {
@@ -4398,6 +4317,14 @@
     if (!S.ui.termTaskId) {
       if (host.innerHTML) host.innerHTML = '';
       panelKey = null;
+      return;
+    }
+    var ext = PANELS[S.ui.termTaskId];
+    if (ext) {
+      var fresh = panelKey !== ext.id;
+      if (fresh) host.innerHTML = '';
+      panelKey = ext.id;
+      ext.render(host, fresh);
       return;
     }
     var feed = feedOfPanel(S.ui.termTaskId);
@@ -5242,8 +5169,13 @@
     if (row) row.innerHTML = updateRowHtml();
   }
 
-  function installUpdateNow() {
-    bridge.call('updateInstall', {}).then(function (r) {
+  function installUpdateNow(force) {
+    bridge.call('updateInstall', { force: force === true }).then(function (r) {
+      if (r && r.busy) {
+        toast(r.busy + (r.busy > 1 ? ' conversations travaillent' : ' conversation travaille') + ' dans la fenêtre Conversations : l’installation les interromprait.',
+          { label: 'Installer quand même', run: function () { installUpdateNow(true); } });
+        return;
+      }
       if (!r || !r.ok) toast('Aucune mise à jour prête à installer.');
     })['catch'](function (e) { toast('Installation impossible : ' + e.message); });
   }
@@ -5257,12 +5189,15 @@
       + '<button type="button" class="' + (s.provider === 'copilot' ? 'on' : '') + '" data-act="default-copilot"'
       + (hasProvider('copilot') ? '' : ' disabled') + '>GitHub Copilot</button>'
       + '</div>'));
-    h.push(setRowHtml('Terminal', esc(S.env.hasWt ? 'Application qui accueille les sessions.' : 'Windows Terminal est introuvable sur ce poste.'),
+    h.push(setRowHtml('Terminal', esc((S.env.hasWt ? 'Où s’ouvrent les conversations.' : 'Windows Terminal est introuvable sur ce poste.')
+      + ' « Fenêtre Conversations » : sans console, dans une fenêtre d’Organizator à la manière de Claude Code Desktop — '
+      + 'les sessions par tâche à gauche, la conversation au centre — avec le même agent, le même modèle, le même effort et les mêmes consignes.'),
       '<div class="seg2">'
-      + '<button type="button" class="' + (s.terminal !== 'wt' ? 'on' : '') + '" data-act="term-ps">PowerShell</button>'
+      + '<button type="button" class="' + (s.terminal !== 'wt' && s.terminal !== 'app' ? 'on' : '') + '" data-act="term-ps">PowerShell</button>'
       + '<button type="button" class="' + (s.terminal === 'wt' ? 'on' : '') + '" data-act="term-wt"'
       + (S.env.hasWt ? '' : ' disabled') + '>Windows Terminal</button>'
-      + '</div>'));
+      + '<button type="button" class="' + (s.terminal === 'app' ? 'on' : '') + '" data-act="term-app">Fenêtre Conversations</button>'
+      + '</div>', true));
     h.push(setRowHtml('Clic sur l’icône de console', 'Sur une carte. « Aller au terminal » : quand la tâche n’a qu’une conversation, '
       + 'sa fenêtre revient au premier plan — reprise si elle a été fermée ; avec plusieurs, ou aucune, le panneau s’ouvre pour choisir. '
       + 'Maj&nbsp;+&nbsp;clic fait l’autre.',
@@ -7603,6 +7538,11 @@
     return gone < FLASH_MS ? ' style="animation-delay:-' + gone + 'ms"' : '';
   }
 
+  function renderLiveBtn() {
+    var btn = $('#live-btn');
+    if (btn) btn.hidden = S.settings.terminal !== 'app';
+  }
+
   function renderNotifsBtn() {
     var btn = $('#notifs-btn');
     if (!btn) return;
@@ -8212,6 +8152,43 @@
     if (el) { el.focus(); el.select(); }
   }
 
+  /* Le formulaire de lancement d'une tâche, ouvert dans son panneau et prérempli (proposition de
+     l'assistant) : `o` = { provider, model, effort, cwd, keywords (noms), target: 'self' | 'subs',
+     subs (identifiants à cocher), note, prompt }. Ce qui n'est pas donné garde la valeur d'office. */
+  function openLaunchForm(taskId, o) {
+    var task = taskById(taskId);
+    if (!task) return false;
+    o = o || {};
+    if (currentPage() !== 'queue') goPage('queue', true);
+    S.ui.termTaskId = taskId;
+    S.ui.termConvId = null;
+    S.ui.artifactView = false;
+    S.ui.artifactConvId = null;
+    S.ui.transcript = null;
+    syncPolling();
+    openNewConvo();
+    if (o.provider === 'claude' || o.provider === 'copilot') setNewConvoProvider(o.provider);
+    if (o.model != null) S.ui.newConvoModel = String(o.model);
+    if (o.effort != null) S.ui.newConvoEffort = String(o.effort);
+    if (o.cwd) S.ui.newConvoCwd = String(o.cwd);
+    if (Array.isArray(o.keywords)) S.ui.newConvoKeywords = keywordIdsFor(task, o.keywords);
+    var subs = batchSubsOf(task);
+    if (o.target === 'subs' && subs.length) {
+      S.ui.newConvoTarget = 'subs';
+      if (Array.isArray(o.subs) && o.subs.length) {
+        subs.forEach(function (k) { S.ui.newConvoSubs[k.id] = o.subs.indexOf(k.id) >= 0; });
+      }
+      if (o.note != null) S.ui.newConvoNote = String(o.note);
+    } else if (o.target === 'self' && S.ui.newConvoTarget !== 'self') {
+      S.ui.newConvoTarget = 'self';
+      loadRecap(task);
+    }
+    if (S.ui.newConvoTarget === 'self' && o.prompt) S.ui.newConvoPrompt = String(o.prompt);
+    render();
+    revealTask(taskId);
+    return true;
+  }
+
   function browseFolder(initial) {
     return bridge.call('pickFolder', { initial: initial || '' })
       .then(function (r) { return r && r.path ? r.path : null; })
@@ -8249,20 +8226,21 @@
       String(S.settings[effortSettingKey(provider)] || '').trim(), cwd, []);
   }
 
-  /* Lance une session dans PowerShell ; pour le carnet, les remarques en attente partent en premier message.
+  /* Lance une session (console ou fenêtre Conversations, selon le réglage Terminal) ; pour le carnet, les remarques en attente partent en premier message.
      `prompt` : le premier message d'une tâche (absent = son texte, tel que buildPrompt le propose).
-     Le bouton reste grisé (« Lancement… ») jusqu'à la réponse de l'hôte, puis un toast confirme. */
+     Le bouton reste grisé (« Lancement… ») jusqu'à la réponse de l'hôte, puis un toast confirme.
+     Rend une Promise de la conversation lancée (null si rien n'est parti, la raison dite par un toast). */
   function startSession(task, provider, model, effort, cwd, keywords, prompt, recap) {
-    if (S.ui.launchBusy) return;
-    if (!hasProvider(provider)) { toast(providerById(provider).missing); return; }
+    if (S.ui.launchBusy) return Promise.resolve(null);
+    if (!hasProvider(provider)) { toast(providerById(provider).missing); return Promise.resolve(null); }
     var feedback = task.id === FEEDBACK_ID;
     var pending = feedback ? pendingRemarks() : [];
-    if (feedback && !pending.length) { toast('Aucune remarque à envoyer.'); return; }
+    if (feedback && !pending.length) { toast('Aucune remarque à envoyer.'); return Promise.resolve(null); }
     var first = feedback ? feedbackPrompt(pending)
       : String(prompt == null ? buildPrompt(task) : prompt).trim();
     S.ui.launchBusy = true;
     render();
-    launchSession(task, {
+    return launchSession(task, {
       provider: provider, model: model, effort: effort, cwd: cwd, keywords: keywords, prompt: first, recap: recap,
       title: feedback ? feedbackTitle(pending.length) : ''
     })
@@ -8274,12 +8252,14 @@
         S.ui.newConvoPrompt = '';
         commit();
         toast(feedback
-          ? (pending.length > 1 ? pending.length + ' remarques envoyées' : 'Remarque envoyée') + ' à ' + providerById(provider).label + ' dans PowerShell (' + lastSegment(cwd) + ')'
+          ? (pending.length > 1 ? pending.length + ' remarques envoyées' : 'Remarque envoyée') + ' à ' + providerById(provider).label + ' ' + whereWords() + ' (' + lastSegment(cwd) + ')'
           : (first ? 'Session lancée : l’agent démarre sur la tâche' : 'Session lancée : l’agent attend votre saisie'));
+        return c;
       })['catch'](function (e) {
         S.ui.launchBusy = false;
         render();
         toast('Lancement impossible : ' + e.message);
+        return null;
       });
   }
 
@@ -8298,7 +8278,7 @@
     return bridge.call('startSession', {
       taskId: task.id, provider: o.provider, model: o.model, effort: o.effort, cwd: o.cwd, title: title,
       keywords: chosen, context: buildContext(task, chosen, taskInContext, recap), prompt: first
-    }).then(function (r) {
+    }, 60000).then(function (r) {
       if (!r || !r.sessionId) throw new Error('réponse incomplète de l’hôte');
       return recordConvo(task, r, { provider: o.provider, model: o.model, effort: o.effort, title: title, cwd: o.cwd, keywords: chosen, batch: o.batch });
     });
@@ -8332,7 +8312,8 @@
      relancée (`alive`) : un second agent travaillerait sur le même fichier de session. */
   function resumeToast(r) {
     if (r && r.alive && !r.focused) return 'Session déjà ouverte, mais sa fenêtre est introuvable';
-    if (!r || !r.focused) return 'Session reprise dans PowerShell';
+    if (r && r.window === 'app') return 'Conversation ouverte dans la fenêtre Conversations';
+    if (!r || !r.focused) return 'Session reprise ' + whereWords();
     if (r.raised === false) {
       return 'Session déjà ouverte : Windows n’a pas laissé passer son terminal devant — son bouton clignote dans la barre des tâches'
         + (r.tab ? ', onglet « ' + r.tab + ' »' : '');
@@ -8395,27 +8376,30 @@
     return new Promise(function (resolve) { setTimeout(resolve, ms); });
   }
 
-  function launchBatch(parent) {
-    if (S.ui.launchBusy) return;
-    var provider = S.ui.newConvoProvider === 'copilot' ? 'copilot' : 'claude';
-    if (!hasProvider(provider)) { toast(providerById(provider).missing); return; }
-    var cwd = String(S.ui.newConvoCwd || '').trim();
-    if (!cwd) { toast('Indiquez un dossier de travail.'); return; }
-    var subs = batchChosen(parent);
-    if (!subs.length) { toast('Cochez au moins une sous-tâche.'); return; }
+  /* `o` (facultatif, l'assistant) : { provider, model, effort, cwd, keywords (noms), note, subs (tâches) }
+     à la place du formulaire. Rend une Promise de { n, failed } — n = 0 : rien n'est parti. */
+  function launchBatch(parent, o) {
+    if (S.ui.launchBusy) return Promise.resolve({ n: 0, failed: [] });
+    o = o || {};
+    var provider = (o.provider || S.ui.newConvoProvider) === 'copilot' ? 'copilot' : 'claude';
+    if (!hasProvider(provider)) { toast(providerById(provider).missing); return Promise.resolve({ n: 0, failed: [] }); }
+    var cwd = String(o.cwd != null ? o.cwd : S.ui.newConvoCwd || '').trim();
+    if (!cwd) { toast('Indiquez un dossier de travail.'); return Promise.resolve({ n: 0, failed: [] }); }
+    var subs = o.subs || batchChosen(parent);
+    if (!subs.length) { toast('Cochez au moins une sous-tâche.'); return Promise.resolve({ n: 0, failed: [] }); }
     /* Tout est figé au départ : retoucher le formulaire pendant le lancement ne change rien au lot. */
-    var model = String(S.ui.newConvoModel || '').trim();
-    var effort = String(S.ui.newConvoEffort || '').trim();
+    var model = String(o.model != null ? o.model : S.ui.newConvoModel || '').trim();
+    var effort = String(o.effort != null ? o.effort : S.ui.newConvoEffort || '').trim();
     /* Par nom : une sous-tâche peut être rangée dans une autre catégorie que sa parente. */
-    var names = keywordsByIds(parent, keywordIdsFor(parent, S.ui.newConvoKeywords)).map(function (kw) { return kw.name; });
-    var note = String(S.ui.newConvoNote || '').trim();
+    var names = o.keywords || keywordsByIds(parent, keywordIdsFor(parent, S.ui.newConvoKeywords)).map(function (kw) { return kw.name; });
+    var note = String(o.note != null ? o.note : S.ui.newConvoNote || '').trim();
     var id = uid('b'), prev = parent.batch;
     var launched = [], failed = [], noRecap = false;
     var progress = S.ui.batchProgress = { parentId: parent.id, done: 0, total: subs.length, phase: 'recap' };
     S.ui.launchBusy = true;
     batchLaunching = id;
     render();
-    flushTextWrites().then(function () {
+    return flushTextWrites().then(function () {
       return loadBatchRecaps(subs);
     }).then(function (res) {
       noRecap = res.failed;
@@ -8465,6 +8449,7 @@
       commit();
       refreshSessions();
       toast(batchLaunchText(parent, subs.length, n, failed, noRecap));
+      return { n: n, failed: failed };
     });
   }
 
@@ -8999,6 +8984,8 @@
     'toggle-compact': function () { setSetting('compact', !S.settings.compact); },
     'term-ps': function () { setSetting('terminal', 'powershell'); },
     'term-wt': function () { setSetting('terminal', 'wt'); },
+    'term-app': function () { setSetting('terminal', 'app'); },
+    'open-live': function () { bridge.call('liveOpen', {})['catch'](function (e) { toast('Fenêtre Conversations : ' + e.message); }); },
     'term-click-panel': function () { setSetting('termClick', 'panel'); },
     'term-click-terminal': function () { setSetting('termClick', 'terminal'); },
     'default-claude': function () { setSetting('provider', 'claude'); },
@@ -9458,7 +9445,7 @@
     S.settings.defaultCwd = String(S.settings.defaultCwd || '');
     S.settings.repoDir = String(S.settings.repoDir || '');
     S.settings.bitbucketUrl = String(S.settings.bitbucketUrl || '');
-    S.settings.terminal = S.settings.terminal === 'wt' ? 'wt' : 'powershell';
+    S.settings.terminal = S.settings.terminal === 'wt' || S.settings.terminal === 'app' ? S.settings.terminal : 'powershell';
     S.settings.termClick = S.settings.termClick === 'terminal' ? 'terminal' : 'panel';
     S.settings.provider = S.settings.provider === 'copilot' ? 'copilot' : 'claude';
     S.settings.claudeModel = String(S.settings.claudeModel || '').trim();
@@ -9698,4 +9685,32 @@
   };
   window.__organizator.registerPage = registerPage;
   window.__organizator.pageApi = pageApi;
+
+  /* Ce dont l'assistant (assistant.js) a besoin pour agir sur la file comme le fait l'interface :
+     les données, les règles des tâches, des catégories et des mots-clés, les lancements. Les
+     actions passent par les mêmes fonctions que les clics, rien n'est réécrit à côté. */
+  window.__organizator.assistantApi = {
+    state: S, render: render, renderPanel: renderPanel, toast: toast, onReady: window.organizatorApp.onReady,
+    registerPanel: registerPanel, onRender: function (fn) { if (typeof fn === 'function') RENDER_HOOKS.push(fn); },
+    addAction: addPageAction, addInput: addPageInput, addChange: addPageChange, addSettingsTab: addSettingsTab,
+    esc: esc, uid: uid, color: color, setHtml: setHtml, icon: ICON, fmtTime: fmtTime, fmtDate: fmtDate, firstLine: firstLine,
+    lastSegment: lastSegment, mdHtml: logMsgHtml, setRowHtml: setRowHtml, setFieldHtml: setFieldHtml,
+    modelSelectHtml: modelSelectHtml, effortSelectHtml: effortSelectHtml, catalogFor: catalogFor, catalogHas: catalogHas,
+    effortsFor: effortsFor, customModel: CUSTOM, hasProvider: hasProvider, providerById: providerById,
+    defaultProviderId: defaultProviderId, modelSettingKey: modelSettingKey, effortSettingKey: effortSettingKey,
+    saveSettingsSoon: saveSettingsSoon, commit: commit, saveDataSoon: saveDataSoon, saveDataNow: saveDataNow,
+    palettes: PALETTES, notype: NOTYPE, agentRoles: AGENT_ROLES, keywordMax: KEYWORD_MAX, agentMax: AGENT_MAX,
+    taskById: taskById, typeOf: typeOf, parentOf: parentOf, childrenOf: childrenOf, lastOfGroup: lastOfGroup,
+    subtaskProgress: subtaskProgress, attachmentsOf: attachmentsOf, taskPullRequests: taskPullRequests,
+    convosOf: convosOf, convoById: convoById, displayState: displayState, stateText: stateText, saidOf: saidOf,
+    agentsOf: agentsOf, agentTag: agentTag, providerOf: providerOf, reportsOf: reportsOf, reviewReportsOf: reviewReportsOf,
+    artifactFullPath: artifactFullPath, usageOf: usageOf, usageText: usageText,
+    normalizeKeywords: normalizeKeywords, normalizeAgents: normalizeAgents, teamOf: teamOf, keywordIdsFor: keywordIdsFor,
+    keywordsByIds: keywordsByIds, teamModels: teamModels, teamEfforts: teamEfforts, removeKeyword: removeKeyword,
+    buildPrompt: buildPrompt, recapTextFor: recapTextFor, defaultCwdFor: defaultCwdFor, groupCwdFor: groupCwdFor,
+    batchSubsOf: batchSubsOf, batchSubBusy: batchSubBusy, startSession: startSession, launchBatch: launchBatch,
+    openLaunchForm: openLaunchForm, flushTextWrites: flushTextWrites, refreshSessions: refreshSessions,
+    openTerm: openTerm, openReader: openReader, revealTask: revealTask, syncPolling: syncPolling,
+    currentPage: currentPage, goPage: goPage
+  };
 })();

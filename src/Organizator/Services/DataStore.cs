@@ -139,6 +139,7 @@ public sealed class DataStore
             var current = LoadSettingsNoLock();
             var merged = incoming.Clone();
             merged.Window = current.Window;
+            merged.ConversationsWindow = current.ConversationsWindow;
             if (current.Unknown is { Count: > 0 })
             {
                 merged.Unknown ??= new Dictionary<string, JsonElement>();
@@ -161,6 +162,18 @@ public sealed class DataStore
         {
             var current = LoadSettingsNoLock();
             current.Window = placement;
+            current.Sanitize();
+            WriteAtomic(SettingsPath, JsonSerializer.Serialize(current, SettingsJson));
+        }
+    }
+
+    /// <summary>Enregistre uniquement la position de la fenetre Conversations.</summary>
+    public void SaveConversationsPlacement(WindowPlacement? placement)
+    {
+        lock (_gate)
+        {
+            var current = LoadSettingsNoLock();
+            current.ConversationsWindow = placement;
             current.Sanitize();
             WriteAtomic(SettingsPath, JsonSerializer.Serialize(current, SettingsJson));
         }

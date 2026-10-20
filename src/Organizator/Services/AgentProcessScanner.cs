@@ -10,6 +10,10 @@ namespace Organizator.Services;
 /// <c>--resume</c>). Un transcript ne dit pas si la fenetre a ete fermee : c'est ce balayage qui
 /// distingue « reponse prete » de « session fermee ». Passe par WMI (<c>Win32_Process</c>), seul
 /// moyen sans droits particuliers de lire la ligne de commande d'un autre processus.
+/// Ne compte que les consoles : les agents qu'Organizator lance lui-meme (sessions hebergees de la
+/// fenetre Conversations, assistant, discussions, tuteur) sont ses enfants directs, alors qu'un agent
+/// en console a toujours PowerShell ou Windows Terminal pour parent. <see cref="LiveSessions"/> dit
+/// lesquelles des sessions hebergees tournent.
 /// </summary>
 public sealed class AgentProcessScanner : IDisposable
 {
@@ -18,7 +22,7 @@ public sealed class AgentProcessScanner : IDisposable
 
     // Les installations npm lancent node.exe (ou bun.exe) avec le script de la CLI en premier argument.
     private const string Query =
-        "SELECT ProcessId, Name, CommandLine, CreationDate FROM Win32_Process "
+        "SELECT ProcessId, ParentProcessId, Name, CommandLine, CreationDate FROM Win32_Process "
         + "WHERE Name = 'claude.exe' OR Name = 'copilot.exe' OR Name = 'node.exe' OR Name = 'bun.exe'";
 
     private static readonly Regex SessionArg = new(
@@ -82,6 +86,7 @@ public sealed class AgentProcessScanner : IDisposable
     public static Dictionary<string, int[]> ScanNow()
     {
         var found = new Dictionary<string, List<(int Pid, string Created)>>(StringComparer.OrdinalIgnoreCase);
+        var self = Environment.ProcessId;
         using var searcher = new ManagementObjectSearcher(Query);
         using var results = searcher.Get();
         foreach (var item in results)
@@ -95,6 +100,11 @@ public sealed class AgentProcessScanner : IDisposable
 
                 var pid = item["ProcessId"] is { } value ? Convert.ToInt32(value) : 0;
                 if (pid <= 0)
+                {
+                    continue;
+                }
+
+                if (item["ParentProcessId"] is { } parent && Convert.ToInt32(parent) == self)
                 {
                     continue;
                 }

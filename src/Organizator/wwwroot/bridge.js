@@ -1006,6 +1006,97 @@
     return undefined;
   }
 
+  /* Assistant simulé : `window.__fakeAssistant(payload)` rend les étapes d'une réponse — { text }
+     (un message de l'agent), { call, args } (un appel d'outil, qui attend son résultat), { tool,
+     detail } (outil de lecture), { error } —, sinon une réponse fixe qui lit la file. Les messages
+     envoyés vont dans window.__assistantCalls, les résultats d'outils dans window.__assistantResults. */
+  var LS_ASSISTANT = 'organizator.assistant';
+  var shimAssistant = { turn: 0, stopped: 0, waiting: {} };
+
+  function shimAssistantSend(p) {
+    (window.__assistantCalls = window.__assistantCalls || []).push(p);
+    var turn = ++shimAssistant.turn;
+    var steps = typeof window.__fakeAssistant === 'function' ? window.__fakeAssistant(p) : [
+      { text: 'Je regarde la file.' }, { call: 'get_queue', args: {} }, { text: 'Voilà : la file est en ordre.' }];
+    var i = 0, msg = 0;
+    function next() {
+      if (shimAssistant.stopped >= turn) return;
+      var s = steps[i++];
+      if (!s) { emit('assistant', { turn: turn, phase: 'done', cost: 0.012, ms: 900 }); return; }
+      if (s.call) {
+        var id = 'c' + turn + '-' + i;
+        shimAssistant.waiting[id] = next;
+        emit('assistant', { turn: turn, phase: 'call', call: id, name: s.call, args: s.args || {} });
+        return;
+      }
+      if (s.error) { emit('assistant', { turn: turn, phase: 'error', error: s.error }); return; }
+      if (s.tool) emit('assistant', { turn: turn, phase: 'tool', name: s.tool, detail: s.detail || '' });
+      else emit('assistant', { turn: turn, phase: 'text', msg: 'm' + turn + '-' + (++msg), text: String(s.text || '') });
+      setTimeout(next, 20);
+    }
+    emit('assistant', { turn: turn, phase: 'thinking' });
+    setTimeout(next, 30);
+    return { turn: turn };
+  }
+
+  /* Sessions hébergées simulées (fenêtre Conversations) : `window.__fakeLive(payload)` rend les étapes
+     d'une réponse — { text }, { tool, detail }, { question: true, kind, questions | plan } (attend
+     liveAnswer), { error } — ; messages dans window.__liveCalls, réponses dans window.__liveAnswers. */
+  var shimLive = { sessions: {}, waiting: {} };
+
+  function shimLiveEmit(id, phase, extra) {
+    var payload = { sessionId: id, phase: phase };
+    Object.keys(extra || {}).forEach(function (k) { payload[k] = extra[k]; });
+    emit('live', payload);
+  }
+
+  function shimLiveSession(id) {
+    return shimLive.sessions[id] || (shimLive.sessions[id] = { running: false, busy: false, turn: 0, provider: 'claude' });
+  }
+
+  function shimLiveSend(p) {
+    (window.__liveCalls = window.__liveCalls || []).push(p);
+    var id = p.sessionId;
+    var s = shimLiveSession(id);
+    var turn = ++s.turn;
+    s.running = true;
+    s.busy = true;
+    s.provider = p.provider || s.provider;
+    shimLiveEmit(id, 'user', { text: p.text });
+    shimLiveEmit(id, 'state', { running: true, busy: true, provider: s.provider });
+    var steps = typeof window.__fakeLive === 'function' ? window.__fakeLive(p)
+      : [{ text: 'Je regarde.' }, { tool: 'Read', detail: 'README.md' }, { text: 'Voilà.' }];
+    var i = 0, msg = 0;
+    function finish(extra) {
+      s.busy = false;
+      shimLiveEmit(id, 'done', extra);
+      shimLiveEmit(id, 'state', { running: true, busy: false, provider: s.provider });
+    }
+    function next() {
+      if (s.turn !== turn || !s.busy) return;
+      var st = steps[i++];
+      if (!st) { finish({ cost: 0.01, ms: 800 }); return; }
+      if (st.question) {
+        var request = 'r' + turn + '-' + i;
+        shimLive.waiting[request] = next;
+        shimLiveEmit(id, 'question', { request: request, kind: st.kind || 'ask', questions: st.questions || [], plan: st.plan || '' });
+        return;
+      }
+      if (st.error) { shimLiveEmit(id, 'error', { error: st.error }); s.busy = false; shimLiveEmit(id, 'state', { running: true, busy: false }); return; }
+      if (st.tool) {
+        var tid = 't' + turn + '-' + i;
+        shimLiveEmit(id, 'tool', { id: tid, name: st.tool, detail: st.detail || '', status: 'running' });
+        shimLiveEmit(id, 'tool', { id: tid, name: st.tool, detail: st.detail || '', status: st.failed ? 'error' : 'done' });
+      } else {
+        shimLiveEmit(id, 'text', { msg: 'm' + turn + '-' + (++msg), text: String(st.text || '') });
+      }
+      setTimeout(next, 20);
+    }
+    s.stop = function () { finish({ cancelled: true }); };
+    setTimeout(next, 30);
+    return { sent: true };
+  }
+
   function shimCall(type, payload) {
     payload = payload || {};
     return new Promise(function (resolve, reject) {
@@ -1073,6 +1164,7 @@
           voiceModel: p.voiceModel, voiceEffort: p.voiceEffort, voiceVoice: p.voiceVoice, voiceRate: p.voiceRate,
           voicePersona: p.voicePersona, voiceTopic: p.voiceTopic, voiceInstructions: p.voiceInstructions, voiceWeb: p.voiceWeb,
           voiceWhisperModel: p.voiceWhisperModel, voiceSensitivity: p.voiceSensitivity, voiceBargeIn: p.voiceBargeIn,
+          assistantModel: p.assistantModel, assistantEffort: p.assistantEffort,
           revizatorServerUrl: p.revizatorServerUrl, revizatorServerToken: p.revizatorServerToken
         });
         return {};
@@ -1380,6 +1472,82 @@
       case 'asrReset':
       case 'asrStop':
         return shimAsrHandle(type, p);
+
+      case 'getData': {
+        var stored = lsRead(LS_DATA, {});
+        return { data: { tasks: stored.tasks || [], types: stored.types || [], convos: stored.convos || [], remarks: stored.remarks || [], notifications: stored.notifications || [], lastType: stored.lastType || null } };
+      }
+
+      case 'liveSend':
+        return shimLiveSend(p);
+
+      case 'liveStop': {
+        var ls = shimLive.sessions[p.sessionId];
+        if (ls && ls.busy && ls.stop) { ls.stop(); return { stopped: true }; }
+        return { stopped: false };
+      }
+
+      case 'liveAnswer': {
+        (window.__liveAnswers = window.__liveAnswers || []).push(p);
+        var resumeTurn = shimLive.waiting[p.request];
+        delete shimLive.waiting[p.request];
+        if (resumeTurn) {
+          shimLiveEmit(p.sessionId, 'question', { request: p.request, answered: true });
+          setTimeout(resumeTurn, 10);
+        }
+        return { answered: !!resumeTurn };
+      }
+
+      case 'liveClose': {
+        var lc = shimLive.sessions[p.sessionId];
+        if (!lc || !lc.running) return { closed: false };
+        lc.running = false;
+        shimLiveEmit(p.sessionId, 'state', { running: false, busy: false });
+        return { closed: true };
+      }
+
+      case 'liveState':
+        return {
+          sessions: Object.keys(shimLive.sessions).map(function (id) {
+            var x = shimLive.sessions[id];
+            return { sessionId: id, provider: x.provider, running: x.running, busy: x.busy, startedAt: 0, phase: '', texts: [], steps: [], question: null };
+          }).concat(Array.isArray(window.__fakeLiveState) ? window.__fakeLiveState : [])
+        };
+
+      case 'liveOpen':
+      case 'liveTerminal':
+        (window.__liveCalls = window.__liveCalls || []).push({ type: type, payload: p });
+        return type === 'liveOpen' ? { shown: true } : { terminal: true };
+
+      case 'assistantSend':
+        return shimAssistantSend(p);
+
+      case 'assistantToolResult': {
+        (window.__assistantResults = window.__assistantResults || []).push(p);
+        var resume = shimAssistant.waiting[p.call];
+        delete shimAssistant.waiting[p.call];
+        if (resume) setTimeout(resume, 10);
+        return { answered: !!resume };
+      }
+
+      case 'assistantStop':
+        shimAssistant.stopped = shimAssistant.turn;
+        emit('assistant', { turn: shimAssistant.turn, phase: 'done', cancelled: true });
+        return { stopped: true };
+
+      case 'assistantReset':
+        shimAssistant.stopped = shimAssistant.turn;
+        return {};
+
+      case 'assistantStatus':
+        return { busy: false, turn: 0, sessionId: '', alive: false };
+
+      case 'assistantLoad':
+        return { log: lsRead(LS_ASSISTANT, null) };
+
+      case 'assistantSave':
+        lsWrite(LS_ASSISTANT, p.log || null);
+        return { bytes: JSON.stringify(p.log || null).length };
 
       case 'log':
         console.log('[shim] log', p.level, p.message);

@@ -1113,8 +1113,8 @@ public sealed class VoiceChat : IDisposable
             options.Web ? "web" : "sans web",
         }.Where(s => s.Length > 0));
 
-    /// <summary>Erreur lisible a partir de la sortie de claude.</summary>
-    private static string Explain(string error, int code)
+    /// <summary>Erreur lisible a partir de la sortie de claude (partagee avec l'assistant, AssistantChat).</summary>
+    internal static string Explain(string error, int code)
     {
         var text = (error ?? "").Trim();
         if (text.Contains("Not logged in", StringComparison.OrdinalIgnoreCase) || text.Contains("/login", StringComparison.OrdinalIgnoreCase)

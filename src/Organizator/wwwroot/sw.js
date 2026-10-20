@@ -18,10 +18,10 @@ var PREFIX = 'revizator-shell-';
 
 /* Ce qui sert au premier affichage ; le reste se met en cache au fil des lectures. */
 var SHELL = [
-  'index.html', 'organic.css', 'fonts.css', 'app.css', 'voice.css', 'mobile.css',
+  'index.html', 'organic.css', 'fonts.css', 'app.css', 'voice.css', 'assistant.css', 'mobile.css',
   'revizator/revizator.css', 'revizator/exercise.css', 'revizator/lesson.css', 'revizator/test.css',
   'revizator/progress.css', 'revizator/tutor.css', 'revizator/board.css', 'revizator/admin.css', 'revizator/prof.css', 'revizator/cortex.css',
-  'bridge.js', 'app.js', 'voice-engine.js', 'voice.js',
+  'bridge.js', 'md.js', 'app.js', 'assistant.js', 'voice-engine.js', 'voice.js',
   'revizator/core.js', 'revizator/srs.js', 'revizator/items.js', 'revizator/exercise.js', 'revizator/lesson.js',
   'revizator/test.js', 'revizator/progress.js', 'revizator/tutor.js', 'revizator/board.js', 'revizator/admin.js', 'revizator/prof.js', 'revizator/cortex.js',
   'fonts/figtree-400-latin.woff2', 'fonts/figtree-600-latin.woff2', 'fonts/figtree-700-latin.woff2',
