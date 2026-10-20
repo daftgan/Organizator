@@ -1519,6 +1519,25 @@
         (window.__liveCalls = window.__liveCalls || []).push({ type: type, payload: p });
         return type === 'liveOpen' ? { shown: true } : { terminal: true };
 
+      /* Épingler, archiver (fenêtre Conversations) : la page principale enregistre. Seule dans le
+         navigateur, la page Conversations voit le shim tenir ce rôle sur localStorage, puis `dataChanged`. */
+      case 'convoMark': {
+        (window.__convoMarks = window.__convoMarks || []).push(p);
+        if ((handlers.get('convoMark') || []).length) { emit('convoMark', p); return {}; }
+        var marked = lsRead(LS_DATA, {});
+        var markIds = Array.isArray(p.sessionIds) ? p.sessionIds : [];
+        (marked.convos || []).forEach(function (c) {
+          if (markIds.indexOf(c.id) < 0) return;
+          ['pinned', 'archived'].forEach(function (k) {
+            if (typeof p[k] !== 'boolean') return;
+            if (p[k]) c[k] = Date.now(); else delete c[k];
+          });
+        });
+        lsWrite(LS_DATA, marked);
+        setTimeout(function () { emit('dataChanged', {}); }, 0);
+        return {};
+      }
+
       case 'assistantSend':
         return shimAssistantSend(p);
 

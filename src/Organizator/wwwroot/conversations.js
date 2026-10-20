@@ -1,13 +1,15 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    conversations.js — la fenêtre Conversations
-   Les sessions d'agent d'Organizator, à la manière de Claude Code Desktop : à gauche les sessions,
-   rangées par tâche dans l'ordre de la file, avec leur état ; au centre la conversation choisie, ses
-   messages, la réponse qui s'écrit, les outils pas à pas, les questions de l'agent ; en bas la zone de
-   saisie. Organizator reste le moteur : les sessions sont hébergées par l'hôte (LiveSessions) avec les
+   Les sessions d'agent d'Organizator, à la manière de Claude Code Desktop : à gauche les sessions —
+   une recherche, les épinglées en haut, les autres rangées par tâche dans l'ordre de la file, les
+   archivées repliées en bas — avec leur état ; au centre la conversation choisie, ses messages, la
+   réponse qui s'écrit, les outils pas à pas, les questions de l'agent ; en bas la zone de saisie.
+   Organizator reste le moteur : les sessions sont hébergées par l'hôte (LiveSessions) avec les
    paramètres choisis dans Organizator — cette page ne fait que les montrer et leur parler.
    Elle ne tient aucune donnée : la file vient de la fenêtre principale (getData, relu à chaque
    `dataChanged`), l'état des sessions de leurs fichiers (getSessions, getTranscript), la réponse en cours
-   des événements `live`. Une session qui tourne dans une console se lit ici, et se pilote là-bas.
+   des événements `live`. Épingler ou archiver se demande à la fenêtre principale (convoMark), qui
+   enregistre. Une session qui tourne dans une console se lit ici, et se pilote là-bas.
    ═══════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
@@ -21,9 +23,15 @@
   };
   var FOLD_CHARS = 1400, FOLD_LINES = 14, SHOWN = 120;
   var SEEN_KEY = 'organizator.conversations.seen';
+  var SINCE_KEY = 'organizator.conversations.since';
+  var SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">';
   var ICON = {
     send: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>',
-    stop: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>'
+    stop: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>',
+    search: SVG + '<circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>',
+    pin: SVG + '<path d="M12 17v5"></path><path d="M5 17h14v-1.8a2 2 0 0 0-1.1-1.8l-1.8-.9A2 2 0 0 1 15 10.8V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.8a2 2 0 0 1-1.1 1.8l-1.8.9A2 2 0 0 0 5 15.2Z"></path></svg>',
+    archive: SVG + '<rect x="2" y="3" width="20" height="5" rx="1"></rect><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path><path d="M10 12h4"></path></svg>',
+    unarchive: SVG + '<rect x="2" y="3" width="20" height="5" rx="1"></rect><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path><path d="m9.5 14.5 2.5-2.5 2.5 2.5"></path><path d="M12 12v6"></path></svg>'
   };
 
   var C = {
@@ -31,8 +39,10 @@
     /* Par conversation : le dernier état lu (getSessions), l'empreinte de ses fichiers, la session
        hébergée (événements live), son journal (getTranscript). */
     sessions: {}, stamps: {}, live: {}, transcripts: {},
-    selected: '', filter: 'all', showDone: false, drafts: {}, open: {}, answers: {}, older: {},
-    seen: loadSeen(), loaded: false
+    selected: '', query: '', showArchive: false, drafts: {}, open: {}, answers: {}, older: {},
+    /* Épingler / archiver demandé à la fenêtre principale, pas encore enregistré. */
+    marking: {},
+    seen: loadSeen(), since: loadSince(), loaded: false
   };
 
   /* ══ Utilitaires ═════════════════════════════════════════════════════ */
@@ -57,6 +67,22 @@
   function saveSeen() {
     try { localStorage.setItem(SEEN_KEY, JSON.stringify(C.seen)); } catch (e) { /* stockage refusé : rien de grave */ }
   }
+
+  /* Première ouverture de la fenêtre : ce qui s'est dit avant est tenu pour lu (sans quoi toutes les
+     vieilles conversations s'afficheraient en gras, « non lues »). */
+  function loadSince() {
+    var v = 0;
+    try { v = Number(localStorage.getItem(SINCE_KEY)) || 0; } catch (e) { /* stockage refusé */ }
+    if (!v) {
+      v = Date.now();
+      try { localStorage.setItem(SINCE_KEY, String(v)); } catch (e) { /* idem */ }
+    }
+    return v;
+  }
+
+  /* Recherche : sans accents ni casse, chaque mot doit se trouver. */
+  function fold(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
+  function words(q) { return fold(q).split(/\s+/).filter(Boolean); }
 
   function setHtml(el, html) { if (el && el.cvHtml !== html) { el.innerHTML = html; el.cvHtml = html; } }
 
@@ -85,11 +111,6 @@
   function convoById(id) {
     for (var i = 0; i < C.data.convos.length; i++) if (C.data.convos[i].id === id) return C.data.convos[i];
     return null;
-  }
-
-  function convosOf(taskId) {
-    return C.data.convos.filter(function (c) { return c.taskId === taskId; })
-      .sort(function (a, b) { return toMs(updatedOf(b)) - toMs(updatedOf(a)); });
   }
 
   function providerOf(c) { return c && c.provider === 'copilot' ? 'copilot' : 'claude'; }
@@ -131,31 +152,59 @@
 
   function unread(c) {
     var st = displayState(c);
-    return (st === 'ready' || st === 'error') && updatedOf(c) > (C.seen[c.id] || 0) && c.id !== C.selected;
+    return (st === 'ready' || st === 'error') && updatedOf(c) > Math.max(C.seen[c.id] || 0, C.since) && c.id !== C.selected;
   }
 
-  function matches(c) {
-    var st = displayState(c);
-    if (C.filter === 'todo') return st === 'waiting' || unread(c);
-    if (C.filter === 'working') return st === 'working' || st === 'open';
-    return true;
+  function taskDone(c) { var t = taskById(c.taskId); return !!(t && t.done); }
+
+  /* Au travail, ou une question en attente : une telle conversation ne se cache jamais dans les archives. */
+  function active(c) { var st = displayState(c); return st === 'working' || st === 'waiting'; }
+
+  /* Où se range une conversation : épinglée (en haut), archivée (repliée en bas : celles des tâches
+     terminées, et celles qu'on y a rangées), ou sous sa tâche. */
+  function placeOf(c) {
+    if (c.pinned) return 'pinned';
+    if ((c.archived || taskDone(c)) && !active(c)) return 'archive';
+    return 'list';
   }
 
-  /* Les tâches qui ont des conversations, dans l'ordre de la file ; le carnet de remarques à la fin. */
-  function groups() {
-    var active = [], done = [];
-    C.data.tasks.forEach(function (t) {
-      var convs = convosOf(t.id);
-      if (convs.length) (t.done ? done : active).push({ task: t, convs: convs });
+  /* Titre de la conversation, texte de sa tâche, agent, modèle, effort. */
+  function hit(c, ws) {
+    if (!ws.length) return true;
+    var t = taskById(c.taskId);
+    var hay = fold((c.title || 'Nouvelle session') + '\n' + (t ? t.text : '') + '\n' + agentTag(c));
+    return ws.every(function (w) { return hay.indexOf(w) >= 0; });
+  }
+
+  /* Par tâche, dans l'ordre de la file ; le carnet de remarques à la fin. */
+  function groupsOf(convs) {
+    var by = {};
+    convs.forEach(function (c) { (by[c.taskId] || (by[c.taskId] = [])).push(c); });
+    var out = [];
+    C.data.tasks.forEach(function (t) { if (by[t.id]) out.push({ task: t, convs: by[t.id] }); });
+    if (by[FEEDBACK_ID]) out.push({ task: taskById(FEEDBACK_ID), convs: by[FEEDBACK_ID] });
+    out.forEach(function (x) { x.convs.sort(function (a, b) { return toMs(updatedOf(b)) - toMs(updatedOf(a)); }); });
+    return out;
+  }
+
+  /* Les conversations de la liste, rangées et filtrées par la recherche. */
+  function sections() {
+    var ws = words(C.query);
+    var out = { pinned: [], list: [], archive: [], all: 0 };
+    C.data.convos.forEach(function (c) {
+      if (!taskById(c.taskId)) return;
+      out.all++;
+      if (hit(c, ws)) out[placeOf(c)].push(c);
     });
-    var remarks = convosOf(FEEDBACK_ID);
-    if (remarks.length) active.push({ task: taskById(FEEDBACK_ID), convs: remarks });
-    return { active: active, done: done };
+    out.pinned.sort(function (a, b) { return toMs(b.pinned) - toMs(a.pinned); });
+    return out;
   }
 
+  /* Celles dont on suit l'état : pas les archives des tâches terminées tant qu'elles sont repliées (une
+     archive rangée à la main se suit encore, pour ressortir si elle se remet au travail). */
   function listedConvos() {
-    var g = groups(), out = [];
-    g.active.concat(C.showDone ? g.done : []).forEach(function (x) { out = out.concat(x.convs); });
+    var open = C.showArchive || !!C.query.trim();
+    var out = C.data.convos.filter(function (c) { return taskById(c.taskId) && (open || c.pinned || !taskDone(c)); });
     if (C.selected && convoById(C.selected) && out.indexOf(convoById(C.selected)) < 0) out.push(convoById(C.selected));
     return out;
   }
@@ -220,6 +269,7 @@
           if (s.artifactsStamp) C.stamps[s.sessionId] = s.artifactsStamp;
         });
         sessionsBusy = false;
+        reviveArchived();
         renderSide();
         renderHead();
         renderCompose();
@@ -350,6 +400,7 @@
       if (p.phase === 'state' || p.phase === 'question' || p.phase === 'done' || p.phase === 'user') { renderHead(); renderCompose(); }
       renderThread();
     }
+    reviveArchived();
     renderSide();
   }
 
@@ -360,6 +411,9 @@
     C.selected = id;
     var c = convoById(id);
     if (c) { C.seen[id] = Math.max(updatedOf(c), now()); saveSeen(); }
+    /* Ouverte depuis la recherche, une notification ou la fenêtre principale : une archivée se
+       montre à sa place, section dépliée. */
+    if (c && placeOf(c) === 'archive') C.showArchive = true;
     stick = true;
     render();
     loadTranscript(id);
@@ -446,6 +500,69 @@
     bridge.call('liveClose', { sessionId: c.id })['catch'](function (e) { toast(e.message); });
   }
 
+  /* Épingler, archiver (une conversation ou tout un groupe) : la copie locale change tout de suite, la
+     fenêtre principale enregistre (convoMark), et son enregistrement revient ici par `dataChanged`. */
+  function mark(ids, flags) {
+    ids = [].concat(ids).filter(function (id) { return !!convoById(id); });
+    if (!ids.length) return;
+    var payload = { sessionIds: ids };
+    Object.keys(flags).forEach(function (k) { payload[k] = !!flags[k]; });
+    ids.forEach(function (id) {
+      var c = convoById(id);
+      Object.keys(flags).forEach(function (k) { if (flags[k]) c[k] = now(); else delete c[k]; });
+      C.marking[id] = true;
+    });
+    renderSide();
+    renderHead();
+    bridge.call('convoMark', payload).then(function () {
+      ids.forEach(function (id) { delete C.marking[id]; });
+    }, function (e) {
+      ids.forEach(function (id) { delete C.marking[id]; });
+      toast('Rangement non enregistré : ' + e.message);
+      reloadData();
+    });
+  }
+
+  function togglePin(id) {
+    var c = convoById(id);
+    if (!c) return;
+    if (c.pinned) mark(id, { pinned: false });
+    else mark(id, { pinned: true, archived: false });
+  }
+
+  function toggleArchive(id) {
+    var c = convoById(id);
+    if (!c) return;
+    if (placeOf(c) === 'archive') {
+      if (c.archived) mark(id, { archived: false });
+      return;
+    }
+    if (active(c)) { toast('L’agent travaille encore : archivez la conversation une fois sa réponse rendue.'); return; }
+    mark(id, { archived: true, pinned: false });
+    toast('Conversation rangée dans les Archives, en bas de la liste.');
+  }
+
+  /* Tout un groupe d'un coup (le carnet de remarques, une tâche qui a beaucoup servi) : ses conversations
+     de la liste, sauf celles qui travaillent ; les épinglées restent où elles sont. */
+  function archiveGroup(taskId) {
+    var all = C.data.convos.filter(function (c) { return c.taskId === taskId && placeOf(c) === 'list'; });
+    var idle = all.filter(function (c) { return !active(c); });
+    if (!idle.length) { toast('L’agent travaille encore : rien à archiver pour l’instant.'); return; }
+    mark(idle.map(function (c) { return c.id; }), { archived: true, pinned: false });
+    var busy = all.length - idle.length;
+    toast((idle.length > 1 ? idle.length + ' conversations rangées' : 'Conversation rangée') + ' dans les Archives'
+      + (busy ? ' ; ' + (busy > 1 ? busy + ' travaillent encore et restent' : 'une travaille encore et reste') + ' dans la liste.' : '.'));
+  }
+
+  /* Une conversation archivée à la main qui se remet au travail (message, reprise en console) ressort
+     pour de bon : elle ne retournera pas aux archives quand elle aura répondu. On n'archive pas une
+     conversation au travail : toute activité d'une archivée vient donc d'après son rangement. */
+  function reviveArchived() {
+    C.data.convos.forEach(function (c) {
+      if (c.archived && active(c) && !C.marking[c.id]) mark(c.id, { archived: false });
+    });
+  }
+
   /* ══ Affichage ═══════════════════════════════════════════════════════ */
 
   function render() {
@@ -458,62 +575,93 @@
     if (!side) return;
     if (!side.firstChild) {
       side.innerHTML = '<div class="cv-side-head"><div class="cv-brand">Conversations</div><div class="cv-brand-sub" data-role="cv-sub"></div>'
-        + '<div class="cv-filters" data-role="cv-filters"></div></div><div class="cv-list" data-role="cv-list"></div>';
+        + '<label class="cv-search">' + ICON.search + '<input type="search" data-role="cv-search" placeholder="Rechercher (Ctrl + F)"'
+        + ' spellcheck="false" autocomplete="off" aria-label="Rechercher une conversation"></label></div>'
+        + '<div class="cv-list" data-role="cv-list"></div>';
     }
-    var g = groups();
-    var all = [];
-    g.active.forEach(function (x) { all = all.concat(x.convs); });
-    var todo = all.filter(function (c) { return displayState(c) === 'waiting' || unread(c); }).length;
-    var working = all.filter(function (c) { var st = displayState(c); return st === 'working' || st === 'open'; }).length;
-    setHtml(side.querySelector('[data-role="cv-sub"]'), esc(all.length + (all.length > 1 ? ' conversations en file' : ' conversation en file')));
-    setHtml(side.querySelector('[data-role="cv-filters"]'), [
-      ['all', 'Toutes', 0], ['todo', 'À traiter', todo], ['working', 'En cours', working]
-    ].map(function (f) {
-      return '<button type="button" class="cv-filter' + (C.filter === f[0] ? ' on' : '') + '" data-act="cv-filter" data-id="' + f[0] + '">'
-        + esc(f[1]) + (f[2] ? '<span class="cv-filter-n">' + f[2] + '</span>' : '') + '</button>';
-    }).join(''));
+    var s = sections();
+    var searching = !!words(C.query).length;
+    var shown = s.pinned.length + s.list.length;
+    var sub = shown + (shown > 1 ? ' conversations' : ' conversation');
+    if (s.archive.length) sub += ' · ' + s.archive.length + (s.archive.length > 1 ? ' archivées' : ' archivée');
+    if (searching) sub = (shown + s.archive.length) + ' sur ' + s.all + ' pour cette recherche';
+    setHtml(side.querySelector('[data-role="cv-sub"]'), esc(sub));
     var rk = ranks();
     var h = [];
-    g.active.forEach(function (x) { h.push(groupHtml(x, rk)); });
-    if (g.done.length) {
-      h.push('<button type="button" class="cv-done-toggle" data-act="cv-done">' + (C.showDone ? '▾' : '▸') + ' Tâches terminées · ' + g.done.length + '</button>');
-      if (C.showDone) g.done.forEach(function (x) { h.push(groupHtml(x, rk)); });
+    if (s.pinned.length) {
+      h.push('<div class="cv-section">Épinglées</div>');
+      h.push(s.pinned.map(function (c) { return itemHtml(c, true); }).join(''));
+      if (s.list.length) h.push('<div class="cv-section">Par tâche</div>');
+    }
+    groupsOf(s.list).forEach(function (x) { h.push(groupHtml(x, rk, !searching)); });
+    if (s.archive.length) {
+      /* Une recherche montre ses résultats archivés sans qu'on ait à déplier. */
+      var open = C.showArchive || searching;
+      h.push(searching
+        ? '<div class="cv-section">Archives</div>'
+        : '<button type="button" class="cv-archive-toggle" data-act="cv-archive-toggle" aria-expanded="' + open + '">'
+          + ICON.archive + '<span>Archives</span><span class="cv-archive-n">' + s.archive.length + '</span>'
+          + '<span class="cv-archive-chev">' + (open ? '▾' : '▸') + '</span></button>');
+      if (open) groupsOf(s.archive).forEach(function (x) { h.push(groupHtml(x, rk)); });
     }
     var html = h.join('');
-    var shown = g.active.some(function (x) { return x.convs.some(matches); });
-    if (!shown && C.loaded) {
-      html = '<div class="cv-side-empty">' + (C.filter === 'all'
-        ? 'Aucune conversation encore. Lancez-en une depuis une tâche d’Organizator : avec le réglage « Fenêtre Conversations », elle s’ouvre ici.'
-        : 'Rien ici pour l’instant.') + '</div>' + html;
+    if (C.loaded && searching && !shown && !s.archive.length) {
+      html = '<div class="cv-side-empty">Aucune conversation ne correspond à « ' + esc(C.query.trim()) + ' ».</div>';
+    } else if (C.loaded && !shown) {
+      html = '<div class="cv-side-empty">' + (s.archive.length
+        ? 'Rien en cours : les conversations des tâches terminées et celles que vous avez rangées sont dans les Archives.'
+        : 'Aucune conversation encore. Lancez-en une depuis une tâche d’Organizator : avec le réglage « Fenêtre Conversations », elle s’ouvre ici.')
+        + '</div>' + html;
     }
     setHtml(side.querySelector('[data-role="cv-list"]'), html);
   }
 
-  function groupHtml(x, rk) {
-    var convs = x.convs.filter(matches);
-    if (!convs.length) return '';
+  /* Un groupe de la liste ; `canArchive` : bouton « tout archiver » au survol de son titre, dès deux
+     conversations (hors recherche : il viserait aussi celles qu'elle cache). */
+  function groupHtml(x, rk, canArchive) {
     var ty = typeOf(x.task.type);
     var dot = ty ? ' style="background:' + esc(ty.bg) + ';border-color:' + esc(ty.bd) + '"' : '';
+    var n = x.convs.length;
     return '<div class="cv-group"><div class="cv-group-head">'
-      + (rk[x.task.id] ? '<span class="cv-group-rank">' + rk[x.task.id] + '</span>' : '')
+      + (rk[x.task.id] ? '<span class="cv-group-rank">' + rk[x.task.id] + '</span>' : x.task.done ? '<span class="cv-group-rank">✓</span>' : '')
       + '<span class="cv-group-dot"' + dot + '></span><span class="cv-group-title" title="' + esc(firstLine(x.task.text, 200)) + '">'
-      + esc(firstLine(x.task.text, 80)) + '</span></div>'
-      + convs.map(itemHtml).join('') + '</div>';
+      + esc(firstLine(x.task.text, 80)) + '</span>'
+      + (canArchive && n > 1 ? '<button type="button" class="cv-group-act" data-act="cv-archive-group" data-id="' + esc(x.task.id) + '"'
+        + ' title="Archiver les ' + n + ' conversations de ce groupe">' + ICON.archive + '</button>' : '')
+      + '</div>'
+      + x.convs.map(function (c) { return itemHtml(c, false); }).join('') + '</div>';
   }
 
-  function itemHtml(c) {
+  /* Une ligne de la liste ; `withTask` (épinglées) rappelle sa tâche. Les boutons Épingler / Archiver
+     paraissent au survol. */
+  function itemHtml(c, withTask) {
     var st = displayState(c);
     var a = C.sessions[c.id];
     var said = st === 'waiting' && a && a.said ? a.said : '';
     var lv = C.live[c.id];
     if (lv && lv.question && lv.question.kind === 'ask' && lv.question.questions[0]) said = lv.question.questions[0].question;
-    return '<button type="button" class="cv-item' + (c.id === C.selected ? ' on' : '') + (unread(c) ? ' unread' : '') + '" data-act="cv-select" data-id="' + esc(c.id) + '"'
+    var task = withTask ? taskById(c.taskId) : null;
+    return '<div class="cv-item' + (c.id === C.selected ? ' on' : '') + (unread(c) ? ' unread' : '') + '" role="button" tabindex="0"'
+      + ' data-act="cv-select" data-id="' + esc(c.id) + '"'
       + ' title="' + esc((STATE_WORDS[st] || '') + (a && a.said ? ' · ' + a.said : '')) + '">'
       + '<span class="cv-state' + (st ? ' st-' + st : '') + '"></span>'
       + '<span class="cv-item-title">' + esc(c.title || 'Nouvelle session') + '</span>'
+      + (task ? '<span class="cv-item-task">' + esc(firstLine(task.text, 80)) + '</span>' : '')
       + '<span class="cv-item-sub">' + esc(agentTag(c) + ' · ' + (STATE_WORDS[st] || '—') + (updatedOf(c) ? ' · ' + fmtTime(updatedOf(c)) : '')) + '</span>'
       + (said ? '<span class="cv-item-said">' + esc(said) + '</span>' : '')
-      + '</button>';
+      + '<span class="cv-item-acts">' + markButtons(c, 'cv-item-act') + '</span>'
+      + '</div>';
+  }
+
+  /* Épingler / désépingler ; archiver / désarchiver — sauf une conversation de tâche terminée, que
+     seule l'épingle sort des archives. */
+  function markButtons(c, cls) {
+    var place = placeOf(c);
+    var h = '<button type="button" class="' + cls + (c.pinned ? ' on' : '') + '" data-act="cv-pin" data-id="' + esc(c.id) + '"'
+      + ' title="' + (c.pinned ? 'Désépingler' : 'Épingler en haut de la liste') + '" aria-pressed="' + !!c.pinned + '">' + ICON.pin + '</button>';
+    if (place === 'archive' && taskDone(c)) return h;
+    return h + '<button type="button" class="' + cls + '" data-act="cv-archive" data-id="' + esc(c.id) + '"'
+      + ' title="' + (place === 'archive' ? 'Sortir des Archives' : 'Archiver') + '">' + (place === 'archive' ? ICON.unarchive : ICON.archive) + '</button>';
   }
 
   function renderMain() {
@@ -550,14 +698,17 @@
     var task = taskById(c.taskId);
     var st = displayState(c);
     var hosted = lv && lv.running;
+    var place = placeOf(c);
     setHtml(el, '<div class="cv-head-text"><div class="cv-title" title="' + esc(c.title) + '">' + esc(c.title || 'Nouvelle session') + '</div>'
       + '<div class="cv-meta">'
       + (st ? '<span class="cv-chip st-' + esc(st) + '">' + esc(STATE_WORDS[st] || st) + '</span>' : '')
+      + (place === 'archive' ? '<span class="cv-chip">' + (taskDone(c) && !c.archived ? 'Archivée · tâche terminée' : 'Archivée') + '</span>' : '')
       + (task && task.id !== FEEDBACK_ID ? '<span class="cv-chip" title="' + esc(task.text) + '">' + esc(firstLine(task.text, 60)) + '</span>' : '')
       + '<span class="cv-chip">' + esc(agentTag(c)) + '</span>'
       + (c.cwd ? '<button type="button" class="cv-chip" data-act="cv-folder" title="Ouvrir le dossier : ' + esc(c.cwd) + '">' + esc(c.cwd) + '</button>' : '')
       + '</div></div>'
       + '<div class="cv-actions">'
+      + markButtons(c, 'cv-icon-btn')
       + (hosted && !(lv && lv.busy) ? '<button type="button" class="cv-btn" data-act="cv-close" title="Arrêter le processus de l’agent : la session reste, et reprend au prochain message">Mettre en pause</button>' : '')
       + (inConsole(c) ? '' : '<button type="button" class="cv-btn" data-act="cv-terminal"' + (lv && lv.busy ? ' disabled title="L’agent répond encore"' : ' title="Reprendre cette session dans une console"') + '>Ouvrir dans un terminal</button>')
       + '</div>');
@@ -732,8 +883,10 @@
 
   var ACTIONS = {
     'cv-select': function (el) { select(el.getAttribute('data-id')); },
-    'cv-filter': function (el) { C.filter = el.getAttribute('data-id'); renderSide(); },
-    'cv-done': function () { C.showDone = !C.showDone; renderSide(); refreshSessions(); },
+    'cv-archive-toggle': function () { C.showArchive = !C.showArchive; renderSide(); refreshSessions(); },
+    'cv-pin': function (el) { togglePin(el.getAttribute('data-id')); },
+    'cv-archive': function (el) { toggleArchive(el.getAttribute('data-id')); },
+    'cv-archive-group': function (el) { archiveGroup(el.getAttribute('data-id')); },
     'cv-send': send,
     'cv-stop': stop,
     'cv-terminal': toTerminal,
@@ -782,6 +935,12 @@
     if (role === 'cv-input') {
       C.drafts[C.selected] = el.value;
       fit(el);
+    } else if (role === 'cv-search') {
+      var was = !!C.query.trim();
+      C.query = el.value;
+      renderSide();
+      /* Une recherche fouille aussi les archives : leur état se relit. */
+      if (!was && C.query.trim()) refreshSessions();
     } else if (role === 'cv-other') {
       var lv = C.live[C.selected];
       if (!lv || !lv.question) return;
@@ -793,8 +952,25 @@
   });
 
   document.addEventListener('keydown', function (e) {
-    var role = e.target && e.target.getAttribute && e.target.getAttribute('data-role');
+    var t = e.target;
+    var role = t && t.getAttribute && t.getAttribute('data-role');
     if (role === 'cv-input' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); return; }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'f' || e.key === 'F' || e.key === 'k' || e.key === 'K')) {
+      var search = $('[data-role="cv-search"]');
+      if (search) { e.preventDefault(); search.focus(); search.select(); }
+      return;
+    }
+    if (role === 'cv-search' && e.key === 'Escape') {
+      e.preventDefault();
+      if (t.value) { t.value = ''; C.query = ''; renderSide(); } else t.blur();
+      return;
+    }
+    /* Une ligne de la liste se choisit au clavier comme un bouton. */
+    if ((e.key === 'Enter' || e.key === ' ') && t && t.getAttribute && t.getAttribute('role') === 'button' && t.hasAttribute('data-act')) {
+      var fn = ACTIONS[t.getAttribute('data-act')];
+      if (fn) { e.preventDefault(); fn(t, e); }
+      return;
+    }
     if (e.key === 'Escape') {
       var lv = C.live[C.selected];
       if (lv && lv.busy) { e.preventDefault(); stop(); }
@@ -809,7 +985,7 @@
   /* Filet : un état qui n'aurait pas été annoncé se rattrape. */
   setInterval(refreshSessions, 15000);
 
-  window.__conversations = { state: C, select: select, send: send, onLive: onLive };
+  window.__conversations = { state: C, select: select, send: send, onLive: onLive, placeOf: placeOf };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load);
   else load();
