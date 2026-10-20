@@ -457,6 +457,7 @@ public sealed class BridgeHost
         "liveState" => _live.State(),
         "liveOpen" => OpenConversations(payload),
         "liveTerminal" => LiveToTerminal(payload),
+        "convoMark" => MarkConvo(payload),
         // Assistant : discussion hors terminal qui agit sur la file par les outils que la page execute.
         "assistantSend" => SendAssistant(payload),
         "assistantStop" => _assistant.Stop(),
@@ -962,6 +963,43 @@ public sealed class BridgeHost
     {
         ConversationsRequested?.Invoke(Str(payload, "sessionId"));
         return new JsonObject { ["shown"] = true };
+    }
+
+    /// <summary>
+    /// Epingler ou archiver des conversations depuis la fenetre Conversations : <c>{ sessionIds, pinned?, archived? }</c>.
+    /// Seule la page principale ecrit data.json (elle en tient la copie de travail) : la demande lui est
+    /// relayee, et son enregistrement previent ensuite la fenetre Conversations (<c>dataChanged</c>).
+    /// </summary>
+    private JsonNode MarkConvo(JsonObject payload)
+    {
+        var ids = new JsonArray();
+        if (payload["sessionIds"] is JsonArray list)
+        {
+            foreach (var item in list)
+            {
+                if (item is JsonValue value && value.TryGetValue<string>(out var id) && !string.IsNullOrWhiteSpace(id))
+                {
+                    ids.Add(id);
+                }
+            }
+        }
+
+        if (ids.Count == 0)
+        {
+            throw new InvalidOperationException("Conversation inconnue.");
+        }
+
+        var mark = new JsonObject { ["sessionIds"] = ids };
+        foreach (var key in new[] { "pinned", "archived" })
+        {
+            if (payload[key] is JsonValue value && value.TryGetValue<bool>(out var flag))
+            {
+                mark[key] = flag;
+            }
+        }
+
+        PostEventTo(_core, "convoMark", mark);
+        return new JsonObject();
     }
 
     /// <summary>

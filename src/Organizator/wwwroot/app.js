@@ -6431,6 +6431,24 @@
     commit();
   }
 
+  /* Épingler, archiver des conversations dans la fenêtre Conversations. Seule cette page écrit
+     data.json : l'autre fenêtre le demande (convoMark, relayé par l'hôte) et se relit après
+     l'enregistrement (dataChanged). Les deux gestes s'excluent : c'est elle qui envoie les deux. */
+  function markConvo(p) {
+    var ids = p && Array.isArray(p.sessionIds) ? p.sessionIds : [];
+    var changed = false;
+    ids.forEach(function (id) {
+      var c = convoById(id);
+      if (!c) return;
+      ['pinned', 'archived'].forEach(function (k) {
+        if (typeof p[k] !== 'boolean') return;
+        if (p[k]) c[k] = Date.now(); else delete c[k];
+        changed = true;
+      });
+    });
+    if (changed) commit();
+  }
+
   function setType(taskId, typeId) {
     var t = taskById(taskId); if (!t) return;
     t.type = typeId;
@@ -9412,6 +9430,8 @@
       c.messageCount = typeof c.messageCount === 'number' ? c.messageCount : 0;
       c.created = toMs(c.created);
       c.updated = toMs(c.updated) || c.created;
+      /* Rangement de la fenêtre Conversations : épinglée, archivée (ms du geste), voir markConvo. */
+      ['pinned', 'archived'].forEach(function (k) { if (toMs(c[k])) c[k] = toMs(c[k]); else delete c[k]; });
       /* Carnet de remarques : ce que la session a reçu. Les conversations d'avant ce relevé le
          retrouvent dans les remarques envoyées, par leur `sessionId`. */
       if (c.taskId === FEEDBACK_ID) {
@@ -9520,6 +9540,7 @@
 
     /* Discussion sur un constat : la réponse de l'agent arrive au fil de l'eau. */
     bridge.on('findingChat', onFindingChat);
+    bridge.on('convoMark', markConvo);
 
     /* Dictée et transcription : le micro des zones de saisie, l'avancement de Whisper. */
     bindDictate();
