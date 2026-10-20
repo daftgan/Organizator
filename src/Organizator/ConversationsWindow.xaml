@@ -1,0 +1,15 @@
+<Window x:Class="Organizator.ConversationsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="Organizator — Conversations"
+        Width="1180" Height="800"
+        MinWidth="760" MinHeight="480"
+        Background="#FFF5EAD8"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        WindowStartupLocation="CenterScreen">
+    <Grid Background="#FFF5EAD8">
+        <wv2:WebView2 x:Name="Web" />
+    </Grid>
+</Window>

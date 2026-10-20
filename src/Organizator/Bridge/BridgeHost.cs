@@ -49,6 +49,12 @@ public sealed class BridgeHost
     private readonly FindingChat _findings;
     private readonly WhisperTranscriber _whisper;
     private readonly VoiceChat _voice;
+    private readonly AssistantChat _assistant;
+    private readonly LiveSessions _live;
+
+    // Vues branchees sur le pont : la fenetre principale, et la fenetre Conversations quand elle est ouverte.
+    // Chaque reponse repart a la vue qui a ecrit ; les evenements partent a toutes.
+    private readonly List<CoreWebView2> _views = new();
     private readonly SpeechVoice _speech;
 
     // Revizator (H2) : modele de l'apprenant et documents, menu RSS du cours, generations par Claude.
@@ -128,6 +134,12 @@ public sealed class BridgeHost
         _voice = new VoiceChat(launcher, log, store.DataDir);
         _voice.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("voice", payload));
         _speech = new SpeechVoice(log);
+        // Assistant : la reponse s'ecrit au fil de l'eau, et ses appels d'outils sont executes par la page.
+        _assistant = new AssistantChat(launcher, log, store.DataDir);
+        _assistant.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("assistant", payload));
+        // Sessions hebergees (fenetre Conversations) : leur avancement part a toutes les vues.
+        _live = new LiveSessions(launcher, log);
+        _live.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("live", payload));
         // Revizator : persistance, menu du jour et generations ; l'avancement repasse par le fil de l'interface.
         _learning = new LearningStore(store.DataDir, log);
         _learnNews = new NewsMenu(_learning, log);
@@ -146,8 +158,48 @@ public sealed class BridgeHost
         _updater = new AppUpdater(store.DataDir, log, () => _store.LoadSettings().RevizatorServerUrl, enabled: true);
         _updater.Progress += payload => _owner.Dispatcher.BeginInvoke(() => PostEvent("update", payload));
         _updater.Start();
+        _views.Add(_core);
         _core.WebMessageReceived += OnWebMessageReceived;
     }
+
+    /// <summary>
+    /// Demande d'afficher la fenetre Conversations, sur une session (son identifiant) ou telle qu'elle
+    /// est (null). Levee sur le fil de l'interface ; c'est la fenetre principale qui la cree.
+    /// </summary>
+    public event Action<string?>? ConversationsRequested;
+
+    /// <summary>Sessions de la fenetre Conversations en pleine reponse : fermer Organizator les couperait.</summary>
+    public int LiveBusyCount() => _live.BusyCount();
+
+    /// <summary>Vrai quand la fermeture vient de « Installer maintenant » (deja confirmee).</summary>
+    public bool ClosingForUpdate => _updater.RelaunchWanted;
+
+    /// <summary>Branche une seconde vue (fenetre Conversations) : elle parle au meme hote, recoit les memes evenements.</summary>
+    public void AttachView(CoreWebView2 core)
+    {
+        lock (_views)
+        {
+            if (!_views.Contains(core))
+            {
+                _views.Add(core);
+            }
+        }
+
+        core.WebMessageReceived += OnWebMessageReceived;
+    }
+
+    public void DetachView(CoreWebView2 core)
+    {
+        core.WebMessageReceived -= OnWebMessageReceived;
+        lock (_views)
+        {
+            _views.Remove(core);
+        }
+    }
+
+    /// <summary>Evenement a une seule vue (la fenetre Conversations : la session a montrer).</summary>
+    public void PostEventTo(CoreWebView2 core, string name, JsonObject? payload = null)
+        => PostTo(core, new JsonObject { ["event"] = name, ["payload"] = payload ?? new JsonObject() });
 
     /// <summary>Dossier des pieces jointes, servi a l'UI sous <see cref="TaskAttachments.Host"/>.</summary>
     public string AttachmentsRoot => _attachments.Root;
@@ -161,6 +213,8 @@ public sealed class BridgeHost
         try
         {
             _voice.Dispose();
+            _assistant.Dispose();
+            _live.Dispose();
             _speech.Dispose();
             _asr.Dispose();
         }
@@ -174,11 +228,18 @@ public sealed class BridgeHost
     }
 
     /// <summary>« Installer maintenant » : la fenetre se ferme (donnees enregistrees), l'installateur la relance.</summary>
-    private JsonObject InstallUpdateNow()
+    private JsonObject InstallUpdateNow(JsonObject payload)
     {
         if (!_updater.Ready)
         {
             return new JsonObject { ["ok"] = false };
+        }
+
+        // Fermer Organizator arreterait les agents de la fenetre Conversations en pleine reponse.
+        var busy = _live.BusyCount();
+        if (busy > 0 && !(payload["force"] is JsonValue force && force.TryGetValue<bool>(out var forced) && forced))
+        {
+            return new JsonObject { ["ok"] = false, ["busy"] = busy };
         }
 
         _updater.RelaunchWanted = true;
@@ -199,14 +260,23 @@ public sealed class BridgeHost
             ["payload"] = payload ?? new JsonObject(),
         };
 
-        Post(message);
+        CoreWebView2[] views;
+        lock (_views)
+        {
+            views = _views.ToArray();
+        }
+
+        foreach (var view in views)
+        {
+            PostTo(view, message);
+        }
     }
 
-    private void Post(JsonObject message)
+    private static void PostTo(CoreWebView2 view, JsonObject message)
     {
         try
         {
-            _core.PostWebMessageAsJson(message.ToJsonString());
+            view.PostWebMessageAsJson(message.ToJsonString());
         }
         catch (Exception ex)
         {
@@ -219,6 +289,7 @@ public sealed class BridgeHost
 
     private async void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
+        var view = sender as CoreWebView2 ?? _core;
         JsonNode? id = null;
         string? type = null;
         var started = Stopwatch.GetTimestamp();
@@ -252,23 +323,23 @@ public sealed class BridgeHost
 
             if (string.IsNullOrWhiteSpace(type))
             {
-                Reply(id, false, null, "Message sans type.");
+                Reply(view, id, false, null, "Message sans type.");
                 return;
             }
 
             _perf?.MessageStarted(type!);
             var result = await DispatchAsync(type!, payload).ConfigureAwait(true);
-            Reply(id, true, result, null);
+            Reply(view, id, true, result, null);
         }
         catch (TranscriptionCancelledException ex)
         {
             // Annulation demandee par la page (transcription speculative) : WhisperTranscriber l'a deja notee.
-            Reply(id, false, null, ex.Message);
+            Reply(view, id, false, null, ex.Message);
         }
         catch (Exception ex)
         {
             _log.Error("Echec du traitement d'un message web", ex);
-            Reply(id, false, null, Readable(ex));
+            Reply(view, id, false, null, Readable(ex));
         }
         finally
         {
@@ -279,7 +350,7 @@ public sealed class BridgeHost
         }
     }
 
-    private void Reply(JsonNode? id, bool ok, JsonNode? payload, string? error)
+    private static void Reply(CoreWebView2 view, JsonNode? id, bool ok, JsonNode? payload, string? error)
     {
         var message = new JsonObject { ["id"] = id, ["ok"] = ok };
         if (ok)
@@ -291,7 +362,7 @@ public sealed class BridgeHost
             message["error"] = error ?? "Erreur inconnue.";
         }
 
-        Post(message);
+        PostTo(view, message);
     }
 
     /// <summary>
@@ -338,9 +409,10 @@ public sealed class BridgeHost
     {
         "getState" => GetState(),
         "saveData" => SaveData(payload),
+        "getData" => new JsonObject { ["data"] = _store.LoadData() },
         "saveSettings" => SaveSettings(payload),
         "pickFolder" => PickFolder(payload),
-        "startSession" => StartSession(payload),
+        "startSession" => await StartSessionAsync(payload).ConfigureAwait(true),
         "resumeSession" => await ResumeSessionAsync(payload).ConfigureAwait(true),
         "getSessions" => await GetSessionsAsync(payload).ConfigureAwait(true),
         "getTranscript" => await GetTranscriptAsync(payload).ConfigureAwait(true),
@@ -377,6 +449,22 @@ public sealed class BridgeHost
         "voiceStop" => StopVoice(payload),
         "voiceVoices" => await _speech.VoicesJsonAsync().ConfigureAwait(true),
         "voiceSpeak" => await SpeakAsync(payload).ConfigureAwait(true),
+        // Sessions hebergees (fenetre Conversations) : messages, arret, questions de l'agent, fermeture, console.
+        "liveSend" => _live.Send(payload),
+        "liveStop" => _live.Stop(Str(payload, "sessionId")),
+        "liveAnswer" => _live.Answer(payload),
+        "liveClose" => _live.Close(Str(payload, "sessionId")),
+        "liveState" => _live.State(),
+        "liveOpen" => OpenConversations(payload),
+        "liveTerminal" => LiveToTerminal(payload),
+        // Assistant : discussion hors terminal qui agit sur la file par les outils que la page execute.
+        "assistantSend" => SendAssistant(payload),
+        "assistantStop" => _assistant.Stop(),
+        "assistantReset" => _assistant.Reset(),
+        "assistantToolResult" => _assistant.ToolResult(payload),
+        "assistantStatus" => _assistant.Status(),
+        "assistantLoad" => await Task.Run(_assistant.Load).ConfigureAwait(true),
+        "assistantSave" => await Task.Run(() => _assistant.Save(payload)).ConfigureAwait(true),
         // Revizator (H2) : persistance, menu du jour, generations par Claude.
         "learnLoad" => await Task.Run(() => _learning.Load()).ConfigureAwait(true),
         "learnSave" => await Task.Run(() => _learning.Save(payload)).ConfigureAwait(true),
@@ -408,7 +496,7 @@ public sealed class BridgeHost
         "asrStop" => StopAsr(payload),
         "updateStatus" => _updater.Status(),
         "updateCheck" => await _updater.CheckAsync().ConfigureAwait(true),
-        "updateInstall" => InstallUpdateNow(),
+        "updateInstall" => InstallUpdateNow(payload),
         "log" => LogFromWeb(payload),
         "perf" => RecordPerf(payload),
         _ => throw new InvalidOperationException($"Type de message inconnu : {type}"),
@@ -525,6 +613,12 @@ public sealed class BridgeHost
     private JsonNode SaveData(JsonObject payload)
     {
         _store.SaveData(payload);
+        // La fenetre Conversations ne tient pas les donnees : elle les relit quand la page principale enregistre.
+        if (_views.Count > 1)
+        {
+            PostEvent("dataChanged");
+        }
+
         return new JsonObject();
     }
 
@@ -825,6 +919,87 @@ public sealed class BridgeHost
         => double.TryParse(Str(payload, "speed"), System.Globalization.NumberStyles.Float,
             System.Globalization.CultureInfo.InvariantCulture, out var speed) ? (float)speed : 1f;
 
+    private async Task<JsonNode> StartSessionAsync(JsonObject payload)
+    {
+        if (_store.LoadSettings().Terminal == "app")
+        {
+            return await StartLiveAsync(payload).ConfigureAwait(true);
+        }
+
+        return StartSession(payload);
+    }
+
+    /// <summary>
+    /// Reglage « Terminal » = app : la session est hebergee par Organizator (<see cref="LiveSessions"/>) avec
+    /// les memes parametres qu'en console, et la fenetre Conversations s'ouvre dessus.
+    /// </summary>
+    private async Task<JsonNode> StartLiveAsync(JsonObject payload)
+    {
+        var provider = AgentProvider.Normalize(Str(payload, "provider"));
+        var launch = new LiveLaunch(
+            provider,
+            Str(payload, "cwd") ?? "",
+            Str(payload, "title") ?? "",
+            Str(payload, "context") ?? "",
+            AgentProvider.RequireModel(Str(payload, "model")),
+            AgentProvider.RequireEffort(provider, Str(payload, "effort")));
+        var started = await _live.StartAsync(launch, Str(payload, "prompt") ?? "").ConfigureAwait(true);
+        ConversationsRequested?.Invoke(started.SessionId);
+        return new JsonObject
+        {
+            ["sessionId"] = started.SessionId,
+            ["cwd"] = started.Cwd,
+            ["created"] = started.Created,
+            ["provider"] = provider,
+            ["model"] = launch.Model,
+            ["effort"] = launch.Effort,
+            ["window"] = "app",
+        };
+    }
+
+    /// <summary>Montre la fenetre Conversations, sur une session si elle en nomme une : <c>{ sessionId? }</c>.</summary>
+    private JsonNode OpenConversations(JsonObject payload)
+    {
+        ConversationsRequested?.Invoke(Str(payload, "sessionId"));
+        return new JsonObject { ["shown"] = true };
+    }
+
+    /// <summary>
+    /// « Ouvrir dans un terminal » depuis la fenetre Conversations : le processus heberge s'arrete et la
+    /// session reprend dans une console (Windows Terminal s'il est la). Refuse pendant une reponse.
+    /// </summary>
+    private JsonNode LiveToTerminal(JsonObject payload)
+    {
+        var sessionId = Str(payload, "sessionId") ?? "";
+        if (_live.State()["sessions"] is JsonArray all
+            && all.OfType<JsonObject>().Any(s => (string?)s["sessionId"] == sessionId && (bool?)s["busy"] == true))
+        {
+            throw new InvalidOperationException("L'agent répond encore : arrêtez-le, ou attendez la fin de sa réponse.");
+        }
+
+        var known = _live.LaunchOf(sessionId);
+        var provider = AgentProvider.Normalize(known?.Provider ?? Str(payload, "provider"));
+        var cwd = known?.Cwd ?? Str(payload, "cwd") ?? "";
+        var title = known?.Title ?? Str(payload, "title") ?? "";
+        var model = AgentProvider.RequireModel(known?.Model ?? Str(payload, "model"));
+        var effort = AgentProvider.RequireEffort(provider, known?.Effort ?? Str(payload, "effort"));
+        _live.Close(sessionId);
+        lock (_cacheLock)
+        {
+            _relaunchedAt[sessionId] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        }
+
+        // Le contexte de Claude est deja enregistre dans la session ; celui de Copilot est dans son historique.
+        var launched = _launcher.ResumeSession(provider, sessionId, cwd, title, "", "", model, effort, _launcher.HasWt ? "wt" : "powershell");
+        if (launched is int terminalProcessId)
+        {
+            RememberTerminal(sessionId, terminalProcessId);
+            _ = BringLaunchedForwardAsync(provider, sessionId, terminalProcessId);
+        }
+
+        return new JsonObject { ["terminal"] = true };
+    }
+
     private JsonNode StartSession(JsonObject payload)
     {
         var provider = AgentProvider.Normalize(Str(payload, "provider"));
@@ -867,6 +1042,36 @@ public sealed class BridgeHost
         // est restee introuvable, et c'est l'utilisateur qui accepte deux agents sur la session.
         var force = payload["force"] is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
         var terminal = _store.LoadSettings().Terminal;
+
+        // Reglage « fenetre Conversations », ou session deja hebergee : elle s'y ouvre (et y recoit le
+        // message a remettre), sauf si une console la porte encore — c'est alors sa fenetre qu'on ramene.
+        if ((terminal == "app" || _live.IsRunning(sessionId)) && !force)
+        {
+            // Le balayage a quelques secondes de retard : un agent mort entre-temps n'est plus une console.
+            var consoles = _live.IsRunning(sessionId)
+                ? Array.Empty<int>()
+                : (_scanner?.PidsFor(sessionId) ?? Array.Empty<int>()).Where(AgentWindows.IsRunning).ToArray();
+            if (consoles.Length == 0)
+            {
+                if (!_live.IsRunning(sessionId))
+                {
+                    // Comme une reprise en console : les agents d'avant ne comptent plus.
+                    lock (_cacheLock)
+                    {
+                        _relaunchedAt[sessionId] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    }
+                }
+
+                _live.Open(sessionId, new LiveLaunch(provider, cwd, title, context, model, effort));
+                if (!string.IsNullOrWhiteSpace(prompt))
+                {
+                    _live.Send(new JsonObject { ["sessionId"] = sessionId, ["text"] = prompt });
+                }
+
+                ConversationsRequested?.Invoke(sessionId);
+                return new JsonObject { ["focused"] = true, ["window"] = "app" };
+            }
+        }
 
         // Une session encore ouverte n'a pas besoin d'un second terminal : sa fenetre suffit. Un
         // second --resume y mettrait un second agent sur le meme fichier, puis un second onglet du
@@ -993,6 +1198,12 @@ public sealed class BridgeHost
     /// <summary>Etat du balayage ; un agent vu vivant n'a plus besoin du terminal retenu a sa reprise.</summary>
     private bool? Alive(string sessionId)
     {
+        // Une session hebergee par Organizator est vivante, meme si le balayage ne la voit pas (Copilot en ACP).
+        if (_live.IsRunning(sessionId))
+        {
+            return true;
+        }
+
         var alive = _scanner?.IsAlive(sessionId);
         if (alive == true)
         {
@@ -1179,6 +1390,13 @@ public sealed class BridgeHost
     /// </summary>
     private JsonNode Notify(JsonObject payload)
     {
+        // Organizator est devant si l'une de ses fenetres l'est : dans la fenetre Conversations, la
+        // reponse se voit deja (pastille de la liste, fil) ; ni clignotement ni notification Windows.
+        if (!_owner.IsActive && Application.Current?.Windows.OfType<Window>().Any(w => w.IsActive) == true)
+        {
+            return new JsonObject { ["flashed"] = false, ["shown"] = 0 };
+        }
+
         var flashed = TaskbarFlash.Flash(_owner);
         var shown = 0;
         if (!_owner.IsActive && payload["toasts"] is JsonArray toasts)
@@ -1919,6 +2137,18 @@ public sealed class BridgeHost
             Tutor: tutor,
             Name: VoiceChat.SanitizeName(Str(payload, "name")));
         return new JsonObject { ["conversationId"] = _voice.Start(options) };
+    }
+
+    /// <summary>
+    /// Message a l'assistant (voir <see cref="AssistantChat"/>) : modele et effort absents = ceux des
+    /// reglages. La reponse arrive par l'evenement <c>assistant</c>.
+    /// </summary>
+    private JsonNode SendAssistant(JsonObject payload)
+    {
+        var settings = _store.LoadSettings();
+        payload["model"] ??= settings.AssistantModel;
+        payload["effort"] ??= settings.AssistantEffort;
+        return _assistant.Send(payload);
     }
 
     private JsonNode InterruptVoice(JsonObject payload)

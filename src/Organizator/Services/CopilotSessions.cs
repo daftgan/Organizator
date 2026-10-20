@@ -337,7 +337,8 @@ public sealed class CopilotSessions
 
     /// <summary>
     /// <c>workspace.yaml</c> est un YAML plat : <c>name: Titre</c> (donne par Copilot, ou par
-    /// l'utilisateur quand <c>user_named: true</c>). Seules ces deux cles sont lues.
+    /// l'utilisateur quand <c>user_named: true</c>). Seules ces deux cles sont lues. Un nom sur
+    /// plusieurs lignes (premier message long, sans <c>--name</c>) est un bloc <c>name: |-</c>.
     /// </summary>
     private static void ReadWorkspace(string path, TranscriptAccumulator result)
     {
@@ -352,12 +353,33 @@ public sealed class CopilotSessions
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
 
-        string? line;
-        while ((line = reader.ReadLine()) is not null)
+        var lines = new List<string>();
+        string? read;
+        while ((read = reader.ReadLine()) is not null)
         {
+            lines.Add(read);
+        }
+
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
             if (line.StartsWith("name:", StringComparison.Ordinal))
             {
-                name = UnquoteYaml(line["name:".Length..]);
+                var raw = line["name:".Length..].Trim();
+                if (raw.Length > 0 && (raw[0] == '|' || raw[0] == '>'))
+                {
+                    var block = new List<string>();
+                    while (i + 1 < lines.Count && (lines[i + 1].Length == 0 || lines[i + 1][0] == ' '))
+                    {
+                        block.Add(lines[++i]);
+                    }
+
+                    name = ReadBlockScalar(block, folded: raw[0] == '>');
+                }
+                else
+                {
+                    name = UnquoteYaml(raw);
+                }
             }
             else if (line.StartsWith("user_named:", StringComparison.Ordinal))
             {
@@ -378,6 +400,36 @@ public sealed class CopilotSessions
         {
             result.AiTitle = name;
         }
+    }
+
+    /// <summary>Contenu d'un bloc YAML (lignes indentees) : litteral (<c>|</c>) ou replie (<c>></c>).</summary>
+    private static string ReadBlockScalar(List<string> block, bool folded)
+    {
+        var indent = block.Where(l => l.Trim().Length > 0)
+            .Select(l => l.Length - l.TrimStart(' ').Length)
+            .DefaultIfEmpty(0)
+            .Min();
+        var text = block.Select(l => l.Length >= indent ? l[indent..] : "").ToList();
+        if (!folded)
+        {
+            return string.Join("\n", text).Trim();
+        }
+
+        var sb = new StringBuilder();
+        foreach (var l in text)
+        {
+            if (l.Length == 0)
+            {
+                sb.Append('\n');
+            }
+            else
+            {
+                if (sb.Length > 0 && sb[^1] != '\n') sb.Append(' ');
+                sb.Append(l);
+            }
+        }
+
+        return sb.ToString().Trim();
     }
 
     private static string UnquoteYaml(string raw)

@@ -27,6 +27,7 @@ public sealed class AppSettings
     /// <summary>Serveur Bitbucket interroge pour les PRs en attente ; vide = celui detecte (serveur MCP de ~/.claude.json, ou BITBUCKET_URL).</summary>
     [JsonPropertyName("bitbucketUrl")] public string BitbucketUrl { get; set; } = "";
 
+    /// <summary>Ou s'ouvrent les conversations : "powershell", "wt" (Windows Terminal) ou "app" (fenetre Conversations d'Organizator, sans console).</summary>
     [JsonPropertyName("terminal")] public string Terminal { get; set; } = "powershell";
 
     /// <summary>Clic sur l'icone de console d'une carte : "panel" ouvre le panneau, "terminal" va a la fenetre de la seule conversation.</summary>
@@ -119,6 +120,12 @@ public sealed class AppSettings
     /// <summary>Conversation vocale : quand couper la parole a l'avatar (words = quand on dit quelques mots, voice = des qu'on parle, off = jamais).</summary>
     [JsonPropertyName("voiceBargeIn")] public string VoiceBargeIn { get; set; } = "words";
 
+    /// <summary>Assistant : modele Claude de la discussion qui agit sur la file (relire des consignes demande mieux qu'un modele rapide).</summary>
+    [JsonPropertyName("assistantModel")] public string AssistantModel { get; set; } = "sonnet";
+
+    /// <summary>Assistant : effort de Claude (vide = reglage propre de l'outil).</summary>
+    [JsonPropertyName("assistantEffort")] public string AssistantEffort { get; set; } = "medium";
+
     /// <summary>Serveur Revizator (https://revizator.exemple.fr) : l'onglet Revizator y lit et y ecrit ses donnees ; vide = tout reste sur ce PC.</summary>
     [JsonPropertyName("revizatorServerUrl")] public string RevizatorServerUrl { get; set; } = "";
 
@@ -129,6 +136,9 @@ public sealed class AppSettings
     [JsonPropertyName("revizatorServerLogin")] public string RevizatorServerLogin { get; set; } = "";
 
     [JsonPropertyName("window")] public WindowPlacement? Window { get; set; }
+
+    /// <summary>Position de la fenetre Conversations ; comme <see cref="Window"/>, tenue par l'hote seul.</summary>
+    [JsonPropertyName("conversationsWindow")] public WindowPlacement? ConversationsWindow { get; set; }
 
     /// <summary>
     /// Reglages que cette version ne connait pas (ecrits par une version plus recente, ou plus ancienne) :
@@ -177,20 +187,25 @@ public sealed class AppSettings
         VoiceWhisperModel = VoiceWhisperModel,
         VoiceSensitivity = VoiceSensitivity,
         VoiceBargeIn = VoiceBargeIn,
+        AssistantModel = AssistantModel,
+        AssistantEffort = AssistantEffort,
         RevizatorServerUrl = RevizatorServerUrl,
         RevizatorServerToken = RevizatorServerToken,
         RevizatorServerLogin = RevizatorServerLogin,
-        Window = Window is null
-            ? null
-            : new WindowPlacement
-            {
-                X = Window.X,
-                Y = Window.Y,
-                Width = Window.Width,
-                Height = Window.Height,
-                Maximized = Window.Maximized,
-            },
+        Window = Copy(Window),
+        ConversationsWindow = Copy(ConversationsWindow),
     };
+
+    private static WindowPlacement? Copy(WindowPlacement? placement) => placement is null
+        ? null
+        : new WindowPlacement
+        {
+            X = placement.X,
+            Y = placement.Y,
+            Width = placement.Width,
+            Height = placement.Height,
+            Maximized = placement.Maximized,
+        };
 
     /// <summary>Ramene les valeurs hors bornes dans le domaine attendu par l'UI.</summary>
     public void Sanitize()
@@ -204,14 +219,7 @@ public sealed class AppSettings
         RepoDir ??= "";
         BitbucketUrl = BitbucketPullRequests.NormalizeUrl(BitbucketUrl) ?? "";
 
-        if (!string.Equals(Terminal, "wt", StringComparison.OrdinalIgnoreCase))
-        {
-            Terminal = "powershell";
-        }
-        else
-        {
-            Terminal = "wt";
-        }
+        Terminal = (Terminal ?? "").Trim().ToLowerInvariant() is "wt" or "app" ? Terminal!.Trim().ToLowerInvariant() : "powershell";
 
         TermClick = string.Equals(TermClick, "terminal", StringComparison.OrdinalIgnoreCase) ? "terminal" : "panel";
 
@@ -260,6 +268,9 @@ public sealed class AppSettings
             : "base";
         VoiceSensitivity = Math.Clamp(VoiceSensitivity, 0, 100);
         VoiceBargeIn = VoiceBargeIn is "voice" or "off" ? VoiceBargeIn : "words";
+
+        AssistantModel = AgentProvider.SanitizeModel(AssistantModel);
+        AssistantEffort = AgentProvider.SanitizeEffort(AgentProvider.Claude, AssistantEffort);
 
         RevizatorServerUrl = SanitizeServerUrl(RevizatorServerUrl);
         RevizatorServerToken = (RevizatorServerToken ?? "").Trim();

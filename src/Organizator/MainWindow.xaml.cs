@@ -26,6 +26,12 @@ public partial class MainWindow : Window
     private AgentProcessScanner? _scanner;
     private PerfMonitor? _perf;
     private bool _closingHandled;
+    private bool _sessionEnding;
+
+    // Fenetre Conversations (sessions hebergees) : creee au premier besoin, dans le meme environnement WebView2.
+    private CoreWebView2Environment? _environment;
+    private string? _wwwFolder;
+    private ConversationsWindow? _conversations;
 
     public MainWindow(
         AppOptions options,
@@ -52,37 +58,42 @@ public partial class MainWindow : Window
         Loaded += OnLoaded;
         Closing += OnClosing;
         Activated += OnActivated;
+        // Fermeture de session Windows : pas de question, elle bloquerait l'arret du poste.
+        Application.Current.SessionEnding += (_, _) => _sessionEnding = true;
     }
 
     // ------------------------------------------------------------------ fenetre
 
-    private void RestorePlacement(WindowPlacement? placement)
+    private void RestorePlacement(WindowPlacement? placement) => ApplyPlacement(this, placement, _log);
+
+    /// <summary>Remet une fenetre (principale ou Conversations) a la place enregistree, si elle tombe a l'ecran.</summary>
+    internal static void ApplyPlacement(Window window, WindowPlacement? placement, HostLog log)
     {
         if (placement is null || placement.Width < 200 || placement.Height < 150)
         {
             return;
         }
 
-        var width = Math.Max(MinWidth, placement.Width);
-        var height = Math.Max(MinHeight, placement.Height);
+        var width = Math.Max(window.MinWidth, placement.Width);
+        var height = Math.Max(window.MinHeight, placement.Height);
 
         if (!IsVisibleOnAnyScreen(placement.X, placement.Y, width, height))
         {
-            _log.Warn("Position de fenetre enregistree hors ecran, retour au centrage.");
-            Width = width;
-            Height = height;
+            log.Warn("Position de fenetre enregistree hors ecran, retour au centrage.");
+            window.Width = width;
+            window.Height = height;
             return;
         }
 
-        WindowStartupLocation = WindowStartupLocation.Manual;
-        Left = placement.X;
-        Top = placement.Y;
-        Width = width;
-        Height = height;
+        window.WindowStartupLocation = WindowStartupLocation.Manual;
+        window.Left = placement.X;
+        window.Top = placement.Y;
+        window.Width = width;
+        window.Height = height;
 
         if (placement.Maximized)
         {
-            WindowState = WindowState.Maximized;
+            window.WindowState = WindowState.Maximized;
         }
     }
 
@@ -113,28 +124,37 @@ public partial class MainWindow : Window
     {
         try
         {
-            var bounds = WindowState == WindowState.Normal
-                ? new Rect(Left, Top, Width, Height)
-                : RestoreBounds;
-
-            if (bounds.IsEmpty || double.IsNaN(bounds.Width) || bounds.Width <= 0)
+            if (CapturePlacement(this) is { } placement)
             {
-                return;
+                _store.SaveWindowPlacement(placement);
             }
-
-            _store.SaveWindowPlacement(new WindowPlacement
-            {
-                X = bounds.X,
-                Y = bounds.Y,
-                Width = bounds.Width,
-                Height = bounds.Height,
-                Maximized = WindowState == WindowState.Maximized,
-            });
         }
         catch (Exception ex)
         {
             _log.Error("Enregistrement de l'etat de la fenetre impossible", ex);
         }
+    }
+
+    /// <summary>Position et taille d'une fenetre (celles d'avant l'agrandissement), ou null si elle n'en a pas encore.</summary>
+    internal static WindowPlacement? CapturePlacement(Window window)
+    {
+        var bounds = window.WindowState == WindowState.Normal
+            ? new Rect(window.Left, window.Top, window.Width, window.Height)
+            : window.RestoreBounds;
+
+        if (bounds.IsEmpty || double.IsNaN(bounds.Width) || bounds.Width <= 0)
+        {
+            return null;
+        }
+
+        return new WindowPlacement
+        {
+            X = bounds.X,
+            Y = bounds.Y,
+            Width = bounds.Width,
+            Height = bounds.Height,
+            Maximized = window.WindowState == WindowState.Maximized,
+        };
     }
 
     // ------------------------------------------------------------------ WebView2
@@ -151,6 +171,8 @@ public partial class MainWindow : Window
                 options: new CoreWebView2EnvironmentOptions { Language = "fr-FR" });
 
             await Web.EnsureCoreWebView2Async(environment);
+            _environment = environment;
+            _wwwFolder = wwwFolder;
 
             var core = Web.CoreWebView2;
             var settings = core.Settings;
@@ -179,6 +201,7 @@ public partial class MainWindow : Window
             _scanner = new AgentProcessScanner(_log, Dispatcher);
             _perf = new PerfMonitor(_log, Dispatcher);
             _bridge = new BridgeHost(core, this, _log, _store, _sessions, _copilot, _launcher, _scanner, _perf);
+            _bridge.ConversationsRequested += ShowConversations;
 
             // Pieces jointes des taches : la page en affiche les images en vignette.
             core.SetVirtualHostNameToFolderMapping(
@@ -293,7 +316,10 @@ public partial class MainWindow : Window
         _log.Error($"Processus WebView2 en echec : {e.ProcessFailedKind} / {e.Reason}");
     }
 
-    private void OpenExternally(string uri)
+    private void OpenExternally(string uri) => OpenExternally(uri, _log);
+
+    /// <summary>Un lien http(s) ou mailto s'ouvre dans le navigateur ou la messagerie, jamais dans la page.</summary>
+    internal static void OpenExternally(string uri, HostLog log)
     {
         if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed))
         {
@@ -311,7 +337,26 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            _log.Warn($"Ouverture externe impossible ({uri}) : {ex.Message}");
+            log.Warn($"Ouverture externe impossible ({uri}) : {ex.Message}");
+        }
+    }
+
+    /// <summary>Montre la fenetre Conversations (la cree au premier appel), sur une session si elle en nomme une.</summary>
+    private void ShowConversations(string? sessionId)
+    {
+        if (_bridge is null || _environment is null || _wwwFolder is null || _closingHandled)
+        {
+            return;
+        }
+
+        try
+        {
+            _conversations ??= new ConversationsWindow(_environment, _wwwFolder, _bridge, _store, _log, _options.IsDev);
+            _conversations.ShowSession(sessionId);
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Fenetre Conversations impossible a ouvrir", ex);
         }
     }
 
@@ -326,11 +371,39 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Les agents de la fenetre Conversations sont des processus d'Organizator : le fermer les arrete.
+        var busy = _bridge?.LiveBusyCount() ?? 0;
+        if (busy > 0 && _bridge?.ClosingForUpdate != true && !_sessionEnding)
+        {
+            var answer = MessageBox.Show(
+                this,
+                (busy == 1 ? "Une conversation travaille encore" : $"{busy} conversations travaillent encore")
+                    + " dans la fenêtre Conversations. Fermer Organizator interromprait "
+                    + (busy == 1 ? "sa réponse" : "leurs réponses")
+                    + " ; ce qui est déjà écrit est gardé, et la session se reprend plus tard.\n\nFermer quand même ?",
+                "Organizator",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning,
+                MessageBoxResult.No);
+            if (answer != MessageBoxResult.Yes)
+            {
+                e.Cancel = true;
+                return;
+            }
+        }
+
         e.Cancel = true;
         _closingHandled = true;
 
         await FlushWebAsync();
         SavePlacement();
+
+        if (_conversations is not null)
+        {
+            _conversations.AllowClose = true;
+            _conversations.Close();
+            _conversations = null;
+        }
 
         _claudeWatcher?.Dispose();
         _claudeWatcher = null;
