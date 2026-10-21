@@ -48,6 +48,12 @@ button { font: inherit; }
   position: relative; display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 2px 8px; width: 100%; box-sizing: border-box;
   text-align: left; border-radius: 10px; padding: 8px 10px; cursor: pointer; color: inherit; outline: none;
 }
+/* Un filet entre deux conversations ; il s'efface autour de celle qu'on survole ou qu'on lit, que son fond détache déjà. */
+.cv-item + .cv-item { margin-top: 3px; }
+.cv-item + .cv-item::before {
+  content: ''; position: absolute; left: 10px; right: 10px; top: -2px; height: 1px; background: var(--color-divider);
+}
+.cv-item:hover::before, .cv-item.on::before, .cv-item:hover + .cv-item::before, .cv-item.on + .cv-item::before { opacity: 0; }
 .cv-item:hover { background: color-mix(in oklch, var(--color-surface) 70%, transparent); }
 .cv-item.on { background: var(--color-surface); box-shadow: var(--shadow-sm); }
 .cv-item:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent-400); }

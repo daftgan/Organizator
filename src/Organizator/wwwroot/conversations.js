@@ -36,7 +36,9 @@
     pin: SVG + '<path d="M12 17v5"></path><path d="M5 17h14v-1.8a2 2 0 0 0-1.1-1.8l-1.8-.9A2 2 0 0 1 15 10.8V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.8a2 2 0 0 1-1.1 1.8l-1.8.9A2 2 0 0 0 5 15.2Z"></path></svg>',
     archive: SVG + '<rect x="2" y="3" width="20" height="5" rx="1"></rect><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path><path d="M10 12h4"></path></svg>',
     unarchive: SVG + '<rect x="2" y="3" width="20" height="5" rx="1"></rect><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path><path d="m9.5 14.5 2.5-2.5 2.5 2.5"></path><path d="M12 12v6"></path></svg>',
-    spark: SVG + '<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"></path><path d="M19 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"></path></svg>'
+    spark: SVG + '<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"></path><path d="M19 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"></path></svg>',
+    /* La bulle du bouton « Remarques » de la fenêtre principale. */
+    remarks: SVG + '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M8 9h8M8 13h5"></path></svg>'
   };
 
   var C = {
@@ -190,22 +192,41 @@
   function active(c) { var st = displayState(c); return st === 'working' || st === 'waiting'; }
 
   /* Carnet de remarques : une session en cours a son agent qui tourne (console ouverte, ou hébergée
-     ici), une réponse pas encore lue, ou c'est celle qu'on lit ; les autres rejoignent les Archives. */
+     ici), une réponse pas encore lue, ou c'est celle qu'on lit. */
   function ongoing(c) {
     var a = C.sessions[c.id], lv = C.live[c.id];
     return !!(a && a.alive === true) || !!(lv && lv.running) || unread(c) || c.id === C.stay;
   }
 
-  /* Où se range une conversation : épinglée (en haut), dans le bloc « Organizator » (le carnet de
-     remarques, en cours), archivée (repliée en bas : celles des tâches terminées, du carnet au repos,
-     et celles qu'on y a rangées), ou dans la liste. */
+  /* La dernière session du carnet : elle reste dans le bloc du bas, au niveau de l'assistant, même au
+     repos — sauf si on l'a archivée. */
+  function latestFeedback() {
+    var best = null;
+    C.data.convos.forEach(function (c) {
+      if (c.taskId === FEEDBACK_ID && (!best || updatedOf(c) > updatedOf(best))) best = c;
+    });
+    return best ? best.id : '';
+  }
+
+  /* Sa tâche est en cours (et pas validée) : la conversation est « épinglée ». */
+  function taskDoing(c) {
+    var t = taskById(c.taskId);
+    return !!(t && t.id !== FEEDBACK_ID && t.doing && !taskDone(c));
+  }
+
+  /* Où se range une conversation. Pour une tâche, son état décide — en cours = épinglée (section du
+     haut), validée = archivée (repliée en bas) — et une conversation au travail ne se cache jamais
+     dans les archives. Le carnet de remarques, sans tâche, va dans le bloc « Organizator » (la
+     dernière session, celles en cours, celles qu'on y garde par l'épingle) ou aux Archives (au repos,
+     ou rangée à la main). */
   function placeOf(c) {
-    if (c.pinned) return 'pinned';
-    var feedback = c.taskId === FEEDBACK_ID;
-    if (active(c)) return feedback ? 'organizator' : 'list';
-    if (c.archived || taskDone(c)) return 'archive';
-    if (feedback) return ongoing(c) ? 'organizator' : 'archive';
-    return 'list';
+    if (c.taskId === FEEDBACK_ID) {
+      if (active(c)) return 'organizator';
+      if (c.archived) return 'archive';
+      return c.pinned || ongoing(c) || c.id === latestFeedback() ? 'organizator' : 'archive';
+    }
+    if (taskDone(c)) return active(c) ? 'list' : 'archive';
+    return taskDoing(c) ? 'pinned' : 'list';
   }
 
   /* Où elle irait si on la sortait des Archives : nulle part ailleurs, pour celles qui y sont d'office. */
@@ -245,17 +266,18 @@
       out.all++;
       if (hit(c, ws)) out[placeOf(c)].push(c);
     });
-    out.pinned.sort(function (a, b) { return toMs(b.pinned) - toMs(a.pinned); });
-    out.organizator.sort(function (a, b) { return toMs(updatedOf(b)) - toMs(updatedOf(a)); });
+    out.pinned = ordered(out.pinned);
+    /* Le carnet : celles qu'on garde par l'épingle d'abord, puis la plus récente. */
+    out.organizator.sort(function (a, b) { return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || toMs(updatedOf(b)) - toMs(updatedOf(a)); });
     out.assistant = !ws.length || ws.every(function (w) { return fold('assistant organizator ✦ ' + ((C.as.summary && C.as.summary.said) || '')).indexOf(w) >= 0; });
     return out;
   }
 
-  /* Celles dont on suit l'état : pas les archives des tâches terminées tant qu'elles sont repliées (une
-     archive rangée à la main se suit encore, pour ressortir si elle se remet au travail). */
+  /* Celles dont on suit l'état : pas les archives des tâches validées tant qu'elles sont repliées (le
+     carnet se suit toujours, pour ressortir s'il se remet au travail). */
   function listedConvos() {
     var open = C.showArchive || !!C.query.trim();
-    var out = C.data.convos.filter(function (c) { return taskById(c.taskId) && (open || c.pinned || !taskDone(c)); });
+    var out = C.data.convos.filter(function (c) { return taskById(c.taskId) && (open || !taskDone(c)); });
     if (C.selected && convoById(C.selected) && out.indexOf(convoById(C.selected)) < 0) out.push(convoById(C.selected));
     return out;
   }
@@ -689,8 +711,10 @@
     bridge.call('liveClose', { sessionId: c.id })['catch'](function (e) { toast(e.message); });
   }
 
-  /* Épingler, archiver (une conversation ou tout un groupe) : la copie locale change tout de suite, la
-     fenêtre principale enregistre (convoMark), et son enregistrement revient ici par `dataChanged`. */
+  /* Épingler, archiver : la copie locale change tout de suite, la fenêtre principale enregistre
+     (convoMark), et son enregistrement revient ici par `dataChanged`. Pour une conversation de tâche,
+     c'est la tâche qui change (en cours, validée) — la fenêtre principale y ajoute ce que la file en
+     déduit (sous-tâches validées avec elle, parente rouverte), que la relecture apporte. */
   function mark(ids, flags) {
     ids = [].concat(ids).filter(function (id) { return !!convoById(id); });
     if (!ids.length) return;
@@ -698,7 +722,9 @@
     Object.keys(flags).forEach(function (k) { payload[k] = !!flags[k]; });
     ids.forEach(function (id) {
       var c = convoById(id);
-      Object.keys(flags).forEach(function (k) { if (flags[k]) c[k] = now(); else delete c[k]; });
+      var t = c.taskId === FEEDBACK_ID ? null : taskById(c.taskId);
+      if (t) markTask(t, flags);
+      else Object.keys(flags).forEach(function (k) { if (flags[k]) c[k] = now(); else delete c[k]; });
       C.marking[id] = true;
     });
     renderSide();
@@ -712,9 +738,33 @@
     });
   }
 
+  /* La copie locale de la tâche, comme la fenêtre principale va l'écrire (markConvo). */
+  function markTask(t, flags) {
+    var p = t.parent ? taskById(t.parent) : null;
+    function reopen() { t.done = false; if (p && p.done) p.done = false; }
+    if (typeof flags.archived === 'boolean') {
+      if (flags.archived) {
+        t.done = true;
+        C.data.tasks.forEach(function (k) { if (k.parent === t.id) k.done = true; });
+      } else {
+        reopen();
+      }
+    }
+    if (typeof flags.pinned === 'boolean') {
+      if (flags.pinned) reopen();
+      t.doing = flags.pinned;
+    }
+  }
+
   function togglePin(id) {
     var c = convoById(id);
     if (!c) return;
+    if (c.taskId !== FEEDBACK_ID) {
+      var on = taskDoing(c);
+      mark(id, { pinned: !on });
+      toast(on ? 'La tâche n’est plus en cours : la conversation retourne dans la liste.' : 'Tâche passée en cours : la conversation monte dans « En cours ».');
+      return;
+    }
     if (c.pinned) mark(id, { pinned: false });
     else mark(id, { pinned: true, archived: false });
   }
@@ -722,6 +772,15 @@
   function toggleArchive(id) {
     var c = convoById(id);
     if (!c) return;
+    if (c.taskId !== FEEDBACK_ID) {
+      /* Archiver valide la tâche, sortir des Archives la rouvre — toutes ses conversations suivent. */
+      var done = taskDone(c);
+      mark(id, { archived: !done });
+      toast(done ? 'Tâche rouverte : la conversation revient dans la liste.'
+        : active(c) ? 'Tâche validée : la conversation rejoindra les Archives quand l’agent aura fini.'
+        : 'Tâche validée : la conversation est rangée dans les Archives.');
+      return;
+    }
     if (placeOf(c) === 'archive') {
       if (c.archived) mark(id, { archived: false });
       return;
@@ -732,12 +791,12 @@
     toast('Conversation rangée dans les Archives, en bas de la liste.');
   }
 
-  /* Une conversation archivée à la main qui se remet au travail (message, reprise en console) ressort
-     pour de bon : elle ne retournera pas aux archives quand elle aura répondu. On n'archive pas une
-     conversation au travail : toute activité d'une archivée vient donc d'après son rangement. */
+  /* Une session du carnet archivée à la main qui se remet au travail (message, reprise en console)
+     ressort pour de bon. (Une conversation de tâche suit sa tâche : au travail, elle reste visible le
+     temps de sa réponse, sans rouvrir la tâche.) */
   function reviveArchived() {
     C.data.convos.forEach(function (c) {
-      if (c.archived && active(c) && !C.marking[c.id]) mark(c.id, { archived: false });
+      if (c.taskId === FEEDBACK_ID && c.archived && active(c) && !C.marking[c.id]) mark(c.id, { archived: false });
     });
   }
 
@@ -767,7 +826,7 @@
     setHtml(side.querySelector('[data-role="cv-sub"]'), esc(sub));
     var h = [];
     if (s.pinned.length) {
-      h.push('<div class="cv-section">Épinglées</div>');
+      h.push('<div class="cv-section">En cours</div>');
       h.push(s.pinned.map(itemHtml).join(''));
       if (s.list.length) h.push('<div class="cv-section">Conversations</div>');
     }
@@ -830,7 +889,7 @@
       + ' data-act="cv-select" data-id="' + esc(c.id) + '"'
       + ' title="' + esc((STATE_WORDS[st] || '') + (a && a.said ? ' · ' + a.said : '')) + '">'
       + '<span class="cv-state' + (st ? ' st-' + st : '') + '"></span>'
-      + '<span class="cv-item-title">' + esc(convTitle(c)) + '</span>'
+      + '<span class="cv-item-title">' + (c.taskId === FEEDBACK_ID ? '<span class="cv-spark">' + ICON.remarks + '</span>' : '') + esc(convTitle(c)) + '</span>'
       + (task ? '<span class="cv-item-task">' + esc(task) + '</span>' : '')
       + '<span class="cv-item-sub">' + esc(agentTag(c) + ' · ' + (STATE_WORDS[st] || '—') + (updatedOf(c) ? ' · ' + fmtTime(updatedOf(c)) : '')) + '</span>'
       + (said ? '<span class="cv-item-said">' + esc(said) + '</span>' : '')
@@ -838,12 +897,20 @@
       + '</div>';
   }
 
-  /* Épingler / désépingler ; archiver / désarchiver — sauf une conversation rangée d'office (tâche
-     terminée, carnet au repos), que seule l'épingle sort des archives. */
+  /* Épingler / désépingler ; archiver / désarchiver. Pour une tâche, c'est la passer en cours, la
+     valider, et l'inverse. Pour le carnet, l'épingle le garde dans le bloc du bas, et une session rangée
+     d'office (au repos) n'a que l'épingle. */
   function markButtons(c, cls) {
     var place = placeOf(c);
+    if (c.taskId !== FEEDBACK_ID) {
+      var on = taskDoing(c), done = taskDone(c);
+      return '<button type="button" class="' + cls + (on ? ' on' : '') + '" data-act="cv-pin" data-id="' + esc(c.id) + '"'
+        + ' title="' + (on ? 'Désépingler : la tâche n’est plus en cours' : 'Épingler : la tâche passe en cours') + '" aria-pressed="' + on + '">' + ICON.pin + '</button>'
+        + '<button type="button" class="' + cls + '" data-act="cv-archive" data-id="' + esc(c.id) + '"'
+        + ' title="' + (done ? 'Sortir des Archives : la tâche est rouverte' : 'Archiver : la tâche est validée') + '">' + (done ? ICON.unarchive : ICON.archive) + '</button>';
+    }
     var h = '<button type="button" class="' + cls + (c.pinned ? ' on' : '') + '" data-act="cv-pin" data-id="' + esc(c.id) + '"'
-      + ' title="' + (c.pinned ? 'Désépingler' : 'Épingler en haut de la liste') + '" aria-pressed="' + !!c.pinned + '">' + ICON.pin + '</button>';
+      + ' title="' + (c.pinned ? 'Ne plus la garder dans le bloc Organizator' : 'La garder dans le bloc Organizator, même au repos') + '" aria-pressed="' + !!c.pinned + '">' + ICON.pin + '</button>';
     if (place === 'archive' && placeUnarchived(c) === 'archive') return h;
     return h + '<button type="button" class="' + cls + '" data-act="cv-archive" data-id="' + esc(c.id) + '"'
       + ' title="' + (place === 'archive' ? 'Sortir des Archives' : 'Archiver') + '">' + (place === 'archive' ? ICON.unarchive : ICON.archive) + '</button>';
@@ -886,10 +953,10 @@
     var hosted = lv && lv.running;
     var place = placeOf(c);
     var other = taskLine(c);
-    setHtml(el, '<div class="cv-head-text"><div class="cv-title">' + esc(convTitle(c)) + '</div>'
+    setHtml(el, '<div class="cv-head-text"><div class="cv-title">' + (c.taskId === FEEDBACK_ID ? '<span class="cv-spark">' + ICON.remarks + '</span>' : '') + esc(convTitle(c)) + '</div>'
       + '<div class="cv-meta">'
       + (st ? '<span class="cv-chip st-' + esc(st) + '">' + esc(STATE_WORDS[st] || st) + '</span>' : '')
-      + (place === 'archive' ? '<span class="cv-chip">' + (c.archived ? 'Archivée' : taskDone(c) ? 'Archivée · tâche terminée' : 'Archivée · au repos') + '</span>' : '')
+      + (place === 'archive' ? '<span class="cv-chip">' + (c.taskId !== FEEDBACK_ID ? 'Archivée · tâche validée' : c.archived ? 'Archivée' : 'Archivée · au repos') + '</span>' : '')
       + (other ? '<span class="cv-chip" title="' + esc(task.text) + '">' + esc(other) + '</span>' : '')
       + '<span class="cv-chip">' + esc(agentTag(c)) + '</span>'
       + (c.cwd ? '<button type="button" class="cv-chip" data-act="cv-folder" title="Ouvrir le dossier : ' + esc(c.cwd) + '">' + esc(c.cwd) + '</button>' : '')
