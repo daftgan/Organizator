@@ -6482,20 +6482,40 @@
 
   /* Épingler, archiver des conversations dans la fenêtre Conversations. Seule cette page écrit
      data.json : l'autre fenêtre le demande (convoMark, relayé par l'hôte) et se relit après
-     l'enregistrement (dataChanged). Les deux gestes s'excluent : c'est elle qui envoie les deux. */
+     l'enregistrement (dataChanged). Pour une conversation de tâche, le geste agit sur la tâche — et
+     donc sur toutes ses conversations : épinglée = en cours, archivée = validée, dans les deux sens
+     (désépingler la sort d'« en cours », sortir des Archives la rouvre). Seules les sessions du carnet
+     de remarques, sans tâche, gardent leurs propres marques (les deux gestes s'excluent : la fenêtre
+     envoie les deux). */
   function markConvo(p) {
     var ids = p && Array.isArray(p.sessionIds) ? p.sessionIds : [];
-    var changed = false;
+    var changed = false, tasks = [];
     ids.forEach(function (id) {
       var c = convoById(id);
       if (!c) return;
+      var t = c.taskId === FEEDBACK_ID ? null : taskById(c.taskId);
+      if (t) { if (tasks.indexOf(t) < 0) tasks.push(t); return; }
       ['pinned', 'archived'].forEach(function (k) {
         if (typeof p[k] !== 'boolean') return;
         if (p[k]) c[k] = Date.now(); else delete c[k];
         changed = true;
       });
     });
+    tasks.forEach(function (t) {
+      if (typeof p.archived === 'boolean' && p.archived !== taskFinished(t)) { setDone(t, p.archived); changed = true; }
+      if (typeof p.pinned === 'boolean') {
+        if (p.pinned && taskFinished(t)) setDone(t, false);
+        if (!!t.doing !== p.pinned) t.doing = p.pinned;
+        changed = true;
+      }
+    });
     if (changed) commit();
+  }
+
+  /* Validée, ou sous-tâche d'une parente validée : ses conversations sont aux Archives. */
+  function taskFinished(t) {
+    var p = parentOf(t);
+    return !!(t.done || (p && p.done));
   }
 
   function setType(taskId, typeId) {
@@ -9426,7 +9446,9 @@
 
   /* ══ Démarrage ════════════════════════════════════════════════════════ */
 
+  /* Rend vrai si des données d'avant ont été reprises : il faut les enregistrer. */
   function normalize(st) {
+    var migrated = false;
     var d = (st && st.data) || {};
     S.data.tasks = Array.isArray(d.tasks) ? d.tasks : [];
     S.data.types = Array.isArray(d.types) ? d.types : [];
@@ -9481,8 +9503,17 @@
       c.messageCount = typeof c.messageCount === 'number' ? c.messageCount : 0;
       c.created = toMs(c.created);
       c.updated = toMs(c.updated) || c.created;
-      /* Rangement de la fenêtre Conversations : épinglée, archivée (ms du geste), voir markConvo. */
+      /* Rangement de la fenêtre Conversations : épinglée, archivée (ms du geste), voir markConvo. Il ne
+         se note plus que pour le carnet de remarques : pour une tâche, épinglée = en cours et archivée =
+         validée. Une épingle d'avant cette règle passe sa tâche, encore ouverte, en cours. */
       ['pinned', 'archived'].forEach(function (k) { if (toMs(c[k])) c[k] = toMs(c[k]); else delete c[k]; });
+      var owner = c.taskId === FEEDBACK_ID ? null : taskById(c.taskId);
+      if (owner && (c.pinned || c.archived)) {
+        if (c.pinned && !owner.doing && !taskFinished(owner)) owner.doing = true;
+        delete c.pinned;
+        delete c.archived;
+        migrated = true;
+      }
       /* Carnet de remarques : ce que la session a reçu. Les conversations d'avant ce relevé le
          retrouvent dans les remarques envoyées, par leur `sessionId`. */
       if (c.taskId === FEEDBACK_ID) {
@@ -9546,6 +9577,7 @@
     var known = S.data.types.map(function (t) { return t.id; });
     if (S.data.lastType && known.indexOf(S.data.lastType) >= 0) S.ui.composerType = S.data.lastType;
     else S.ui.composerType = known.length ? known[known.length - 1] : null;
+    return migrated;
   }
 
   function boot() {
@@ -9644,7 +9676,9 @@
     startPerfMonitor();
 
     bridge.call('getState').then(function (st) {
-      normalize(st || {});
+      /* Données d'avant reprises (épingles devenues « en cours ») : enregistrées, pour que la fenêtre
+         Conversations, qui lit data.json, les voie aussi. */
+      if (normalize(st || {}) && !RZ_ONLY) saveDataSoon();
       /* Serveur Révizator réglé et session ouverte : branché avant le démarrage des pages (Révizator lit ses données). */
       if (bridge.configureRemote && S.settings.revizatorServerToken) bridge.configureRemote({ url: S.settings.revizatorServerUrl, token: S.settings.revizatorServerToken });
       booted = true;
