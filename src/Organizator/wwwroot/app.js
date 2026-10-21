@@ -611,6 +611,8 @@
     });
     S.data.tasks.forEach(function (t) {
       if (t.parent && byId[t.parent].parent) delete t.parent;
+      /* Terminée avec sa parente (setDone) : la marque ne vaut que sous elle. */
+      if (!t.parent || !t.done) delete t.doneWithParent;
     });
     S.data.tasks.forEach(function (t) {
       if (t.parent) (kids[t.parent] = kids[t.parent] || []).push(t);
@@ -6390,10 +6392,56 @@
 
   function commit() { regroupTasks(); saveDataNow(); render(); }
 
+  /* Terminer une tâche termine ses sous-tâches : celles qui restaient à faire portent
+     `doneWithParent`, si bien que la rouvrir rouvre celles-là, et pas celles qu'on avait cochées
+     soi-même. Une tâche terminée n'a donc que des sous-tâches terminées : rouvrir l'une d'elles
+     rouvre aussi sa parente. Rend ce qui a suivi : { closed, reopened, parent }. */
+  function setDone(t, done) {
+    var out = { closed: 0, reopened: 0, parent: null };
+    t.done = !!done;
+    delete t.doneWithParent;
+    childrenOf(t.id).forEach(function (k) {
+      if (done && !k.done) { k.done = true; k.doneWithParent = true; out.closed++; }
+      else if (!done && k.doneWithParent) { k.done = false; delete k.doneWithParent; out.reopened++; }
+    });
+    var p = parentOf(t);
+    if (!done && p && p.done) { p.done = false; out.parent = p; }
+    return out;
+  }
+
+  function doneToast(r) {
+    var n = r.closed || r.reopened;
+    if (n) {
+      toast((r.closed ? 'Terminée' : 'Rouverte') + ', avec '
+        + (n > 1 ? 'les ' + n + ' sous-tâches ' + (r.closed ? 'qui restaient' : 'terminées avec elle')
+          : 'la sous-tâche ' + (r.closed ? 'qui restait' : 'terminée avec elle')) + '.');
+    } else if (r.parent) {
+      toast('« ' + firstLine(r.parent.text, 60) + ' » rouverte : une de ses sous-tâches reste à faire.');
+    }
+  }
+
+  /* État terminé d'une tâche et de sa famille (parente, sous-tâches), pour l'annuler (assistant). */
+  function doneSnapshot(t) {
+    var p = parentOf(t);
+    return [t].concat(childrenOf(t.id), p ? [p] : []).map(function (x) {
+      return { id: x.id, done: !!x.done, mark: !!x.doneWithParent };
+    });
+  }
+
+  function restoreDone(snap) {
+    (snap || []).forEach(function (s) {
+      var x = taskById(s.id);
+      if (!x) return;
+      x.done = s.done;
+      if (s.mark) x.doneWithParent = true; else delete x.doneWithParent;
+    });
+  }
+
   function toggleDone(id) {
     var t = taskById(id); if (!t) return;
-    t.done = !t.done;
+    var r = setDone(t, !t.done);
     commit();
+    doneToast(r);
   }
 
   /* Le bouton bascule l'état *affiché* (« en cours » n'est visible que sur une tâche non
@@ -6401,8 +6449,9 @@
   function toggleDoing(id) {
     var t = taskById(id); if (!t) return;
     t.doing = !(t.doing && !t.done);
-    if (t.doing) t.done = false;
+    var r = t.doing && t.done ? setDone(t, false) : null;
     commit();
+    if (r) doneToast(r);
   }
 
   /* Seule une tâche terminée s'efface : la règle tient aussi ici, pour qu'aucun autre chemin
@@ -9402,6 +9451,8 @@
       if (!t.parent) delete t.parent;
       /* Sous-tâches repliées sous ce parent (voir subsFolded). */
       if (t.collapsed !== true) delete t.collapsed;
+      /* Sous-tâche terminée avec sa parente, que rouvrir la parente rouvre (voir setDone). */
+      if (t.doneWithParent !== true) delete t.doneWithParent;
       /* Revue générale (import groupé des PRs) et dernier lot lancé sur les sous-tâches (voir launchBatch). */
       if (t.reviewGroup !== true) delete t.reviewGroup;
       if (t.batch != null) {
@@ -9720,6 +9771,7 @@
     effortsFor: effortsFor, customModel: CUSTOM, hasProvider: hasProvider, providerById: providerById,
     defaultProviderId: defaultProviderId, modelSettingKey: modelSettingKey, effortSettingKey: effortSettingKey,
     saveSettingsSoon: saveSettingsSoon, commit: commit, saveDataSoon: saveDataSoon, saveDataNow: saveDataNow,
+    setDone: setDone, doneSnapshot: doneSnapshot, restoreDone: restoreDone,
     palettes: PALETTES, notype: NOTYPE, agentRoles: AGENT_ROLES, keywordMax: KEYWORD_MAX, agentMax: AGENT_MAX,
     taskById: taskById, typeOf: typeOf, parentOf: parentOf, childrenOf: childrenOf, lastOfGroup: lastOfGroup,
     subtaskProgress: subtaskProgress, attachmentsOf: attachmentsOf, taskPullRequests: taskPullRequests,

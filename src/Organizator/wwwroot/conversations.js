@@ -1,15 +1,17 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    conversations.js — la fenêtre Conversations
    Les sessions d'agent d'Organizator, à la manière de Claude Code Desktop : à gauche les sessions —
-   une recherche, les épinglées en haut, les autres rangées par tâche dans l'ordre de la file, les
-   archivées repliées en bas — avec leur état ; au centre la conversation choisie, ses messages, la
+   une recherche, les épinglées en haut, les autres dans l'ordre de la file, les archivées repliées
+   en bas de la liste, et sous elle, fixe, le bloc « Organizator » : l'assistant et les sessions du
+   carnet de remarques en cours — avec leur état ; au centre la conversation choisie, ses messages, la
    réponse qui s'écrit, les outils pas à pas, les questions de l'agent ; en bas la zone de saisie.
    Organizator reste le moteur : les sessions sont hébergées par l'hôte (LiveSessions) avec les
    paramètres choisis dans Organizator — cette page ne fait que les montrer et leur parler.
    Elle ne tient aucune donnée : la file vient de la fenêtre principale (getData, relu à chaque
    `dataChanged`), l'état des sessions de leurs fichiers (getSessions, getTranscript), la réponse en cours
    des événements `live`. Épingler ou archiver se demande à la fenêtre principale (convoMark), qui
-   enregistre. Une session qui tourne dans une console se lit ici, et se pilote là-bas.
+   enregistre ; l'assistant aussi y vit (assistantRemote → assistantView). Une session qui tourne
+   dans une console se lit ici, et se pilote là-bas.
    ═══════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
@@ -17,6 +19,8 @@
   var MD = window.OrganizatorMd;
   var esc = MD.esc;
   var FEEDBACK_ID = '__feedback__';
+  /* L'assistant, choisi dans la liste comme une conversation. */
+  var ASSISTANT_ID = '__assistant__';
   var STATE_WORDS = {
     working: 'Au travail', waiting: 'Attend votre réponse', ready: 'Réponse prête', error: 'Erreur',
     closed: 'Fermée', open: 'Ouverte', idle: 'Inactive'
@@ -31,7 +35,8 @@
     search: SVG + '<circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>',
     pin: SVG + '<path d="M12 17v5"></path><path d="M5 17h14v-1.8a2 2 0 0 0-1.1-1.8l-1.8-.9A2 2 0 0 1 15 10.8V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.8a2 2 0 0 1-1.1 1.8l-1.8.9A2 2 0 0 0 5 15.2Z"></path></svg>',
     archive: SVG + '<rect x="2" y="3" width="20" height="5" rx="1"></rect><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path><path d="M10 12h4"></path></svg>',
-    unarchive: SVG + '<rect x="2" y="3" width="20" height="5" rx="1"></rect><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path><path d="m9.5 14.5 2.5-2.5 2.5 2.5"></path><path d="M12 12v6"></path></svg>'
+    unarchive: SVG + '<rect x="2" y="3" width="20" height="5" rx="1"></rect><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path><path d="m9.5 14.5 2.5-2.5 2.5 2.5"></path><path d="M12 12v6"></path></svg>',
+    spark: SVG + '<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"></path><path d="M19 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"></path></svg>'
   };
 
   var C = {
@@ -42,6 +47,11 @@
     selected: '', query: '', showArchive: false, drafts: {}, open: {}, answers: {}, older: {},
     /* Épingler / archiver demandé à la fenêtre principale, pas encore enregistré. */
     marking: {},
+    /* Session du carnet qu'on lit : elle reste dans le bloc du bas tant qu'elle est choisie. */
+    stay: '',
+    /* L'assistant, tenu par la fenêtre principale : son résumé, puis — quand on le montre — ses
+       entrées, en données (assistantView). */
+    as: { summary: null, keys: [], items: {}, restoredAt: 0, toastAt: 0 },
     seen: loadSeen(), since: loadSince(), loaded: false
   };
 
@@ -103,11 +113,6 @@
     return null;
   }
 
-  function typeOf(id) {
-    for (var i = 0; i < C.data.types.length; i++) if (C.data.types[i].id === id) return C.data.types[i];
-    return null;
-  }
-
   function convoById(id) {
     for (var i = 0; i < C.data.convos.length; i++) if (C.data.convos[i].id === id) return C.data.convos[i];
     return null;
@@ -124,11 +129,27 @@
     return (providerOf(c) === 'copilot' ? 'Copilot' : 'Claude') + (c.model ? ' · ' + c.model : '') + (c.effort ? ' · ' + c.effort : '');
   }
 
-  /* Rangs comme dans la file : les tâches actives de premier niveau. */
-  function ranks() {
-    var out = {}, r = 0;
-    C.data.tasks.forEach(function (t) { if (!t.parent && !t.done) out[t.id] = ++r; });
-    return out;
+  /* Le titre d'une conversation, en entier (il passe à la ligne, rien n'est coupé) : le sien, ou celui de
+     sa tâche tant qu'elle n'en a pas. Le nom donné à la session au lancement n'est que le début de
+     la tâche (46 caractères) : c'est alors la première ligne de la tâche qui s'affiche, complète. */
+  function convTitle(c) {
+    var own = String(c.title || '').trim();
+    var t = taskById(c.taskId);
+    var line = t && t.id !== FEEDBACK_ID ? firstLine(t.text, 1000) : '';
+    if (!own || own === 'Nouvelle session') return line || own || 'Nouvelle session';
+    var start = fold(own).replace(/…$/, '').trim();
+    if (line && start && fold(line).indexOf(start) === 0) return line;
+    return own;
+  }
+
+  /* Sa tâche, seulement quand elle dit autre chose que le titre : le plus souvent c'est le même, et la
+     répéter ferait doublon. */
+  function taskLine(c) {
+    var t = taskById(c.taskId);
+    if (!t || t.id === FEEDBACK_ID) return '';
+    var line = firstLine(t.text, 1000);
+    var a = fold(line), b = fold(convTitle(c));
+    return !a || a.indexOf(b) === 0 || b.indexOf(a) === 0 ? '' : line;
   }
 
   /* L'état d'une conversation : la session hébergée d'abord (question, réponse en cours), puis ses fichiers. */
@@ -155,48 +176,78 @@
     return (st === 'ready' || st === 'error') && updatedOf(c) > Math.max(C.seen[c.id] || 0, C.since) && c.id !== C.selected;
   }
 
-  function taskDone(c) { var t = taskById(c.taskId); return !!(t && t.done); }
+  /* Une tâche terminée, ou dont la parente l'est (une revue générale cochée et ses tickets) : ses
+     conversations rejoignent d'elles-mêmes les Archives. */
+  function taskDone(c) {
+    var t = taskById(c.taskId);
+    if (!t) return false;
+    if (t.done) return true;
+    var p = t.parent ? taskById(t.parent) : null;
+    return !!(p && p.done);
+  }
 
   /* Au travail, ou une question en attente : une telle conversation ne se cache jamais dans les archives. */
   function active(c) { var st = displayState(c); return st === 'working' || st === 'waiting'; }
 
-  /* Où se range une conversation : épinglée (en haut), archivée (repliée en bas : celles des tâches
-     terminées, et celles qu'on y a rangées), ou sous sa tâche. */
+  /* Carnet de remarques : une session en cours a son agent qui tourne (console ouverte, ou hébergée
+     ici), une réponse pas encore lue, ou c'est celle qu'on lit ; les autres rejoignent les Archives. */
+  function ongoing(c) {
+    var a = C.sessions[c.id], lv = C.live[c.id];
+    return !!(a && a.alive === true) || !!(lv && lv.running) || unread(c) || c.id === C.stay;
+  }
+
+  /* Où se range une conversation : épinglée (en haut), dans le bloc « Organizator » (le carnet de
+     remarques, en cours), archivée (repliée en bas : celles des tâches terminées, du carnet au repos,
+     et celles qu'on y a rangées), ou dans la liste. */
   function placeOf(c) {
     if (c.pinned) return 'pinned';
-    if ((c.archived || taskDone(c)) && !active(c)) return 'archive';
+    var feedback = c.taskId === FEEDBACK_ID;
+    if (active(c)) return feedback ? 'organizator' : 'list';
+    if (c.archived || taskDone(c)) return 'archive';
+    if (feedback) return ongoing(c) ? 'organizator' : 'archive';
     return 'list';
+  }
+
+  /* Où elle irait si on la sortait des Archives : nulle part ailleurs, pour celles qui y sont d'office. */
+  function placeUnarchived(c) {
+    var copy = Object.assign({}, c);
+    delete copy.archived;
+    return placeOf(copy);
   }
 
   /* Titre de la conversation, texte de sa tâche, agent, modèle, effort. */
   function hit(c, ws) {
     if (!ws.length) return true;
     var t = taskById(c.taskId);
-    var hay = fold((c.title || 'Nouvelle session') + '\n' + (t ? t.text : '') + '\n' + agentTag(c));
+    var hay = fold(convTitle(c) + '\n' + (c.title || '') + '\n' + (t ? t.text : '') + '\n' + agentTag(c));
     return ws.every(function (w) { return hay.indexOf(w) >= 0; });
   }
 
-  /* Par tâche, dans l'ordre de la file ; le carnet de remarques à la fin. */
-  function groupsOf(convs) {
+  /* Dans l'ordre de la file (les conversations d'une tâche à la suite, la plus récente d'abord) ; le
+     carnet de remarques à la fin. */
+  function ordered(convs) {
     var by = {};
     convs.forEach(function (c) { (by[c.taskId] || (by[c.taskId] = [])).push(c); });
     var out = [];
-    C.data.tasks.forEach(function (t) { if (by[t.id]) out.push({ task: t, convs: by[t.id] }); });
-    if (by[FEEDBACK_ID]) out.push({ task: taskById(FEEDBACK_ID), convs: by[FEEDBACK_ID] });
-    out.forEach(function (x) { x.convs.sort(function (a, b) { return toMs(updatedOf(b)) - toMs(updatedOf(a)); }); });
+    C.data.tasks.map(function (t) { return t.id; }).concat([FEEDBACK_ID]).forEach(function (id) {
+      if (!by[id]) return;
+      out = out.concat(by[id].sort(function (a, b) { return toMs(updatedOf(b)) - toMs(updatedOf(a)); }));
+    });
     return out;
   }
 
   /* Les conversations de la liste, rangées et filtrées par la recherche. */
   function sections() {
     var ws = words(C.query);
-    var out = { pinned: [], list: [], archive: [], all: 0 };
+    var out = { pinned: [], list: [], organizator: [], archive: [], all: 0 };
     C.data.convos.forEach(function (c) {
       if (!taskById(c.taskId)) return;
       out.all++;
       if (hit(c, ws)) out[placeOf(c)].push(c);
     });
     out.pinned.sort(function (a, b) { return toMs(b.pinned) - toMs(a.pinned); });
+    out.organizator.sort(function (a, b) { return toMs(updatedOf(b)) - toMs(updatedOf(a)); });
+    out.assistant = !ws.length || ws.every(function (w) { return fold('assistant organizator ✦ ' + ((C.as.summary && C.as.summary.said) || '')).indexOf(w) >= 0; });
     return out;
   }
 
@@ -212,6 +263,7 @@
   /* ══ Hôte ════════════════════════════════════════════════════════════ */
 
   function load() {
+    asking('sync')['catch'](function () { /* la fenêtre principale n'est pas prête : le filet redemandera */ });
     return bridge.call('getState', {}, 30000).then(function (st) {
       C.data = normalizeData(st.data);
       C.settings = st.settings || {};
@@ -408,18 +460,153 @@
 
   function select(id) {
     if (!id) return;
-    C.selected = id;
     var c = convoById(id);
+    /* Une session du carnet qu'on ouvre depuis le bloc du bas y reste tant qu'on la lit, même lue. */
+    var keep = !!c && placeOf(c) === 'organizator';
+    C.selected = id;
+    C.stay = keep ? id : '';
     if (c) { C.seen[id] = Math.max(updatedOf(c), now()); saveSeen(); }
     /* Ouverte depuis la recherche, une notification ou la fenêtre principale : une archivée se
        montre à sa place, section dépliée. */
     if (c && placeOf(c) === 'archive') C.showArchive = true;
     stick = true;
+    watchAssistant();
     render();
-    loadTranscript(id);
-    refreshSessions();
+    if (id !== ASSISTANT_ID) {
+      loadTranscript(id);
+      refreshSessions();
+    }
     var box = $('[data-role="cv-input"]');
     if (box) box.focus();
+  }
+
+  /* ── L'assistant ──────────────────────────────────────────────────────
+     Tenu par la fenêtre principale (assistant.js) : chaque geste lui est relayé par l'hôte, et ce
+     qu'il faut montrer revient par l'événement `assistantView`. */
+  function asking(op, extra, front) {
+    var payload = Object.assign({ op: op }, extra || {});
+    if (front) payload.front = true;
+    return bridge.call('assistantRemote', payload);
+  }
+
+  /* Dit à la fenêtre principale si la discussion est sous les yeux : elle envoie alors ses entrées,
+     et ne signale pas une réponse qu'on a vue arriver ici. */
+  var watched = null;
+  function watchAssistant() {
+    var on = C.selected === ASSISTANT_ID;
+    var focused = on && document.hasFocus() && document.visibilityState !== 'hidden';
+    var key = on + '|' + focused;
+    if (key === watched) return;
+    watched = key;
+    asking('watch', { on: on, focused: focused })['catch'](function () { watched = null; });
+  }
+
+  function onAsView(p) {
+    if (!p) return;
+    var A = C.as;
+    if (p.summary) A.summary = p.summary;
+    if (Array.isArray(p.keys)) {
+      var changed = p.changed || {};
+      Object.keys(changed).forEach(function (k) { A.items[k] = changed[k]; });
+      var present = {};
+      p.keys.forEach(function (k) { present[k] = true; });
+      Object.keys(A.items).forEach(function (k) { if (!present[k]) delete A.items[k]; });
+      A.keys = p.keys;
+    }
+    if (p.toast && p.toast.at > A.toastAt) { A.toastAt = p.toast.at; toast(p.toast.text); }
+    /* Un message qui n'est pas parti revient dans la zone de saisie. */
+    var back = A.summary && A.summary.restore;
+    if (back && back.at > A.restoredAt) {
+      A.restoredAt = back.at;
+      if (!C.drafts[ASSISTANT_ID]) C.drafts[ASSISTANT_ID] = back.text;
+      var box = $('[data-role="cv-input"]');
+      if (box && C.selected === ASSISTANT_ID && !box.value) { box.value = back.text; fit(box); }
+    }
+    asClock();
+    renderSide();
+    if (C.selected === ASSISTANT_ID) { renderHead(); renderThread(); renderCompose(); }
+  }
+
+  /* Pendant une réponse, la durée se met à jour chaque seconde. */
+  var asTimer = null;
+  function asClock() {
+    var busy = !!(C.as.summary && C.as.summary.busy);
+    if (busy && !asTimer) {
+      asTimer = setInterval(function () {
+        if (C.selected === ASSISTANT_ID) { renderThread(); renderCompose(); }
+      }, 1000);
+    } else if (!busy && asTimer) {
+      clearInterval(asTimer);
+      asTimer = null;
+    }
+  }
+
+  function asBusyWords(b) {
+    if (!b) return '';
+    var s = Math.max(0, Math.round((now() - toMs(b.startedAt)) / 1000));
+    var what = b.phase === 'text' ? 'L’assistant écrit…'
+      : (b.phase === 'tool' || b.phase === 'call') && b.label ? b.label + '…'
+      : 'L’assistant réfléchit…';
+    return what + ' · ' + (s < 60 ? s + ' s' : Math.floor(s / 60) + ' min ' + ('0' + (s % 60)).slice(-2));
+  }
+
+  function asState() {
+    var s = C.as.summary;
+    if (!s) return '';
+    return s.busy ? 'working' : s.pending ? 'waiting' : s.unseen ? 'ready' : 'idle';
+  }
+
+  function asStateWords() {
+    var s = C.as.summary;
+    if (!s) return 'Lecture…';
+    if (s.busy) return 'Répond…';
+    if (s.pending) return s.pending > 1 ? s.pending + ' propositions à valider' : 'Une proposition à valider';
+    if (s.unseen) return 'Réponse prête';
+    return s.count ? 'Au repos' : 'Nouvelle discussion';
+  }
+
+  function asSend(box, text) {
+    var s = C.as.summary;
+    if (!s || !s.loaded) { toast('La discussion se charge encore dans la fenêtre principale.'); return; }
+    if (s.busy) { toast('L’assistant répond encore : attendez sa réponse, ou arrêtez-la.'); return; }
+    box.value = '';
+    C.drafts[ASSISTANT_ID] = '';
+    fit(box);
+    stick = true;
+    asking('send', { text: text })['catch'](function (e) {
+      toast('Message non envoyé : ' + e.message);
+      if (!box.value) { box.value = text; C.drafts[ASSISTANT_ID] = text; fit(box); }
+    });
+  }
+
+  /* Formulaire de lancement, tâche montrée dans la file, panneau, réglages : ça se passe dans la
+     fenêtre principale, qui revient devant. */
+  var AS_FRONT = { 'as-form': true, 'as-reveal': true, 'as-open': true, 'as-settings': true };
+  function asAct(el) {
+    var act = el.getAttribute('data-as');
+    if (!act) return;
+    var extra = { act: act };
+    if (el.getAttribute('data-id')) extra.id = el.getAttribute('data-id');
+    if (el.getAttribute('data-key')) extra.key = el.getAttribute('data-key');
+    if (el.getAttribute('data-i')) extra.i = parseInt(el.getAttribute('data-i'), 10);
+    asking('act', extra, !!AS_FRONT[act])['catch'](function (e) { toast(e.message); });
+  }
+
+  /* Une suggestion de l'accueil : celles qui partent telles quelles sont envoyées, les autres
+     commencent un message à compléter. */
+  function asIdea(el) {
+    var i = parseInt(el.getAttribute('data-i'), 10);
+    var empty = C.as.items.empty;
+    var idea = empty && empty.ideas ? empty.ideas[i] : null;
+    if (!idea) return;
+    if (idea.send) { asking('act', { act: 'as-suggest', i: i })['catch'](function (e) { toast(e.message); }); return; }
+    var box = $('[data-role="cv-input"]');
+    if (!box) return;
+    box.value = idea.text;
+    C.drafts[ASSISTANT_ID] = idea.text;
+    fit(box);
+    box.focus();
+    box.setSelectionRange(idea.text.length, idea.text.length);
   }
 
   function launchParams(c) {
@@ -429,6 +616,7 @@
   function send() {
     var c = convoById(C.selected);
     var box = $('[data-role="cv-input"]');
+    if (box && C.selected === ASSISTANT_ID) { if (box.value.trim()) asSend(box, box.value.trim()); return; }
     if (!c || !box) return;
     var text = box.value.trim();
     if (!text) return;
@@ -449,6 +637,7 @@
 
   function stop() {
     if (!C.selected) return;
+    if (C.selected === ASSISTANT_ID) { asking('act', { act: 'as-stop' })['catch'](function (e) { toast('Arrêt impossible : ' + e.message); }); return; }
     bridge.call('liveStop', { sessionId: C.selected })['catch'](function (e) { toast('Arrêt impossible : ' + e.message); });
   }
 
@@ -538,20 +727,9 @@
       return;
     }
     if (active(c)) { toast('L’agent travaille encore : archivez la conversation une fois sa réponse rendue.'); return; }
+    if (C.stay === id) C.stay = '';
     mark(id, { archived: true, pinned: false });
     toast('Conversation rangée dans les Archives, en bas de la liste.');
-  }
-
-  /* Tout un groupe d'un coup (le carnet de remarques, une tâche qui a beaucoup servi) : ses conversations
-     de la liste, sauf celles qui travaillent ; les épinglées restent où elles sont. */
-  function archiveGroup(taskId) {
-    var all = C.data.convos.filter(function (c) { return c.taskId === taskId && placeOf(c) === 'list'; });
-    var idle = all.filter(function (c) { return !active(c); });
-    if (!idle.length) { toast('L’agent travaille encore : rien à archiver pour l’instant.'); return; }
-    mark(idle.map(function (c) { return c.id; }), { archived: true, pinned: false });
-    var busy = all.length - idle.length;
-    toast((idle.length > 1 ? idle.length + ' conversations rangées' : 'Conversation rangée') + ' dans les Archives'
-      + (busy ? ' ; ' + (busy > 1 ? busy + ' travaillent encore et restent' : 'une travaille encore et reste') + ' dans la liste.' : '.'));
   }
 
   /* Une conversation archivée à la main qui se remet au travail (message, reprise en console) ressort
@@ -577,23 +755,24 @@
       side.innerHTML = '<div class="cv-side-head"><div class="cv-brand">Conversations</div><div class="cv-brand-sub" data-role="cv-sub"></div>'
         + '<label class="cv-search">' + ICON.search + '<input type="search" data-role="cv-search" placeholder="Rechercher (Ctrl + F)"'
         + ' spellcheck="false" autocomplete="off" aria-label="Rechercher une conversation"></label></div>'
-        + '<div class="cv-list" data-role="cv-list"></div>';
+        + '<div class="cv-list" data-role="cv-list"></div>'
+        + '<div class="cv-side-foot" data-role="cv-foot"></div>';
     }
     var s = sections();
     var searching = !!words(C.query).length;
     var shown = s.pinned.length + s.list.length;
     var sub = shown + (shown > 1 ? ' conversations' : ' conversation');
     if (s.archive.length) sub += ' · ' + s.archive.length + (s.archive.length > 1 ? ' archivées' : ' archivée');
-    if (searching) sub = (shown + s.archive.length) + ' sur ' + s.all + ' pour cette recherche';
+    if (searching) sub = (shown + s.organizator.length + s.archive.length) + ' sur ' + s.all + ' pour cette recherche';
     setHtml(side.querySelector('[data-role="cv-sub"]'), esc(sub));
-    var rk = ranks();
     var h = [];
     if (s.pinned.length) {
       h.push('<div class="cv-section">Épinglées</div>');
-      h.push(s.pinned.map(function (c) { return itemHtml(c, true); }).join(''));
-      if (s.list.length) h.push('<div class="cv-section">Par tâche</div>');
+      h.push(s.pinned.map(itemHtml).join(''));
+      if (s.list.length) h.push('<div class="cv-section">Conversations</div>');
     }
-    groupsOf(s.list).forEach(function (x) { h.push(groupHtml(x, rk, !searching)); });
+    /* Pas de titre de tâche au-dessus : celui de la conversation le dit déjà (taskLine quand il diffère). */
+    h.push(ordered(s.list).map(itemHtml).join(''));
     if (s.archive.length) {
       /* Une recherche montre ses résultats archivés sans qu'on ait à déplier. */
       var open = C.showArchive || searching;
@@ -602,64 +781,70 @@
         : '<button type="button" class="cv-archive-toggle" data-act="cv-archive-toggle" aria-expanded="' + open + '">'
           + ICON.archive + '<span>Archives</span><span class="cv-archive-n">' + s.archive.length + '</span>'
           + '<span class="cv-archive-chev">' + (open ? '▾' : '▸') + '</span></button>');
-      if (open) groupsOf(s.archive).forEach(function (x) { h.push(groupHtml(x, rk)); });
+      if (open) h.push(ordered(s.archive).map(itemHtml).join(''));
     }
     var html = h.join('');
-    if (C.loaded && searching && !shown && !s.archive.length) {
+    if (C.loaded && searching && !shown && !s.archive.length && !s.organizator.length && !s.assistant) {
       html = '<div class="cv-side-empty">Aucune conversation ne correspond à « ' + esc(C.query.trim()) + ' ».</div>';
-    } else if (C.loaded && !shown) {
+    } else if (C.loaded && !shown && !searching) {
       html = '<div class="cv-side-empty">' + (s.archive.length
         ? 'Rien en cours : les conversations des tâches terminées et celles que vous avez rangées sont dans les Archives.'
         : 'Aucune conversation encore. Lancez-en une depuis une tâche d’Organizator : avec le réglage « Fenêtre Conversations », elle s’ouvre ici.')
         + '</div>' + html;
     }
     setHtml(side.querySelector('[data-role="cv-list"]'), html);
+    setHtml(side.querySelector('[data-role="cv-foot"]'), footHtml(s));
   }
 
-  /* Un groupe de la liste ; `canArchive` : bouton « tout archiver » au survol de son titre, dès deux
-     conversations (hors recherche : il viserait aussi celles qu'elle cache). */
-  function groupHtml(x, rk, canArchive) {
-    var ty = typeOf(x.task.type);
-    var dot = ty ? ' style="background:' + esc(ty.bg) + ';border-color:' + esc(ty.bd) + '"' : '';
-    var n = x.convs.length;
-    return '<div class="cv-group"><div class="cv-group-head">'
-      + (rk[x.task.id] ? '<span class="cv-group-rank">' + rk[x.task.id] + '</span>' : x.task.done ? '<span class="cv-group-rank">✓</span>' : '')
-      + '<span class="cv-group-dot"' + dot + '></span><span class="cv-group-title" title="' + esc(firstLine(x.task.text, 200)) + '">'
-      + esc(firstLine(x.task.text, 80)) + '</span>'
-      + (canArchive && n > 1 ? '<button type="button" class="cv-group-act" data-act="cv-archive-group" data-id="' + esc(x.task.id) + '"'
-        + ' title="Archiver les ' + n + ' conversations de ce groupe">' + ICON.archive + '</button>' : '')
-      + '</div>'
-      + x.convs.map(function (c) { return itemHtml(c, false); }).join('') + '</div>';
+  /* Le bloc du bas, toujours visible : l'assistant, puis les sessions du carnet de remarques en cours
+     (les autres sont aux Archives). */
+  function footHtml(s) {
+    var rows = (s.assistant ? [assistantItemHtml()] : []).concat(s.organizator.map(itemHtml));
+    if (!rows.length) return '';
+    return '<div class="cv-section cv-foot-title">Organizator</div>' + rows.join('');
   }
 
-  /* Une ligne de la liste ; `withTask` (épinglées) rappelle sa tâche. Les boutons Épingler / Archiver
-     paraissent au survol. */
-  function itemHtml(c, withTask) {
+  function assistantItemHtml() {
+    var sm = C.as.summary;
+    var st = asState();
+    var tip = 'Assistant · ' + asStateWords() + (sm && sm.said ? ' · ' + sm.said : '');
+    return '<div class="cv-item cv-item-as' + (C.selected === ASSISTANT_ID ? ' on' : '') + (sm && sm.unseen ? ' unread' : '') + '" role="button" tabindex="0"'
+      + ' data-act="cv-select" data-id="' + ASSISTANT_ID + '" title="' + esc(tip) + '">'
+      + '<span class="cv-state' + (st ? ' st-' + st : '') + '"></span>'
+      + '<span class="cv-item-title"><span class="cv-spark">' + ICON.spark + '</span>Assistant</span>'
+      + '<span class="cv-item-sub">' + esc((sm ? sm.model : 'Claude') + ' · ' + asStateWords() + (sm && sm.at ? ' · ' + fmtTime(sm.at) : '')) + '</span>'
+      + (sm && sm.said && (st === 'ready' || st === 'waiting') ? '<span class="cv-item-said">' + esc(sm.said) + '</span>' : '')
+      + '</div>';
+  }
+
+  /* Une ligne de la liste : le titre en entier, sa tâche quand elle dit autre chose. Les boutons
+     Épingler / Archiver paraissent au survol. */
+  function itemHtml(c) {
     var st = displayState(c);
     var a = C.sessions[c.id];
     var said = st === 'waiting' && a && a.said ? a.said : '';
     var lv = C.live[c.id];
     if (lv && lv.question && lv.question.kind === 'ask' && lv.question.questions[0]) said = lv.question.questions[0].question;
-    var task = withTask ? taskById(c.taskId) : null;
+    var task = taskLine(c);
     return '<div class="cv-item' + (c.id === C.selected ? ' on' : '') + (unread(c) ? ' unread' : '') + '" role="button" tabindex="0"'
       + ' data-act="cv-select" data-id="' + esc(c.id) + '"'
       + ' title="' + esc((STATE_WORDS[st] || '') + (a && a.said ? ' · ' + a.said : '')) + '">'
       + '<span class="cv-state' + (st ? ' st-' + st : '') + '"></span>'
-      + '<span class="cv-item-title">' + esc(c.title || 'Nouvelle session') + '</span>'
-      + (task ? '<span class="cv-item-task">' + esc(firstLine(task.text, 80)) + '</span>' : '')
+      + '<span class="cv-item-title">' + esc(convTitle(c)) + '</span>'
+      + (task ? '<span class="cv-item-task">' + esc(task) + '</span>' : '')
       + '<span class="cv-item-sub">' + esc(agentTag(c) + ' · ' + (STATE_WORDS[st] || '—') + (updatedOf(c) ? ' · ' + fmtTime(updatedOf(c)) : '')) + '</span>'
       + (said ? '<span class="cv-item-said">' + esc(said) + '</span>' : '')
       + '<span class="cv-item-acts">' + markButtons(c, 'cv-item-act') + '</span>'
       + '</div>';
   }
 
-  /* Épingler / désépingler ; archiver / désarchiver — sauf une conversation de tâche terminée, que
-     seule l'épingle sort des archives. */
+  /* Épingler / désépingler ; archiver / désarchiver — sauf une conversation rangée d'office (tâche
+     terminée, carnet au repos), que seule l'épingle sort des archives. */
   function markButtons(c, cls) {
     var place = placeOf(c);
     var h = '<button type="button" class="' + cls + (c.pinned ? ' on' : '') + '" data-act="cv-pin" data-id="' + esc(c.id) + '"'
       + ' title="' + (c.pinned ? 'Désépingler' : 'Épingler en haut de la liste') + '" aria-pressed="' + !!c.pinned + '">' + ICON.pin + '</button>';
-    if (place === 'archive' && taskDone(c)) return h;
+    if (place === 'archive' && placeUnarchived(c) === 'archive') return h;
     return h + '<button type="button" class="' + cls + '" data-act="cv-archive" data-id="' + esc(c.id) + '"'
       + ' title="' + (place === 'archive' ? 'Sortir des Archives' : 'Archiver') + '">' + (place === 'archive' ? ICON.unarchive : ICON.archive) + '</button>';
   }
@@ -689,6 +874,7 @@
   function renderHead() {
     var el = $('[data-role="cv-head"]');
     if (!el) return;
+    if (C.selected === ASSISTANT_ID) { setHtml(el, asHeadHtml()); return; }
     var c = convoById(C.selected);
     var lv = C.live[C.selected];
     if (!c) {
@@ -699,11 +885,12 @@
     var st = displayState(c);
     var hosted = lv && lv.running;
     var place = placeOf(c);
-    setHtml(el, '<div class="cv-head-text"><div class="cv-title" title="' + esc(c.title) + '">' + esc(c.title || 'Nouvelle session') + '</div>'
+    var other = taskLine(c);
+    setHtml(el, '<div class="cv-head-text"><div class="cv-title">' + esc(convTitle(c)) + '</div>'
       + '<div class="cv-meta">'
       + (st ? '<span class="cv-chip st-' + esc(st) + '">' + esc(STATE_WORDS[st] || st) + '</span>' : '')
-      + (place === 'archive' ? '<span class="cv-chip">' + (taskDone(c) && !c.archived ? 'Archivée · tâche terminée' : 'Archivée') + '</span>' : '')
-      + (task && task.id !== FEEDBACK_ID ? '<span class="cv-chip" title="' + esc(task.text) + '">' + esc(firstLine(task.text, 60)) + '</span>' : '')
+      + (place === 'archive' ? '<span class="cv-chip">' + (c.archived ? 'Archivée' : taskDone(c) ? 'Archivée · tâche terminée' : 'Archivée · au repos') + '</span>' : '')
+      + (other ? '<span class="cv-chip" title="' + esc(task.text) + '">' + esc(other) + '</span>' : '')
       + '<span class="cv-chip">' + esc(agentTag(c)) + '</span>'
       + (c.cwd ? '<button type="button" class="cv-chip" data-act="cv-folder" title="Ouvrir le dossier : ' + esc(c.cwd) + '">' + esc(c.cwd) + '</button>' : '')
       + '</div></div>'
@@ -712,6 +899,90 @@
       + (hosted && !(lv && lv.busy) ? '<button type="button" class="cv-btn" data-act="cv-close" title="Arrêter le processus de l’agent : la session reste, et reprend au prochain message">Mettre en pause</button>' : '')
       + (inConsole(c) ? '' : '<button type="button" class="cv-btn" data-act="cv-terminal"' + (lv && lv.busy ? ' disabled title="L’agent répond encore"' : ' title="Reprendre cette session dans une console"') + '>Ouvrir dans un terminal</button>')
       + '</div>');
+  }
+
+  function asHeadHtml() {
+    var sm = C.as.summary;
+    var st = asState();
+    return '<div class="cv-head-text"><div class="cv-title"><span class="cv-spark">' + ICON.spark + '</span>Assistant</div>'
+      + '<div class="cv-meta">'
+      + (st && st !== 'idle' ? '<span class="cv-chip st-' + esc(st) + '">' + esc(asStateWords()) + '</span>' : '')
+      + '<span class="cv-chip">' + esc(sm ? sm.model : 'Claude') + '</span>'
+      + '<span class="cv-chip">Agit sur la file d’Organizator</span>'
+      + '</div></div>'
+      + '<div class="cv-actions">'
+      + (sm && sm.count ? '<button type="button" class="cv-btn' + (sm.armed ? ' is-armed' : '') + '" data-act="cv-as-act" data-as="as-reset"'
+        + ' title="Effacer la discussion : l’assistant repartira sans son historique">' + (sm.armed ? 'Effacer la discussion ?' : 'Nouvelle discussion') + '</button>' : '')
+      + '<button type="button" class="cv-btn" data-act="cv-as-act" data-as="as-open" title="Le panneau ✦ de la fenêtre principale, sur la même discussion">Ouvrir dans la fenêtre principale</button>'
+      + '</div>';
+  }
+
+  /* La discussion de l'assistant, telle que la fenêtre principale la décrit (assistant.js, remoteItems). */
+  function asThreadItems() {
+    var items = [];
+    if (!C.as.summary) return [{ key: 'loading', html: '<div class="cv-notice">Lecture de la discussion dans la fenêtre principale…</div>' }];
+    C.as.keys.forEach(function (k) {
+      var m = C.as.items[k];
+      if (m) items.push({ key: 'a-' + k, html: asItemHtml(m, k) });
+    });
+    return items;
+  }
+
+  function asItemHtml(m, k) {
+    switch (m.k) {
+      case 'user': return messageHtml({ role: 'user', text: m.text, ts: m.at }, 'as:' + k);
+      case 'agent': return '<div class="cv-msg assistant md">' + MD.blocks(m.text || '') + '</div>';
+      case 'tools': return '<div class="cv-as-tools">' + MD.tools(m.names || []) + '</div>';
+      case 'notice': return '<div class="cv-notice' + (m.error ? ' is-error' : '') + '">' + esc(m.text) + '</div>';
+      case 'end': return '<div class="cv-end">' + esc(m.text) + '</div>';
+      case 'wait': return '<div class="cv-thinking"><i></i>' + esc(asBusyWords(C.as.summary && C.as.summary.busy) || 'L’assistant réfléchit…') + '</div>';
+      case 'more': return '<button type="button" class="cv-older" data-act="cv-as-act" data-as="as-more">Afficher les ' + m.n + ' messages précédents</button>';
+      case 'empty':
+        return '<div class="cv-as-empty"><h2>L’assistant d’Organizator</h2>'
+          + '<p>Il lit vos tâches, vos conversations et les consignes de vos mots-clés ; il crée, modifie et range des tâches — '
+          + 'chaque action s’annule d’un clic. Réécrire une consigne, supprimer un mot-clé ou lancer un agent vous est proposé : rien ne change sans vous.</p>'
+          + '<div class="cv-as-ideas">' + (m.ideas || []).map(function (x, i) {
+            return '<button type="button" class="cv-as-idea" data-act="cv-as-idea" data-i="' + i + '">' + esc(x.label) + '</button>';
+          }).join('') + '</div></div>';
+      case 'card': return asCardHtml(m);
+    }
+    return '';
+  }
+
+  /* Une carte d'action de l'assistant : faite (Annuler), proposée (Appliquer / Refuser, Lancer). Ses
+     boutons repartent vers la fenêtre principale, qui les exécute. */
+  function asCardHtml(m) {
+    var id = esc(m.id);
+    var h = ['<div class="cv-card is-' + esc(m.status) + (m.proposal ? ' is-proposal' : '') + '">'];
+    h.push('<div class="cv-card-head"><span class="cv-card-title">' + esc(m.title) + '</span>'
+      + (m.state ? '<span class="cv-card-state">' + esc(m.state) + '</span>' : '') + '</div>');
+    if (m.subject) h.push('<div class="cv-card-subject">« ' + esc(m.subject) + ' »</div>');
+    if (m.detail) h.push('<div class="cv-card-detail">' + esc(m.detail) + '</div>');
+    if (m.reason) h.push('<div class="cv-card-reason">' + esc(m.reason) + '</div>');
+    if (m.diff) {
+      h.push('<div class="cv-diff">' + m.diff.map(function (r) {
+        return '<div class="cv-diff-row"><div class="cv-diff-label">' + esc(r.label) + '</div>'
+          + '<div class="cv-diff-new">' + esc(r.after == null || r.after === '' ? '(vide)' : r.after) + '</div>'
+          + '<button type="button" class="cv-diff-toggle" data-act="cv-as-act" data-as="as-toggle" data-id="' + id + '" data-key="' + esc(r.key) + '">'
+          + (r.open ? 'Masquer l’actuel ▴' : 'Voir l’actuel ▾') + '</button>'
+          + (r.open ? '<div class="cv-diff-old">' + esc(r.before == null || r.before === '' ? '(vide)' : r.before) + '</div>' : '')
+          + '</div>';
+      }).join('') + '</div>');
+    }
+    if (m.launch) {
+      h.push('<div class="cv-launch">' + m.launch.map(function (l) {
+        return '<div class="cv-launch-row"><span class="cv-launch-key">' + esc(l[0]) + '</span><span class="cv-launch-val">' + esc(l[1]) + '</span></div>';
+      }).join('') + '</div>');
+    }
+    if (m.result) h.push('<div class="cv-card-detail">' + esc(m.result) + '</div>');
+    var btns = (m.buttons || []).map(function (b) {
+      return '<button type="button" class="' + (b.link ? 'cv-link' : 'cv-btn' + (b.primary ? ' cv-btn-primary' : '')) + '"'
+        + ' data-act="cv-as-act" data-as="' + esc(b.act) + '" data-id="' + id + '"'
+        + (b.disabled ? ' disabled title="' + esc(b.tip || '') + '"' : '') + '>' + esc(b.label) + '</button>';
+    });
+    if (btns.length) h.push('<div class="cv-card-actions">' + btns.join('') + '</div>');
+    h.push('</div>');
+    return h.join('');
   }
 
   /* Le fil : le journal de la session, puis — pendant une réponse hébergée — ce qui s'écrit en direct. */
@@ -741,6 +1012,7 @@
   }
 
   function threadItems() {
+    if (C.selected === ASSISTANT_ID) return asThreadItems();
     var id = C.selected;
     var tr = C.transcripts[id];
     var lv = C.live[id];
@@ -846,6 +1118,7 @@
     if (!el) return;
     var c = convoById(C.selected);
     var lv = C.live[C.selected];
+    var as = C.selected === ASSISTANT_ID;
     if (c && inConsole(c)) {
       el.cvBox = false;
       setHtml(el, '<div class="cv-console"><span>Cette session tourne dans une console : elle se lit ici, et se pilote dans sa fenêtre.</span>'
@@ -865,11 +1138,14 @@
       box.value = C.drafts[C.selected] || '';
       fit(box);
     }
+    box.placeholder = as ? 'Demandez à l’assistant… (Entrée envoie, Maj + Entrée : à la ligne)' : 'Répondre à l’agent… (Entrée envoie, Maj + Entrée : à la ligne)';
+    var sm = C.as.summary;
     var note = c ? agentTag(c) + (c.cwd ? ' · ' + c.cwd : '') : '';
-    if (lv && lv.question) note = 'Répondez à la question de l’agent, plus haut.';
+    if (as) note = !sm ? 'Lecture de la discussion…' : sm.busy ? asBusyWords(sm.busy) : sm.ready ? sm.model + ' · agit sur la file d’Organizator' : 'Claude Code est introuvable sur ce poste : l’assistant passe par lui.';
+    else if (lv && lv.question) note = 'Répondez à la question de l’agent, plus haut.';
     else if (c && !(lv && lv.running) && displayState(c) === 'closed') note = 'Session en pause : votre message la reprend. ' + note;
     setHtml(el.querySelector('[data-role="cv-note"]'), esc(note));
-    setHtml(el.querySelector('[data-role="cv-btn"]'), lv && lv.busy
+    setHtml(el.querySelector('[data-role="cv-btn"]'), (as ? sm && sm.busy : lv && lv.busy)
       ? '<button type="button" class="cv-stop" data-act="cv-stop" title="Arrêter la réponse (Échap)">' + ICON.stop + '</button>'
       : '<button type="button" class="cv-send" data-act="cv-send" title="Envoyer (Entrée)">' + ICON.send + '</button>');
   }
@@ -886,7 +1162,8 @@
     'cv-archive-toggle': function () { C.showArchive = !C.showArchive; renderSide(); refreshSessions(); },
     'cv-pin': function (el) { togglePin(el.getAttribute('data-id')); },
     'cv-archive': function (el) { toggleArchive(el.getAttribute('data-id')); },
-    'cv-archive-group': function (el) { archiveGroup(el.getAttribute('data-id')); },
+    'cv-as-act': asAct,
+    'cv-as-idea': asIdea,
     'cv-send': send,
     'cv-stop': stop,
     'cv-terminal': toTerminal,
@@ -973,7 +1250,8 @@
     }
     if (e.key === 'Escape') {
       var lv = C.live[C.selected];
-      if (lv && lv.busy) { e.preventDefault(); stop(); }
+      var busy = C.selected === ASSISTANT_ID ? !!(C.as.summary && C.as.summary.busy) : !!(lv && lv.busy);
+      if (busy) { e.preventDefault(); stop(); }
     }
   });
 
@@ -981,11 +1259,19 @@
   bridge.on('sessionsChanged', refreshSessions);
   bridge.on('dataChanged', reloadData);
   bridge.on('liveFocus', function (p) { if (p && p.sessionId) select(p.sessionId); });
+  bridge.on('assistantView', onAsView);
+  window.addEventListener('focus', watchAssistant);
+  window.addEventListener('blur', watchAssistant);
+  document.addEventListener('visibilitychange', watchAssistant);
 
-  /* Filet : un état qui n'aurait pas été annoncé se rattrape. */
-  setInterval(refreshSessions, 15000);
+  /* Filet : un état qui n'aurait pas été annoncé se rattrape ; l'assistant, s'il n'a encore rien dit
+     (fenêtre principale rechargée), se redemande. */
+  setInterval(function () {
+    refreshSessions();
+    if (!C.as.summary) asking('sync')['catch'](function () { /* la fenêtre principale n'est pas prête */ });
+  }, 15000);
 
-  window.__conversations = { state: C, select: select, send: send, onLive: onLive, placeOf: placeOf };
+  window.__conversations = { state: C, select: select, send: send, onLive: onLive, onAsView: onAsView, placeOf: placeOf, convTitle: convTitle };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load);
   else load();
