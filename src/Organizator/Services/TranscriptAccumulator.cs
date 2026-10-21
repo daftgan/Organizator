@@ -73,7 +73,8 @@ internal sealed class TranscriptAccumulator
 {
     public const int MaxMessages = 300;
     public const string DefaultTitle = "Nouvelle session";
-    private const int TitleLength = 46;
+    // La fenetre Conversations montre le titre en entier, sur plusieurs lignes : la borne n'est qu'un garde-fou.
+    private const int TitleLength = 200;
     private const int DetailLength = 80;
     private const int SaidLength = 160;
 

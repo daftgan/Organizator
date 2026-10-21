@@ -458,6 +458,9 @@ public sealed class BridgeHost
         "liveOpen" => OpenConversations(payload),
         "liveTerminal" => LiveToTerminal(payload),
         "convoMark" => MarkConvo(payload),
+        // L'assistant dans la fenetre Conversations : la page principale le tient, la fenetre le montre.
+        "assistantRemote" => RelayAssistantRemote(payload),
+        "assistantView" => RelayAssistantView(payload),
         // Assistant : discussion hors terminal qui agit sur la file par les outils que la page execute.
         "assistantSend" => SendAssistant(payload),
         "assistantStop" => _assistant.Stop(),
@@ -999,6 +1002,45 @@ public sealed class BridgeHost
         }
 
         PostEventTo(_core, "convoMark", mark);
+        return new JsonObject();
+    }
+
+    /// <summary>
+    /// La fenetre Conversations montre aussi l'assistant, que seule la page principale tient (journal,
+    /// outils, cartes) : ses demandes — envoyer, arreter, appliquer une carte… — sont relayees a celle-ci
+    /// (evenement <c>assistantRemote</c>), qui revient devant quand la demande s'y joue (<c>front</c> :
+    /// formulaire de lancement, tache montree dans la file, panneau, reglages).
+    /// </summary>
+    private JsonNode RelayAssistantRemote(JsonObject payload)
+    {
+        var request = (JsonObject)payload.DeepClone();
+        request.Remove("files");
+        if (request["front"] is JsonValue front && front.TryGetValue<bool>(out var wanted) && wanted)
+        {
+            BringOwnerToFront();
+        }
+
+        PostEventTo(_core, "assistantRemote", request);
+        return new JsonObject();
+    }
+
+    /// <summary>Ce que la fenetre Conversations affiche de l'assistant, envoye par la page principale : aux autres vues.</summary>
+    private JsonNode RelayAssistantView(JsonObject payload)
+    {
+        var view = (JsonObject)payload.DeepClone();
+        view.Remove("files");
+        var message = new JsonObject { ["event"] = "assistantView", ["payload"] = view };
+        CoreWebView2[] others;
+        lock (_views)
+        {
+            others = _views.Where(v => !ReferenceEquals(v, _core)).ToArray();
+        }
+
+        foreach (var other in others)
+        {
+            PostTo(other, message);
+        }
+
         return new JsonObject();
     }
 

@@ -369,7 +369,7 @@
     if (!e || !e.undo || (e.status !== 'done' && e.status !== 'applied')) return;
     var res;
     try { res = runUndo(e.undo); } catch (err) { res = fail(err.message); }
-    if (!res.ok) { A.toast('Annulation impossible : ' + res.text); return; }
+    if (!res.ok) { warn('Annulation impossible : ' + res.text); return; }
     e.status = 'undone';
     note('L’utilisateur a annulé : ' + e.title + (e.subject ? ' « ' + e.subject + ' »' : '') + '.');
     renderAll();
@@ -391,6 +391,8 @@
       t = A.taskById(u.id);
       if (!t) return fail('la tâche n’existe plus.');
       t.text = u.before.text; t.type = u.before.type; t.doing = u.before.doing; t.done = u.before.done;
+      /* Ses sous-tâches et sa parente, terminées ou rouvertes avec elle, reprennent leur état. */
+      if (u.before.family) A.restoreDone(u.before.family);
       A.commit();
       return ok('');
     }
@@ -453,7 +455,7 @@
     if (p.op === 'launch') { launchCard(e); return; }
     var res;
     try { res = applyProposal(p); } catch (err) { res = fail(err.message); }
-    if (!res.ok) { A.toast('Impossible d’appliquer : ' + res.text); return; }
+    if (!res.ok) { warn('Impossible d’appliquer : ' + res.text); return; }
     e.status = 'applied';
     e.undo = res.undo || null;
     note('L’utilisateur a appliqué ta proposition : ' + e.title + (e.subject ? ' « ' + e.subject + ' »' : '') + '.');
@@ -502,8 +504,8 @@
   function launchCard(e) {
     var p = e.proposal;
     var task = A.taskById(p.taskId);
-    if (!task) { A.toast('La tâche n’existe plus.'); return; }
-    if (S.ui.launchBusy) { A.toast('Un lancement est déjà en cours : réessayez dans un instant.'); return; }
+    if (!task) { warn('La tâche n’existe plus.'); return; }
+    if (S.ui.launchBusy) { warn('Un lancement est déjà en cours : réessayez dans un instant.'); return; }
     if (!p.cwd) { formCard(e); return; }
     e.status = 'launching';
     renderAll();
@@ -532,7 +534,7 @@
 
   function formCard(e) {
     var p = e.proposal;
-    if (!A.taskById(p.taskId)) { A.toast('La tâche n’existe plus.'); return; }
+    if (!A.taskById(p.taskId)) { warn('La tâche n’existe plus.'); return; }
     A.openLaunchForm(p.taskId, {
       provider: p.provider, model: p.model, effort: p.effort, cwd: p.cwd, keywords: p.keywords,
       target: p.target, subs: p.subs, note: p.message,
@@ -633,7 +635,7 @@
         title: { type: 'string', description: 'Nouveau titre seul : la suite du texte est gardée.' },
         category: { type: 'string', description: 'Nouvelle catégorie (nom).' },
         doing: BOOL,
-        done: BOOL
+        done: { type: 'boolean', description: 'Terminer une tâche termine ses sous-tâches ; la rouvrir rouvre celles terminées avec elle ; rouvrir une sous-tâche rouvre sa parente.' }
       }, ['id']),
       run: updateTask
     },
@@ -796,7 +798,7 @@
   function updateTask(a) {
     var t = findTask(a.id);
     if (!t) return fail(unknownTask(a.id));
-    var before = { text: t.text, type: t.type, doing: !!t.doing, done: !!t.done };
+    var before = { text: t.text, type: t.type, doing: !!t.doing, done: !!t.done, family: A.doneSnapshot(t) };
     var changes = [];
     if (a.text != null && String(a.text).trim()) {
       t.text = String(a.text).replace(/\r\n?/g, '\n').trim().slice(0, 20000);
@@ -809,18 +811,25 @@
     }
     if (a.category != null) {
       var ty = findCategory(a.category);
-      if (!ty) { Object.assign(t, before); return fail(unknownCategory(a.category)); }
+      if (!ty) { t.text = before.text; return fail(unknownCategory(a.category)); }
       if (ty.id !== t.type) { t.type = ty.id; changes.push('catégorie → ' + ty.label); }
     }
+    /* Terminer ou rouvrir suit la règle de la file : les sous-tâches avec la parente (setDone). */
+    var family = null;
     if (typeof a.doing === 'boolean' && a.doing !== !!t.doing) {
       t.doing = a.doing;
-      if (a.doing) t.done = false;
+      if (a.doing && t.done) family = A.setDone(t, false);
       changes.push(a.doing ? 'mise en cours' : 'plus en cours');
     }
     if (typeof a.done === 'boolean' && a.done !== !!t.done) {
-      t.done = a.done;
+      family = A.setDone(t, a.done);
       changes.push(a.done ? 'terminée' : 'rouverte');
     }
+    if (family && (family.closed || family.reopened)) {
+      var n = family.closed || family.reopened;
+      changes.push(n + ' sous-tâche' + (n > 1 ? 's' : '') + (family.closed ? ' terminée' : ' rouverte') + (n > 1 ? 's' : '') + ' avec elle');
+    }
+    if (family && family.parent) changes.push('parente « ' + title(family.parent) + ' » rouverte');
     if (!changes.length) return fail('Rien ne change : donne text, title, category, doing ou done.');
     A.commit();
     taskCard({ tool: 'update_task', title: 'Tâche modifiée', subject: title(t), taskId: t.id, detail: changes.join(' · '), undo: { type: 'update', id: t.id, before: before } });
@@ -1056,19 +1065,23 @@
       + ', ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
   }
 
-  function send(text) {
+  /* `fromRemote` : le message vient de la fenêtre Conversations — la zone de saisie d'ici, et ce qu'on
+     y tape, n'y sont pour rien ; un échec lui rend son texte. Rend vrai si le message part. */
+  function send(text, fromRemote) {
     text = String(text == null ? draft : text).trim();
-    if (!text || busy || !loaded) return;
-    if (!A.hasProvider('claude')) { A.toast('Claude Code est introuvable sur ce poste : l’assistant passe par lui.'); return; }
+    if (!text || busy || !loaded) return false;
+    if (!A.hasProvider('claude')) { warn('Claude Code est introuvable sur ce poste : l’assistant passe par lui.'); return false; }
     if (!log.sessionId) log.sessionId = newSessionId();
     var notes = log.notes.slice();
     var head = '[' + stamp() + (notes.length ? ' — depuis ton dernier message : ' + notes.join(' ') : '') + ']';
     var entry = push({ kind: 'user', text: text });
     busy = { turn: 0, startedAt: now(), phase: 'thinking', label: '' };
-    draft = '';
     stick = true;
-    var ta = document.querySelector('[data-role="as-input"]');
-    if (ta) { ta.value = ''; fit(ta); }
+    if (!fromRemote) {
+      draft = '';
+      var ta = document.querySelector('[data-role="as-input"]');
+      if (ta) { ta.value = ''; fit(ta); }
+    }
     startClock();
     renderAll();
     bridge.call('assistantSend', {
@@ -1080,19 +1093,24 @@
       saveSoon();
     })['catch'](function (e) {
       busy = null;
-      /* Rien n'est parti : le message revient dans la zone de saisie. */
+      /* Rien n'est parti : le message revient dans la zone de saisie (celle d'où il est parti). */
       log.entries = log.entries.filter(function (x) { return x !== entry; });
-      if (!draft) draft = text;
-      var box = document.querySelector('[data-role="as-input"]');
-      if (box && !box.value) { box.value = draft; fit(box); }
+      if (fromRemote) {
+        remote.restore = { text: text, at: now() };
+      } else {
+        if (!draft) draft = text;
+        var box = document.querySelector('[data-role="as-input"]');
+        if (box && !box.value) { box.value = draft; fit(box); }
+      }
       push({ kind: 'error', text: 'Message non envoyé : ' + e.message });
       renderAll();
     });
+    return true;
   }
 
   function stop() {
     if (!busy) return;
-    bridge.call('assistantStop', {})['catch'](function (e) { A.toast('Arrêt impossible : ' + e.message); });
+    bridge.call('assistantStop', {})['catch'](function (e) { warn('Arrêt impossible : ' + e.message); });
   }
 
   /* « Nouvelle discussion » : un premier clic arme le bouton, un second (dans les 4 s) efface. */
@@ -1109,9 +1127,10 @@
       busy = null;
       log = { sessionId: '', used: false, entries: [], notes: [] };
       showAll = false;
+      remote.showAll = false;
       saveNow();
       renderAll();
-    })['catch'](function (e) { A.toast('Nouvelle discussion impossible : ' + e.message); });
+    })['catch'](function (e) { warn('Nouvelle discussion impossible : ' + e.message); });
   }
 
   function addToolLine(turn, label) {
@@ -1169,7 +1188,7 @@
         else push({ kind: 'end', cost: Number(p.cost) || 0, ms: Number(p.ms) || took });
       }
       saveNow();
-      if (!isOpen() || document.visibilityState === 'hidden') {
+      if (!inSight()) {
         unseen = true;
         if (!p.cancelled) A.toast(p.phase === 'error' ? 'L’assistant n’a pas pu répondre' : 'L’assistant a répondu', { label: 'Voir', run: open });
       }
@@ -1177,9 +1196,15 @@
     }
   }
 
-  /* Une proposition attend : le bouton de l'en-tête le dit, et un toast si le panneau est fermé. */
+  /* Une proposition attend : le bouton de l'en-tête le dit, et un toast si personne ne regarde. */
   function attention() {
-    if (!isOpen()) A.toast('L’assistant propose une action à valider', { label: 'Voir', run: open });
+    if (!inSight()) A.toast('L’assistant propose une action à valider', { label: 'Voir', run: open });
+  }
+
+  /* La discussion est sous les yeux : panneau ouvert ici, ou montrée dans la fenêtre Conversations
+     au premier plan. */
+  function inSight() {
+    return (isOpen() && document.visibilityState !== 'hidden') || (remote.watching && remote.focused);
   }
 
   /* ══ Persistance ═════════════════════════════════════════════════════ */
@@ -1272,6 +1297,7 @@
   }
 
   function renderButton() {
+    pushRemote();
     var btn = document.getElementById('assistant-btn');
     if (!btn) return;
     var n = pendingCards().length;
@@ -1450,13 +1476,18 @@
     if (e.kind === 'notice') return '<div class="as-notice">' + esc(e.text) + '</div>';
     if (e.kind === 'error') return '<div class="as-notice is-error">' + esc(e.text) + '</div>';
     if (e.kind === 'end') {
-      var parts = [];
-      if (e.ms) parts.push(Math.max(1, Math.round(e.ms / 1000)) + ' s');
-      if (e.cost) parts.push('≈ ' + e.cost.toFixed(e.cost < 0.1 ? 3 : 2).replace('.', ',') + ' $');
-      return parts.length ? '<div class="as-end">' + esc(parts.join(' · ')) + '</div>' : '';
+      var end = endText(e);
+      return end ? '<div class="as-end">' + esc(end) + '</div>' : '';
     }
     if (e.kind === 'card') return cardHtml(e);
     return '';
+  }
+
+  function endText(e) {
+    var parts = [];
+    if (e.ms) parts.push(Math.max(1, Math.round(e.ms / 1000)) + ' s');
+    if (e.cost) parts.push('≈ ' + e.cost.toFixed(e.cost < 0.1 ? 3 : 2).replace('.', ',') + ' $');
+    return parts.join(' · ');
   }
 
   var STATUS_WORDS = {
@@ -1464,48 +1495,65 @@
     launching: 'Lancement…', launched: 'Lancé', form: 'Formulaire ouvert'
   };
 
-  function cardHtml(e) {
-    var h = [];
+  /* Ce qu'une carte montre et les boutons qu'elle offre : rendu ici (cardHtml) et dans la fenêtre
+     Conversations (remoteItems), qui renvoie ses clics par l'hôte. */
+  function cardModel(e) {
     var p = e.proposal || null;
-    h.push('<div class="as-card is-' + esc(e.status) + (p ? ' is-proposal' : '') + '">');
-    h.push('<div class="as-card-head"><span class="as-card-title">' + esc(e.title) + '</span>'
-      + (STATUS_WORDS[e.status] ? '<span class="as-card-state">' + esc(STATUS_WORDS[e.status]) + '</span>' : '') + '</div>');
-    if (e.subject) h.push('<div class="as-card-subject">« ' + esc(e.subject) + ' »</div>');
-    if (e.detail) h.push('<div class="as-card-detail">' + esc(e.detail) + '</div>');
-    if (e.reason) h.push('<div class="as-card-reason">' + esc(e.reason) + '</div>');
-    if (p && p.op === 'kw-update') h.push(keywordDiffHtml(e));
-    if (p && p.op === 'launch') h.push(launchDetailHtml(p));
-    if (e.result) h.push('<div class="as-card-detail">' + esc(e.result) + '</div>');
-    var btns = [];
-    var id = esc(e.id);
+    var m = {
+      status: e.status, proposal: !!p, title: e.title, state: STATUS_WORDS[e.status] || '',
+      subject: e.subject || '', detail: e.detail || '', reason: e.reason || '', result: e.result || '',
+      diff: p && p.op === 'kw-update' ? keywordDiff(e) : null,
+      launch: p && p.op === 'launch' ? launchLines(p) : null,
+      buttons: []
+    };
     if (e.status === 'proposed') {
       if (p.op === 'launch') {
-        btns.push('<button type="button" class="dark-btn dark-btn-primary" data-act="as-apply" data-id="' + id + '"' + (p.cwd ? '' : ' disabled title="Dossier de travail à choisir : ouvrez le formulaire"') + '>Lancer</button>');
-        btns.push('<button type="button" class="dark-btn" data-act="as-form" data-id="' + id + '">Formulaire…</button>');
+        m.buttons.push({ act: 'as-apply', label: 'Lancer', primary: true, disabled: !p.cwd, tip: p.cwd ? '' : 'Dossier de travail à choisir : ouvrez le formulaire' });
+        m.buttons.push({ act: 'as-form', label: 'Formulaire…' });
       } else {
-        btns.push('<button type="button" class="dark-btn dark-btn-primary" data-act="as-apply" data-id="' + id + '">Appliquer</button>');
+        m.buttons.push({ act: 'as-apply', label: 'Appliquer', primary: true });
       }
-      btns.push('<button type="button" class="dark-btn" data-act="as-refuse" data-id="' + id + '">Refuser</button>');
+      m.buttons.push({ act: 'as-refuse', label: 'Refuser' });
     } else if ((e.status === 'done' || e.status === 'applied') && e.undo) {
-      btns.push('<button type="button" class="dark-btn" data-act="as-undo" data-id="' + id + '">Annuler</button>');
+      m.buttons.push({ act: 'as-undo', label: 'Annuler' });
     }
-    if (e.taskId && A.taskById(e.taskId)) {
-      btns.push('<button type="button" class="panel-link as-see" data-act="as-reveal" data-id="' + id + '">Voir dans la file</button>');
-    }
+    if (e.taskId && A.taskById(e.taskId)) m.buttons.push({ act: 'as-reveal', label: 'Voir dans la file', link: true });
+    return m;
+  }
+
+  function cardHtml(e) {
+    var m = cardModel(e);
+    var h = [];
+    var id = esc(e.id);
+    h.push('<div class="as-card is-' + esc(e.status) + (m.proposal ? ' is-proposal' : '') + '">');
+    h.push('<div class="as-card-head"><span class="as-card-title">' + esc(m.title) + '</span>'
+      + (m.state ? '<span class="as-card-state">' + esc(m.state) + '</span>' : '') + '</div>');
+    if (m.subject) h.push('<div class="as-card-subject">« ' + esc(m.subject) + ' »</div>');
+    if (m.detail) h.push('<div class="as-card-detail">' + esc(m.detail) + '</div>');
+    if (m.reason) h.push('<div class="as-card-reason">' + esc(m.reason) + '</div>');
+    if (m.diff) h.push('<div class="as-diff">' + m.diff.map(function (r) { return diffRow(r, e); }).join('') + '</div>');
+    if (m.launch) h.push(launchDetailHtml(m.launch));
+    if (m.result) h.push('<div class="as-card-detail">' + esc(m.result) + '</div>');
+    var btns = m.buttons.map(function (b) {
+      if (b.link) return '<button type="button" class="panel-link as-see" data-act="' + b.act + '" data-id="' + id + '">' + esc(b.label) + '</button>';
+      return '<button type="button" class="dark-btn' + (b.primary ? ' dark-btn-primary' : '') + '" data-act="' + b.act + '" data-id="' + id + '"'
+        + (b.disabled ? ' disabled title="' + esc(b.tip) + '"' : '') + '>' + esc(b.label) + '</button>';
+    });
     if (btns.length) h.push('<div class="as-card-actions">' + btns.join('') + '</div>');
     h.push('</div>');
     return h.join('');
   }
 
-  function keywordDiffHtml(e) {
+  function keywordDiff(e) {
     var patch = e.proposal.patch, before = e.before || {};
     var rows = [];
-    if (patch.name != null) rows.push(diffRow('Nom', before.name, patch.name, e, 'name'));
-    if (patch.desc != null) rows.push(diffRow('Description', before.desc, patch.desc, e, 'desc'));
-    if (patch.prompt != null) rows.push(diffRow('Consigne', before.prompt, patch.prompt, e, 'prompt'));
-    if (patch.team != null) rows.push(diffRow('Équipe lancée', before.team ? 'oui' : 'non', patch.team ? 'oui' : 'non', e, 'team'));
-    if (patch.agents != null) rows.push(diffRow('Équipe', teamText(before.agents), teamText(patch.agents), e, 'agents'));
-    return '<div class="as-diff">' + rows.join('') + '</div>';
+    function row(label, was, now, key) { rows.push({ label: label, before: was, after: now, key: key, open: !!(e.open && e.open[key]) }); }
+    if (patch.name != null) row('Nom', before.name, patch.name, 'name');
+    if (patch.desc != null) row('Description', before.desc, patch.desc, 'desc');
+    if (patch.prompt != null) row('Consigne', before.prompt, patch.prompt, 'prompt');
+    if (patch.team != null) row('Équipe lancée', before.team ? 'oui' : 'non', patch.team ? 'oui' : 'non', 'team');
+    if (patch.agents != null) row('Équipe', teamText(before.agents), teamText(patch.agents), 'agents');
+    return rows;
   }
 
   function teamText(agents) {
@@ -1518,17 +1566,16 @@
   }
 
   /* Le texte proposé se lit d'office ; l'ancien se déplie à la demande. */
-  function diffRow(label, before, after, e, key) {
-    var open = !!(e.open && e.open[key]);
-    return '<div class="as-diff-row"><div class="as-diff-label">' + esc(label) + '</div>'
-      + '<div class="as-diff-new">' + esc(after == null || after === '' ? '(vide)' : after) + '</div>'
-      + '<button type="button" class="as-diff-toggle" data-act="as-toggle" data-id="' + esc(e.id) + '" data-key="' + esc(key) + '">'
-      + (open ? 'Masquer l’actuel ▴' : 'Voir l’actuel ▾') + '</button>'
-      + (open ? '<div class="as-diff-old">' + esc(before == null || before === '' ? '(vide)' : before) + '</div>' : '')
+  function diffRow(r, e) {
+    return '<div class="as-diff-row"><div class="as-diff-label">' + esc(r.label) + '</div>'
+      + '<div class="as-diff-new">' + esc(r.after == null || r.after === '' ? '(vide)' : r.after) + '</div>'
+      + '<button type="button" class="as-diff-toggle" data-act="as-toggle" data-id="' + esc(e.id) + '" data-key="' + esc(r.key) + '">'
+      + (r.open ? 'Masquer l’actuel ▴' : 'Voir l’actuel ▾') + '</button>'
+      + (r.open ? '<div class="as-diff-old">' + esc(r.before == null || r.before === '' ? '(vide)' : r.before) + '</div>' : '')
       + '</div>';
   }
 
-  function launchDetailHtml(p) {
+  function launchLines(p) {
     var task = A.taskById(p.taskId);
     var lines = [];
     lines.push(['Agent', A.providerById(p.provider).label + (p.model ? ' · ' + p.model : ' · modèle par défaut') + (p.effort ? ' · ' + p.effort : '')]);
@@ -1539,9 +1586,157 @@
     if (p.message) lines.push(['Précision', p.message]);
     lines.push(['Dossier', p.cwd || 'à choisir dans le formulaire']);
     if (!task) lines.push(['', 'La tâche n’existe plus.']);
+    return lines;
+  }
+
+  function launchDetailHtml(lines) {
     return '<div class="as-launch">' + lines.map(function (l) {
       return '<div class="as-launch-row"><span class="as-launch-key">' + esc(l[0]) + '</span><span class="as-launch-val">' + esc(l[1]) + '</span></div>';
     }).join('') + '</div>';
+  }
+
+  /* ══ Fenêtre Conversations ═══════════════════════════════════════════
+     La discussion s'y montre aussi, dans le bloc « Organizator » en bas à gauche. Cette page reste
+     seule à la tenir — journal, outils, cartes, enregistrement : la fenêtre lui demande tout par
+     l'hôte (`assistantRemote`, relayé ici en événement) et reçoit ce qu'elle affiche (`assistantView`) —
+     un résumé à chaque changement, et, tant qu'elle montre la discussion, les entrées qui ont changé
+     depuis le dernier envoi, en données qu'elle met en forme à sa façon. */
+  var remote = {
+    connected: false, watching: false, focused: false, showAll: false,
+    sent: {}, last: '', timer: null, toast: null, restore: null, acting: false
+  };
+
+  /* Un avertissement sur un geste : le toast d'ici, et celui de la fenêtre Conversations quand le
+     geste vient d'elle. */
+  function warn(text) {
+    A.toast(text);
+    if (remote.acting) { remote.toast = { text: text, at: now() }; pushRemote(); }
+  }
+
+  function plain(md) {
+    return String(md || '').replace(/```[\s\S]*?(```|$)/g, ' ').replace(/[#*_`>|]+/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  function remoteSummary() {
+    var said = '';
+    for (var i = log.entries.length - 1; i >= 0; i--) {
+      if (log.entries[i].kind === 'agent' && log.entries[i].text) { said = plain(log.entries[i].text); break; }
+    }
+    var last = log.entries[log.entries.length - 1];
+    return {
+      loaded: loaded, ready: A.hasProvider('claude'),
+      busy: busy ? { phase: busy.phase, label: busy.label || '', startedAt: busy.startedAt } : null,
+      unseen: unseen, pending: pendingCards().length, armed: armed,
+      said: clip(said, 220), at: last ? last.at : 0, count: log.entries.length,
+      model: 'Claude · ' + modelWords(), restore: remote.restore
+    };
+  }
+
+  function entryModel(e, head) {
+    if (e.kind === 'user') return { k: 'user', text: e.text, at: e.at };
+    if (e.kind === 'agent') return { k: 'agent', text: e.text, head: head };
+    if (e.kind === 'tools') return { k: 'tools', names: e.names.slice() };
+    if (e.kind === 'notice' || e.kind === 'error') return { k: 'notice', text: e.text, error: e.kind === 'error' };
+    if (e.kind === 'end') { var end = endText(e); return end ? { k: 'end', text: end } : null; }
+    if (e.kind === 'card') { var m = cardModel(e); m.k = 'card'; m.id = e.id; return m; }
+    return null;
+  }
+
+  /* Comme viewItems, en données. */
+  function remoteItems() {
+    var items = [];
+    var list = log.entries;
+    if (!list.length && !busy) {
+      items.push({ key: 'empty', m: { k: 'empty', ideas: SUGGESTIONS.map(function (s) { return { label: s.label, text: s.text, send: s.send }; }) } });
+      return items;
+    }
+    var start = remote.showAll ? 0 : Math.max(0, list.length - SHOWN);
+    if (start > 0) items.push({ key: 'more', m: { k: 'more', n: start } });
+    var spoke = false;
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i];
+      if (e.kind === 'user') spoke = false;
+      var head = e.kind === 'agent' && !spoke;
+      if (e.kind === 'agent') spoke = true;
+      if (i < start) continue;
+      var m = entryModel(e, head);
+      if (m) items.push({ key: e.id, m: m });
+    }
+    if (busy && (busy.phase === 'thinking' || busy.phase === 'call' || busy.phase === 'tool')) items.push({ key: 'wait', m: { k: 'wait' } });
+    return items;
+  }
+
+  /* Au plus un envoi toutes les 120 ms, et seulement ce qui a changé. */
+  function pushRemote() {
+    if (!remote.connected || remote.timer) return;
+    remote.timer = setTimeout(sendRemote, 120);
+  }
+
+  function sendRemote() {
+    remote.timer = null;
+    var view = { summary: remoteSummary() };
+    if (remote.watching) {
+      var keys = [], changed = {}, present = {};
+      remoteItems().forEach(function (it) {
+        var json = JSON.stringify(it.m);
+        keys.push(it.key);
+        present[it.key] = true;
+        if (remote.sent[it.key] !== json) { remote.sent[it.key] = json; changed[it.key] = it.m; }
+      });
+      Object.keys(remote.sent).forEach(function (k) { if (!present[k]) delete remote.sent[k]; });
+      view.keys = keys;
+      view.changed = changed;
+    }
+    if (remote.toast) { view.toast = remote.toast; remote.toast = null; }
+    var json = JSON.stringify(view);
+    if (json === remote.last) return;
+    remote.last = json;
+    bridge.call('assistantView', view)['catch'](function () { /* fenêtre absente : rien à montrer */ });
+  }
+
+  /* `sync` : la fenêtre (re)part de zéro ; `watch` : elle montre la discussion (ou plus), au premier
+     plan ou non ; `send` : un message ; `act` : un bouton de la discussion. */
+  function onRemote(p) {
+    if (!p || !p.op) return;
+    remote.connected = true;
+    if (p.op === 'sync') {
+      remote.sent = {};
+      remote.last = '';
+    } else if (p.op === 'watch') {
+      if (p.on && !remote.watching) { remote.sent = {}; remote.last = ''; }
+      remote.watching = !!p.on;
+      remote.focused = !!p.focused;
+      if (remote.watching && remote.focused) unseen = false;
+    } else if (p.op === 'send') {
+      if (!send(p.text, true)) remote.restore = { text: String(p.text || ''), at: now() };
+    } else if (p.op === 'act') {
+      remote.acting = true;
+      try { remoteAct(p); } finally { remote.acting = false; }
+    }
+    renderAll();
+  }
+
+  function remoteAct(p) {
+    var e = p.id ? entryById(p.id) : null;
+    switch (p.act) {
+      case 'as-apply': applyCard(e); break;
+      case 'as-refuse': refuseCard(e); break;
+      case 'as-undo': undoCard(e); break;
+      case 'as-form': if (e) formCard(e); break;
+      case 'as-reveal': if (e && e.taskId) reveal(e.taskId); break;
+      case 'as-toggle':
+        if (e) { e.open = e.open || {}; e.open[p.key] = !e.open[p.key]; }
+        break;
+      case 'as-more': remote.showAll = true; break;
+      case 'as-suggest':
+        var s = SUGGESTIONS[p.i];
+        if (s && s.send && !send(s.text, true)) warn('L’assistant répond encore : attendez sa réponse.');
+        break;
+      case 'as-stop': stop(); break;
+      case 'as-reset': reset(); break;
+      case 'as-open': open(); break;
+      case 'as-settings': S.ui.settingsTab = 'assistant'; S.ui.settingsOpen = true; A.render(); break;
+    }
   }
 
   /* ══ Réglages ════════════════════════════════════════════════════════ */
@@ -1634,11 +1829,12 @@
   A.registerPanel({ id: ID, render: panelRender });
   A.onRender(renderButton);
   bridge.on('assistant', onEvent);
+  bridge.on('assistantRemote', onRemote);
   A.onReady(function () { load(); });
 
   /* Pour les essais (jsdom, DevTools). */
   window.__organizator.assistant = {
-    open: open, send: send, state: function () { return { log: log, busy: busy, draft: draft, loaded: loaded }; },
-    tools: TOOL_BY_NAME, system: SYSTEM, onEvent: onEvent
+    open: open, send: send, state: function () { return { log: log, busy: busy, draft: draft, loaded: loaded, remote: remote }; },
+    tools: TOOL_BY_NAME, system: SYSTEM, onEvent: onEvent, onRemote: onRemote, cardHtml: cardHtml
   };
 })();

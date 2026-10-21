@@ -1538,6 +1538,19 @@
         return {};
       }
 
+      /* L'assistant dans la fenêtre Conversations : les deux pages se parlent par l'hôte. Dans le
+         navigateur, chaque demande est notée (window.__assistantRemote, window.__assistantViews) et
+         rendue à la page si elle écoute — de quoi brancher l'une sur l'autre dans un essai. */
+      case 'assistantRemote':
+        (window.__assistantRemote = window.__assistantRemote || []).push(p);
+        if ((handlers.get('assistantRemote') || []).length) setTimeout(function () { emit('assistantRemote', p); }, 0);
+        return {};
+
+      case 'assistantView':
+        (window.__assistantViews = window.__assistantViews || []).push(p);
+        if ((handlers.get('assistantView') || []).length) setTimeout(function () { emit('assistantView', p); }, 0);
+        return {};
+
       case 'assistantSend':
         return shimAssistantSend(p);
 
