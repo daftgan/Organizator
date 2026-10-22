@@ -19,6 +19,7 @@
   var MD = window.OrganizatorMd;
   var esc = MD.esc;
   var FEEDBACK_ID = '__feedback__';
+  var FEEDBACK_NAME = 'Remarques Organizator';
   /* L'assistant, choisi dans la liste comme une conversation. */
   var ASSISTANT_ID = '__assistant__';
   var STATE_WORDS = {
@@ -96,6 +97,11 @@
   function fold(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
   function words(q) { return fold(q).split(/\s+/).filter(Boolean); }
 
+  /* La pastille de l'assistant (as) et du carnet de remarques (rm), devant leur titre. */
+  function badge(kind) {
+    return '<span class="cv-badge cv-badge-' + kind + '" aria-hidden="true">' + (kind === 'as' ? ICON.spark : ICON.remarks) + '</span>';
+  }
+
   function setHtml(el, html) { if (el && el.cvHtml !== html) { el.innerHTML = html; el.cvHtml = html; } }
 
   var toastTimer = null;
@@ -135,6 +141,8 @@
      sa tâche tant qu'elle n'en a pas. Le nom donné à la session au lancement n'est que le début de
      la tâche (46 caractères) : c'est alors la première ligne de la tâche qui s'affiche, complète. */
   function convTitle(c) {
+    /* Le carnet de remarques : un nom fixe, technique — la date se lit sous le titre. */
+    if (c.taskId === FEEDBACK_ID) return FEEDBACK_NAME;
     var own = String(c.title || '').trim();
     var t = taskById(c.taskId);
     var line = t && t.id !== FEEDBACK_ID ? firstLine(t.text, 1000) : '';
@@ -870,7 +878,7 @@
     return '<div class="cv-item cv-item-as' + (C.selected === ASSISTANT_ID ? ' on' : '') + (sm && sm.unseen ? ' unread' : '') + '" role="button" tabindex="0"'
       + ' data-act="cv-select" data-id="' + ASSISTANT_ID + '" title="' + esc(tip) + '">'
       + '<span class="cv-state' + (st ? ' st-' + st : '') + '"></span>'
-      + '<span class="cv-item-title"><span class="cv-spark">' + ICON.spark + '</span>Assistant</span>'
+      + '<span class="cv-item-title">' + badge('as') + 'Assistant</span>'
       + '<span class="cv-item-sub">' + esc((sm ? sm.model : 'Claude') + ' · ' + asStateWords() + (sm && sm.at ? ' · ' + fmtTime(sm.at) : '')) + '</span>'
       + (sm && sm.said && (st === 'ready' || st === 'waiting') ? '<span class="cv-item-said">' + esc(sm.said) + '</span>' : '')
       + '</div>';
@@ -889,7 +897,7 @@
       + ' data-act="cv-select" data-id="' + esc(c.id) + '"'
       + ' title="' + esc((STATE_WORDS[st] || '') + (a && a.said ? ' · ' + a.said : '')) + '">'
       + '<span class="cv-state' + (st ? ' st-' + st : '') + '"></span>'
-      + '<span class="cv-item-title">' + (c.taskId === FEEDBACK_ID ? '<span class="cv-spark">' + ICON.remarks + '</span>' : '') + esc(convTitle(c)) + '</span>'
+      + '<span class="cv-item-title">' + (c.taskId === FEEDBACK_ID ? badge('rm') : '') + esc(convTitle(c)) + '</span>'
       + (task ? '<span class="cv-item-task">' + esc(task) + '</span>' : '')
       + '<span class="cv-item-sub">' + esc(agentTag(c) + ' · ' + (STATE_WORDS[st] || '—') + (updatedOf(c) ? ' · ' + fmtTime(updatedOf(c)) : '')) + '</span>'
       + (said ? '<span class="cv-item-said">' + esc(said) + '</span>' : '')
@@ -953,7 +961,7 @@
     var hosted = lv && lv.running;
     var place = placeOf(c);
     var other = taskLine(c);
-    setHtml(el, '<div class="cv-head-text"><div class="cv-title">' + (c.taskId === FEEDBACK_ID ? '<span class="cv-spark">' + ICON.remarks + '</span>' : '') + esc(convTitle(c)) + '</div>'
+    setHtml(el, '<div class="cv-head-text"><div class="cv-title">' + (c.taskId === FEEDBACK_ID ? badge('rm') : '') + esc(convTitle(c)) + '</div>'
       + '<div class="cv-meta">'
       + (st ? '<span class="cv-chip st-' + esc(st) + '">' + esc(STATE_WORDS[st] || st) + '</span>' : '')
       + (place === 'archive' ? '<span class="cv-chip">' + (c.taskId !== FEEDBACK_ID ? 'Archivée · tâche validée' : c.archived ? 'Archivée' : 'Archivée · au repos') + '</span>' : '')
@@ -971,7 +979,7 @@
   function asHeadHtml() {
     var sm = C.as.summary;
     var st = asState();
-    return '<div class="cv-head-text"><div class="cv-title"><span class="cv-spark">' + ICON.spark + '</span>Assistant</div>'
+    return '<div class="cv-head-text"><div class="cv-title">' + badge('as') + 'Assistant</div>'
       + '<div class="cv-meta">'
       + (st && st !== 'idle' ? '<span class="cv-chip st-' + esc(st) + '">' + esc(asStateWords()) + '</span>' : '')
       + '<span class="cv-chip">' + esc(sm ? sm.model : 'Claude') + '</span>'
