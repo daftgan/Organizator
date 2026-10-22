@@ -90,6 +90,8 @@
      avec ce contexte en prompt système et les remarques numérotées comme premier message. */
   var FEEDBACK_ID = '__feedback__';
   var FEEDBACK_TASK = { id: FEEDBACK_ID, type: '', text: 'Remarques sur Organizator', done: false, doing: false, created: 0 };
+  /* Le nom de toute session du carnet : un nom fixe, sans date ni compte (la date se lit à côté). */
+  var FEEDBACK_NAME = 'Remarques Organizator';
   /* Article du jour et veille IA : leur panneau s'ouvre à la place de celui d'une tâche
      (S.ui.termTaskId), sans tâche ni conversation derrière — renderPanel les reconnaît à ces
      identifiants (ARTICLE_FEEDS). */
@@ -7384,7 +7386,8 @@
         var c = convoById(info.sessionId);
         if (!c) return;
         S.ui.sessionExists[c.id] = !!info.exists;
-        if (info.title && info.title !== c.title) { c.title = info.title; changed = true; }
+        /* Une session du carnet garde son nom fixe, quel que soit celui qu'elle a reçu au lancement. */
+        if (info.title && info.title !== c.title && c.taskId !== FEEDBACK_ID) { c.title = info.title; changed = true; }
         if (typeof info.messageCount === 'number' && info.messageCount !== c.messageCount) {
           c.messageCount = info.messageCount; changed = true;
         }
@@ -8329,7 +8332,7 @@
     render();
     return launchSession(task, {
       provider: provider, model: model, effort: effort, cwd: cwd, keywords: keywords, prompt: first, recap: recap,
-      title: feedback ? feedbackTitle(pending.length) : ''
+      title: feedback ? FEEDBACK_NAME : ''
     })
       .then(function (c) {
         if (feedback) markRemarksSent(pending, c.id);
@@ -8630,10 +8633,6 @@
       + (many ? 'Traite-les dans l’ordre. ' : '')
       + 'Si une remarque est ambiguë, pose-moi la question avant de coder. '
       + 'Termine par un récapitulatif de ce qui a changé et de ce qui reste à faire.';
-  }
-
-  function feedbackTitle(n) {
-    return 'Remarques Organizator · ' + n + ' · ' + new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
   }
 
   /* La session garde aussi le texte de ce qu'elle a reçu (`convo.remarks`) : ce qui a donné lieu à la
@@ -9514,9 +9513,11 @@
         delete c.archived;
         migrated = true;
       }
-      /* Carnet de remarques : ce que la session a reçu. Les conversations d'avant ce relevé le
-         retrouvent dans les remarques envoyées, par leur `sessionId`. */
+      /* Carnet de remarques : son nom fixe (les sessions d'avant portaient un compte et une date), et
+         ce que la session a reçu. Les conversations d'avant ce relevé le retrouvent dans les remarques
+         envoyées, par leur `sessionId`. */
       if (c.taskId === FEEDBACK_ID) {
+        if (c.title !== FEEDBACK_NAME) { c.title = FEEDBACK_NAME; migrated = true; }
         var given = Array.isArray(c.remarks) ? c.remarks : S.data.remarks.filter(function (r) {
           return r && toMs(r.sentAt) && r.sessionId === c.id;
         });
