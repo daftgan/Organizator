@@ -122,7 +122,8 @@ public sealed class AssistantChat : IDisposable
     // ------------------------------------------------------------------ commandes
 
     /// <summary>
-    /// Un message de l'utilisateur : <c>{ sessionId, resume, text, system, tools, model, effort }</c>.
+    /// Un message de l'utilisateur : <c>{ sessionId, resume, text, images, system, tools, model, effort }</c>
+    /// (<c>images</c> : chemins complets d'images jointes, verifies par le pont, que Claude recoit dans le message).
     /// Le processus demarre (ou redemarre, si la session, le modele, l'effort, le prompt systeme ou les
     /// outils ont change) puis recoit le message. Refuse tant qu'une reponse est en cours.
     /// Rend <c>{ turn }</c>.
@@ -159,6 +160,17 @@ public sealed class AssistantChat : IDisposable
             tools);
         var resume = payload["resume"] is JsonValue r && r.TryGetValue<bool>(out var flag) && flag;
         var sessionId = guid.ToString("D");
+        var images = new List<string>();
+        if (payload["images"] is JsonArray list)
+        {
+            foreach (var node in list)
+            {
+                if (node is JsonValue value && value.TryGetValue<string>(out var path) && path.Length > 0)
+                {
+                    images.Add(path);
+                }
+            }
+        }
 
         if (_launcher.CommandFor(AgentProvider.Claude) is null)
         {
@@ -193,7 +205,7 @@ public sealed class AssistantChat : IDisposable
             }
 
             StopIdle();
-            var turn = new Turn(++_lastTurn, text);
+            var turn = new Turn(++_lastTurn, text, images);
             _pending = turn;
             Emit(turn, "thinking");
             if (_process is null && !_launching)
@@ -561,7 +573,7 @@ public sealed class AssistantChat : IDisposable
             WriteLine(new JsonObject
             {
                 ["type"] = "user",
-                ["message"] = new JsonObject { ["role"] = "user", ["content"] = turn.Message },
+                ["message"] = new JsonObject { ["role"] = "user", ["content"] = MessageContent.Build(turn.Message, turn.Images, _log) },
             });
         }
         catch (Exception ex)
@@ -1372,14 +1384,16 @@ public sealed class AssistantChat : IDisposable
 
     private sealed class Turn
     {
-        public Turn(int number, string message)
+        public Turn(int number, string message, IReadOnlyList<string> images)
         {
             Number = number;
             Message = message;
+            Images = images;
         }
 
         public int Number { get; }
         public string Message { get; }
+        public IReadOnlyList<string> Images { get; }
         public bool Cancelled { get; set; }
         public bool Retried { get; set; }
         public Timer? Limit { get; set; }

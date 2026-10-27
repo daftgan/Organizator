@@ -53,8 +53,10 @@ public sealed class BridgeHost
     private readonly LiveSessions _live;
 
     // Vues branchees sur le pont : la fenetre principale, et la fenetre Conversations quand elle est ouverte.
-    // Chaque reponse repart a la vue qui a ecrit ; les evenements partent a toutes.
+    // Chaque reponse repart a la vue qui a ecrit ; les evenements partent a toutes. Une boite de dialogue
+    // (choix de fichiers, telechargement) s'ouvre sur la fenetre de la vue qui l'a demandee.
     private readonly List<CoreWebView2> _views = new();
+    private readonly Dictionary<CoreWebView2, Window> _viewOwners = new();
     private readonly SpeechVoice _speech;
 
     // Revizator (H2) : modele de l'apprenant et documents, menu RSS du cours, generations par Claude.
@@ -68,8 +70,9 @@ public sealed class BridgeHost
     // Mises a jour d'Organizator, servies par le serveur Revizator regle (voir AppUpdater).
     private readonly AppUpdater _updater;
 
-    // Dossier actuellement servi sous https://report.organizator/ (voir ArtifactReader.Locate).
-    private string? _reportRoot;
+    // Dossier servi sous https://report.organizator/ par chaque vue (voir ArtifactReader.Locate) : la
+    // fenetre Conversations montre un document a droite pendant que le lecteur de la principale en lit un autre.
+    private readonly Dictionary<CoreWebView2, string> _reportRoots = new();
 
     // Un transcript n'est relu que si sa taille ou sa date a change : le rafraichissement de
     // toutes les conversations a chaque evenement reste bon marche.
@@ -175,7 +178,7 @@ public sealed class BridgeHost
     public bool ClosingForUpdate => _updater.RelaunchWanted;
 
     /// <summary>Branche une seconde vue (fenetre Conversations) : elle parle au meme hote, recoit les memes evenements.</summary>
-    public void AttachView(CoreWebView2 core)
+    public void AttachView(CoreWebView2 core, Window owner)
     {
         lock (_views)
         {
@@ -183,6 +186,8 @@ public sealed class BridgeHost
             {
                 _views.Add(core);
             }
+
+            _viewOwners[core] = owner;
         }
 
         core.WebMessageReceived += OnWebMessageReceived;
@@ -194,6 +199,18 @@ public sealed class BridgeHost
         lock (_views)
         {
             _views.Remove(core);
+            _viewOwners.Remove(core);
+        }
+
+        _reportRoots.Remove(core);
+    }
+
+    /// <summary>La fenetre qui porte une vue : la principale, ou la fenetre Conversations.</summary>
+    private Window WindowOf(CoreWebView2 view)
+    {
+        lock (_views)
+        {
+            return _viewOwners.TryGetValue(view, out var window) ? window : _owner;
         }
     }
 
@@ -328,7 +345,7 @@ public sealed class BridgeHost
             }
 
             _perf?.MessageStarted(type!);
-            var result = await DispatchAsync(type!, payload).ConfigureAwait(true);
+            var result = await DispatchAsync(type!, payload, view).ConfigureAwait(true);
             Reply(view, id, true, result, null);
         }
         catch (TranscriptionCancelledException ex)
@@ -405,7 +422,7 @@ public sealed class BridgeHost
 
     // ------------------------------------------------------------------- dispatch
 
-    private async Task<JsonNode?> DispatchAsync(string type, JsonObject payload) => type switch
+    private async Task<JsonNode?> DispatchAsync(string type, JsonObject payload, CoreWebView2 view) => type switch
     {
         "getState" => GetState(),
         "saveData" => SaveData(payload),
@@ -427,12 +444,15 @@ public sealed class BridgeHost
         "articleSeen" => ArticleOf(payload).MarkSeen(Str(payload, "url")),
         "openPath" => OpenPath(payload),
         "openUrl" => OpenUrl(payload),
-        "readArtifact" => await ReadArtifactAsync(payload).ConfigureAwait(true),
+        "readArtifact" => await ReadArtifactAsync(payload, view).ConfigureAwait(true),
+        // Panneau de droite de la fenetre Conversations : telecharger (copie) ou supprimer (Corbeille) un document.
+        "saveFileAs" => await SaveFileAsAsync(payload, view).ConfigureAwait(true),
+        "recycleFile" => RecycleFile(payload, view),
         "getFindingChats" => _findings.List(Str(payload, "report") ?? ""),
         "askFinding" => await AskFindingAsync(payload).ConfigureAwait(true),
         "stopFinding" => new JsonObject { ["stopped"] = _findings.Stop(Str(payload, "report") ?? "", Str(payload, "finding") ?? "") },
         "forgetFinding" => new JsonObject { ["removed"] = _findings.Forget(Str(payload, "report") ?? "", Str(payload, "finding") ?? "") },
-        "addAttachments" => await AddAttachmentsAsync(payload).ConfigureAwait(true),
+        "addAttachments" => await AddAttachmentsAsync(payload, view).ConfigureAwait(true),
         "pasteAttachment" => await PasteAttachmentAsync(payload).ConfigureAwait(true),
         "writeAttachmentText" => _attachments.WriteText(Str(payload, "taskId"), Str(payload, "id"), Str(payload, "text")),
         "removeAttachment" => new JsonObject { ["removed"] = _attachments.Remove(Str(payload, "path")) },
@@ -450,7 +470,7 @@ public sealed class BridgeHost
         "voiceVoices" => await _speech.VoicesJsonAsync().ConfigureAwait(true),
         "voiceSpeak" => await SpeakAsync(payload).ConfigureAwait(true),
         // Sessions hebergees (fenetre Conversations) : messages, arret, questions de l'agent, fermeture, console.
-        "liveSend" => _live.Send(payload),
+        "liveSend" => _live.Send(WithImages(payload)),
         "liveStop" => _live.Stop(Str(payload, "sessionId")),
         "liveAnswer" => _live.Answer(payload),
         "liveClose" => _live.Close(Str(payload, "sessionId")),
@@ -462,7 +482,7 @@ public sealed class BridgeHost
         "assistantRemote" => RelayAssistantRemote(payload),
         "assistantView" => RelayAssistantView(payload),
         // Assistant : discussion hors terminal qui agit sur la file par les outils que la page execute.
-        "assistantSend" => SendAssistant(payload),
+        "assistantSend" => SendAssistant(WithImages(payload)),
         "assistantStop" => _assistant.Stop(),
         "assistantReset" => _assistant.Reset(),
         "assistantToolResult" => _assistant.ToolResult(payload),
@@ -666,7 +686,7 @@ public sealed class BridgeHost
     /// se fait hors du fil de l'interface. <c>unresolved</c> donne le rang des objets deposes sans
     /// chemin : la page les renvoie par leur contenu (<c>pasteAttachment</c>).
     /// </summary>
-    private async Task<JsonNode> AddAttachmentsAsync(JsonObject payload)
+    private async Task<JsonNode> AddAttachmentsAsync(JsonObject payload, CoreWebView2 view)
     {
         var taskId = Str(payload, "taskId");
         var sources = new List<string>();
@@ -707,7 +727,7 @@ public sealed class BridgeHost
                 CheckFileExists = true,
             };
 
-            if (dialog.ShowDialog(_owner) != true)
+            if (dialog.ShowDialog(WindowOf(view)) != true)
             {
                 return new JsonObject
                 {
@@ -724,6 +744,28 @@ public sealed class BridgeHost
         var result = await Task.Run(() => _attachments.AddFiles(taskId, sources)).ConfigureAwait(true);
         result["unresolved"] = unresolved;
         return result;
+    }
+
+    /// <summary>
+    /// Images jointes a un message (fenetre Conversations) : seules restent les copies sous le dossier des
+    /// pieces jointes — l'hote les lit pour les envoyer a l'agent.
+    /// </summary>
+    private JsonObject WithImages(JsonObject payload)
+    {
+        var kept = new JsonArray();
+        if (payload["images"] is JsonArray list)
+        {
+            foreach (var node in list)
+            {
+                if (node is JsonValue value && value.TryGetValue<string>(out var path) && _attachments.Owned(path) is { } full)
+                {
+                    kept.Add(full);
+                }
+            }
+        }
+
+        payload["images"] = kept;
+        return payload;
     }
 
     /// <summary>Image collee (ou fichier depose sans chemin) : contenu en base64, ecrit hors du fil de l'interface.</summary>
@@ -1974,7 +2016,7 @@ public sealed class BridgeHost
     /// courante du fichier, rien n'est relu ni renvoye : l'UI relit toutes les 2 s tant que le
     /// lecteur est ouvert, pour suivre un rapport encore en cours d'ecriture.
     /// </summary>
-    private async Task<JsonNode> ReadArtifactAsync(JsonObject payload)
+    private async Task<JsonNode> ReadArtifactAsync(JsonObject payload, CoreWebView2 view)
     {
         var path = Str(payload, "path");
         if (string.IsNullOrWhiteSpace(path))
@@ -1991,28 +2033,135 @@ public sealed class BridgeHost
             return new JsonObject { ["changed"] = false, ["stamp"] = known };
         }
 
-        var view = await Task.Run(() => _reader.Read(full, cwd)).ConfigureAwait(true);
+        var read = await Task.Run(() => _reader.Read(full, cwd)).ConfigureAwait(true);
 
-        if (view.Kind is ArtifactReader.KindMarkdown or ArtifactReader.KindHtml
+        // `peek` : lire sans servir le dossier (l'assistant verifie qu'un fichier existe avant de le montrer
+        // ailleurs) — le lecteur ouvert dans cette vue garde le sien.
+        var peek = payload["peek"] is JsonValue p && p.TryGetValue<bool>(out var only) && only;
+        if (!peek && read.Kind is ArtifactReader.KindMarkdown or ArtifactReader.KindHtml
             or ArtifactReader.KindPdf or ArtifactReader.KindImage)
         {
-            ServeReportRoot(view.Root);
+            ServeReportRoot(view, read.Root);
         }
 
         return new JsonObject
         {
             ["changed"] = true,
-            ["kind"] = view.Kind,
-            ["full"] = view.Full,
-            ["root"] = view.Root,
-            ["url"] = view.Url,
-            ["title"] = view.Title,
-            ["stamp"] = view.Stamp,
-            ["size"] = view.Size,
-            ["modified"] = view.Modified,
-            ["html"] = view.Html,
-            ["review"] = ReviewJson(view.Review),
+            ["kind"] = read.Kind,
+            ["full"] = read.Full,
+            ["root"] = read.Root,
+            ["url"] = read.Url,
+            ["title"] = read.Title,
+            ["stamp"] = read.Stamp,
+            ["size"] = read.Size,
+            ["modified"] = read.Modified,
+            ["html"] = read.Html,
+            ["review"] = ReviewJson(read.Review),
         };
+    }
+
+    /// <summary>Un fichier existant, designe par la page (chemin complet, ou relatif au dossier de travail).</summary>
+    private static string ExistingFile(JsonObject payload)
+    {
+        var path = Str(payload, "path");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new InvalidOperationException("Aucun chemin fourni.");
+        }
+
+        var full = ArtifactReader.Resolve(path!, Str(payload, "cwd"));
+        if (!File.Exists(full))
+        {
+            throw new InvalidOperationException(Directory.Exists(full) ? "C'est un dossier, pas un fichier : " + full : "Le fichier n'existe plus : " + full);
+        }
+
+        return full;
+    }
+
+    /// <summary>
+    /// « Télécharger » un document du panneau de droite : le dialogue Enregistrer sous de Windows, ouvert
+    /// sur le dossier Téléchargements, puis une copie (hors du fil de l'interface). Rend <c>{ saved }</c>
+    /// (chemin de la copie) ou <c>{ cancelled }</c>.
+    /// </summary>
+    private async Task<JsonNode> SaveFileAsAsync(JsonObject payload, CoreWebView2 view)
+    {
+        var full = ExistingFile(payload);
+        var name = Path.GetFileName(full);
+        var ext = Path.GetExtension(full);
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Télécharger « " + name + " »",
+            FileName = name,
+            InitialDirectory = DownloadsFolder(),
+            Filter = (ext.Length > 1 ? "Fichier " + ext.TrimStart('.').ToUpperInvariant() + "|*" + ext + "|" : "") + "Tous les fichiers|*.*",
+            DefaultExt = ext,
+            AddExtension = ext.Length > 1,
+            OverwritePrompt = true,
+        };
+
+        if (dialog.ShowDialog(WindowOf(view)) != true)
+        {
+            return new JsonObject { ["cancelled"] = true };
+        }
+
+        var target = Path.GetFullPath(dialog.FileName);
+        if (!string.Equals(target, full, StringComparison.OrdinalIgnoreCase))
+        {
+            await Task.Run(() => File.Copy(full, target, overwrite: true)).ConfigureAwait(true);
+        }
+
+        _log.Info($"Document telecharge : {full} -> {target}");
+        return new JsonObject { ["saved"] = target };
+    }
+
+    /// <summary>
+    /// « Supprimer » un document du panneau de droite : il part a la Corbeille (la page a demande
+    /// confirmation). Rend <c>{ removed }</c> — faux si Windows, ne pouvant le mettre a la Corbeille,
+    /// a demande et que l'utilisateur a refuse.
+    /// </summary>
+    private JsonNode RecycleFile(JsonObject payload, CoreWebView2 view)
+    {
+        var full = ExistingFile(payload);
+        var removed = RecycleBin.Send(full, new System.Windows.Interop.WindowInteropHelper(WindowOf(view)).Handle);
+        if (removed)
+        {
+            _log.Info("Document envoye a la Corbeille : " + full);
+        }
+
+        return new JsonObject { ["removed"] = removed };
+    }
+
+    [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int SHGetKnownFolderPath(ref Guid folder, uint flags, IntPtr token, out IntPtr path);
+
+    /// <summary>Le dossier Téléchargements de l'utilisateur (il peut avoir ete deplace), a defaut ses Documents.</summary>
+    private static string DownloadsFolder()
+    {
+        var downloads = new Guid("374DE290-123F-4565-9164-39C4925E467B");
+        try
+        {
+            if (SHGetKnownFolderPath(ref downloads, 0, IntPtr.Zero, out var raw) == 0)
+            {
+                try
+                {
+                    var path = System.Runtime.InteropServices.Marshal.PtrToStringUni(raw);
+                    if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
+                    {
+                        return path;
+                    }
+                }
+                finally
+                {
+                    System.Runtime.InteropServices.Marshal.FreeCoTaskMem(raw);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Rien de grave : les Documents font l'affaire.
+        }
+
+        return Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
     }
 
     /// <summary>
@@ -2081,23 +2230,23 @@ public sealed class BridgeHost
     }
 
     /// <summary>
-    /// Sert le dossier du rapport courant sous <c>https://report.organizator/</c> : c'est ce qui
-    /// permet au lecteur d'afficher un PDF, une page ou une image, et au Markdown de trouver ses
-    /// images relatives. Un seul dossier a la fois ; il change avec le rapport ouvert. Sur le fil
-    /// de l'interface, comme tout appel a la WebView.
+    /// Sert le dossier du rapport courant sous <c>https://report.organizator/</c>, dans la vue qui le
+    /// lit : c'est ce qui permet au lecteur d'afficher un PDF, une page ou une image, et au Markdown de
+    /// trouver ses images relatives. Un seul dossier a la fois par vue ; il change avec le rapport
+    /// ouvert. Sur le fil de l'interface, comme tout appel a la WebView.
     /// </summary>
-    private void ServeReportRoot(string root)
+    private void ServeReportRoot(CoreWebView2 view, string root)
     {
-        if (string.Equals(_reportRoot, root, StringComparison.OrdinalIgnoreCase))
+        if (_reportRoots.TryGetValue(view, out var served))
         {
-            return;
-        }
+            if (string.Equals(served, root, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
 
-        if (_reportRoot is not null)
-        {
             try
             {
-                _core.ClearVirtualHostNameToFolderMapping(ArtifactReader.Host);
+                view.ClearVirtualHostNameToFolderMapping(ArtifactReader.Host);
             }
             catch (Exception ex)
             {
@@ -2106,9 +2255,9 @@ public sealed class BridgeHost
         }
 
         // DenyCors : images, cadres et PDF se chargent, mais aucun script ne peut lire ces fichiers par fetch.
-        _core.SetVirtualHostNameToFolderMapping(ArtifactReader.Host, root, CoreWebView2HostResourceAccessKind.DenyCors);
-        _reportRoot = root;
-        _log.Info("Rapports servis depuis " + root);
+        view.SetVirtualHostNameToFolderMapping(ArtifactReader.Host, root, CoreWebView2HostResourceAccessKind.DenyCors);
+        _reportRoots[view] = root;
+        _log.Info("Rapports servis depuis " + root + (ReferenceEquals(view, _core) ? "" : " (fenetre Conversations)"));
     }
 
     private bool TryOpenInVisualStudioCode(string path)

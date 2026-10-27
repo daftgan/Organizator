@@ -38,6 +38,9 @@
   /* Réponse en cours : { turn, startedAt, phase, label } ; null sinon. */
   var busy = null;
   var draft = '';
+  /* D'où est parti le dernier message : 'remote' (fenêtre Conversations) ou 'panel' — c'est là qu'un
+     document montré s'ouvre (show_document). */
+  var lastFrom = 'panel';
   var unseen = false;
   var armed = false, armTimer = null;
   var showAll = false;
@@ -725,6 +728,16 @@
       run: proposeLaunch
     },
     {
+      name: 'show_document',
+      label: 'Montre un document',
+      description: 'Montre un fichier à l’utilisateur : à droite de la discussion dans la fenêtre Conversations quand il te parle de là, sinon dans le lecteur de la fenêtre principale — Markdown, PDF, image, page HTML, CSV, texte. Pour lui présenter un rapport d’une conversation, un document cité, plutôt que d’en recopier le contenu.',
+      inputSchema: schema({
+        path: { type: 'string', description: 'Chemin complet du fichier (celui des rapports de get_task, par exemple).' },
+        title: { type: 'string', description: 'Titre court à afficher (facultatif).' }
+      }, ['path']),
+      run: showDocument
+    },
+    {
       name: 'open_task',
       label: 'Montre une tâche',
       description: 'Montre une tâche à l’utilisateur dans la file : elle défile jusqu’à elle et la fait briller un instant.',
@@ -737,6 +750,25 @@
       }
     }
   ];
+
+  /* Le fichier doit exister ; il s'ouvre là d'où l'utilisateur écrit (la fenêtre Conversations le
+     reçoit par le résumé de la discussion : remoteSummary.show). */
+  function showDocument(a) {
+    var path = String(a.path || '').trim();
+    if (!path) return fail('Indique le chemin du fichier (path).');
+    return bridge.call('readArtifact', { path: path, cwd: '', peek: true }).then(function (v) {
+      if (!v || v.kind === 'missing') return fail('Fichier introuvable : ' + path + '.');
+      var full = v.full || path;
+      var title = clip(String(a.title || '').trim(), 120);
+      if (lastFrom === 'remote' && remote.watching) {
+        remote.show = { path: full, title: title, at: now() };
+        pushRemote();
+        return ok('Document ouvert pour l’utilisateur, dans le panneau de droite de la fenêtre Conversations (' + full + ').');
+      }
+      A.openReader(full, '');
+      return ok('Document ouvert pour l’utilisateur, dans le lecteur de la fenêtre principale (' + full + ').');
+    });
+  }
 
   var TOOL_BY_NAME = {};
   TOOLS.forEach(function (t) { TOOL_BY_NAME[t.name] = t; });
@@ -1053,6 +1085,7 @@
     '- Réécrire ou supprimer un mot-clé existant, lancer une conversation : ce sont des PROPOSITIONS, que l’utilisateur applique ou refuse d’un clic. Ne les présente jamais comme faites. Ce qu’il en a décidé t’est dit en tête de son message suivant.',
     '- Tu ne supprimes pas de tâche : pour en écarter une, marque-la terminée ou descends-la en bas de file.',
     '- Tu peux lire le disque (Read, Grep, Glob) — rapports des conversations, sources d’un projet — mais rien y écrire.',
+    '- Pour présenter un fichier à l’utilisateur (un rapport, un document cité), montre-le (show_document) plutôt que d’en recopier le contenu.',
     '',
     'Revue des consignes des agents (« review mes scripts ») : lis toutes les catégories (get_categories), puis juge chaque mot-clé — consigne claire et actionnable, livrable attendu (fichier rapport, format, où l’écrire), critère de fin, garde-fous avant les actions irréversibles (push, merge, commentaire de PR, ticket), cohérence avec l’équipe (rôles qui se recouvrent, missions vagues, modèle ou effort mal dosés : un relevé se contente d’un modèle rapide, une conception mérite le plus fort), doublons entre mots-clés, manques. Donne un constat bref par mot-clé et les points communs, puis propose les réécritures les plus utiles avec update_keyword : une proposition par mot-clé, consigne complète, dans le style et le vocabulaire de l’utilisateur.',
     '',
@@ -1067,7 +1100,7 @@
 
   /* `fromRemote` : le message vient de la fenêtre Conversations — la zone de saisie d'ici, et ce qu'on
      y tape, n'y sont pour rien ; un échec lui rend son texte. Rend vrai si le message part. */
-  function send(text, fromRemote) {
+  function send(text, fromRemote, images) {
     text = String(text == null ? draft : text).trim();
     if (!text || busy || !loaded) return false;
     if (!A.hasProvider('claude')) { warn('Claude Code est introuvable sur ce poste : l’assistant passe par lui.'); return false; }
@@ -1075,6 +1108,7 @@
     var notes = log.notes.slice();
     var head = '[' + stamp() + (notes.length ? ' — depuis ton dernier message : ' + notes.join(' ') : '') + ']';
     var entry = push({ kind: 'user', text: text });
+    lastFrom = fromRemote ? 'remote' : 'panel';
     busy = { turn: 0, startedAt: now(), phase: 'thinking', label: '' };
     stick = true;
     if (!fromRemote) {
@@ -1086,6 +1120,8 @@
     renderAll();
     bridge.call('assistantSend', {
       sessionId: log.sessionId, resume: !!log.used, text: head + '\n' + text, system: SYSTEM, tools: toolDefs(),
+      /* Images jointes depuis la fenêtre Conversations : le texte les cite, l'hôte les joint au message. */
+      images: Array.isArray(images) ? images.map(String) : [],
       model: String(S.settings.assistantModel || ''), effort: String(S.settings.assistantEffort || '')
     }, 30000).then(function (r) {
       if (busy && !busy.turn) busy.turn = r && r.turn ? r.turn : 0;
@@ -1603,7 +1639,7 @@
      depuis le dernier envoi, en données qu'elle met en forme à sa façon. */
   var remote = {
     connected: false, watching: false, focused: false, showAll: false,
-    sent: {}, last: '', timer: null, toast: null, restore: null, acting: false
+    sent: {}, last: '', timer: null, toast: null, restore: null, acting: false, show: null
   };
 
   /* Un avertissement sur un geste : le toast d'ici, et celui de la fenêtre Conversations quand le
@@ -1628,7 +1664,7 @@
       busy: busy ? { phase: busy.phase, label: busy.label || '', startedAt: busy.startedAt } : null,
       unseen: unseen, pending: pendingCards().length, armed: armed,
       said: clip(said, 220), at: last ? last.at : 0, count: log.entries.length,
-      model: 'Claude · ' + modelWords(), restore: remote.restore
+      model: 'Claude · ' + modelWords(), restore: remote.restore, show: remote.show
     };
   }
 
@@ -1708,7 +1744,7 @@
       remote.focused = !!p.focused;
       if (remote.watching && remote.focused) unseen = false;
     } else if (p.op === 'send') {
-      if (!send(p.text, true)) remote.restore = { text: String(p.text || ''), at: now() };
+      if (!send(p.text, true, p.images)) remote.restore = { text: String(p.text || ''), at: now() };
     } else if (p.op === 'act') {
       remote.acting = true;
       try { remoteAct(p); } finally { remote.acting = false; }
