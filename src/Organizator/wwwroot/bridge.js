@@ -1083,7 +1083,9 @@
         return;
       }
       if (st.error) { shimLiveEmit(id, 'error', { error: st.error }); s.busy = false; shimLiveEmit(id, 'state', { running: true, busy: false }); return; }
-      if (st.tool) {
+      /* L'agent montre un document (outil show_document) : { show: chemin, title }. */
+      if (st.show) shimLiveEmit(id, 'show', { path: String(st.show), title: String(st.title || ''), at: Date.now() });
+      else if (st.tool) {
         var tid = 't' + turn + '-' + i;
         shimLiveEmit(id, 'tool', { id: tid, name: st.tool, detail: st.detail || '', status: 'running' });
         shimLiveEmit(id, 'tool', { id: tid, name: st.tool, detail: st.detail || '', status: st.failed ? 'error' : 'done' });
@@ -1323,6 +1325,17 @@
       case 'openUrl':
         console.log('[shim] openUrl', p.url);
         return { opened: true };
+
+      case 'saveFileAs': {
+        /* Télécharger : window.__savedFiles note la demande ; window.__saveCancel simule « Annuler ». */
+        (window.__savedFiles = window.__savedFiles || []).push(p);
+        if (window.__saveCancel) return { cancelled: true };
+        return { saved: 'C:\\Users\\moi\\Downloads\\' + String(p.path || '').split(/[\\\/]/).pop() };
+      }
+
+      case 'recycleFile':
+        (window.__recycled = window.__recycled || []).push(p);
+        return { removed: !window.__recycleRefused };
 
       case 'readArtifact': {
         /* Rapport simulé : window.__fakeArtifacts[chemin], puis window.__fakeArtifact, le remplacent

@@ -4,7 +4,9 @@
    une recherche, les épinglées en haut, les autres dans l'ordre de la file, les archivées repliées
    en bas de la liste, et sous elle, fixe, le bloc « Organizator » : l'assistant et les sessions du
    carnet de remarques en cours — avec leur état ; au centre la conversation choisie, ses messages, la
-   réponse qui s'écrit, les outils pas à pas, les questions de l'agent ; en bas la zone de saisie.
+   réponse qui s'écrit, les outils pas à pas, les questions de l'agent ; en bas la zone de saisie
+   (dictée, images et fichiers joints) ; à droite un panneau — le document que l'agent montre, sinon
+   le résumé de la conversation.
    Organizator reste le moteur : les sessions sont hébergées par l'hôte (LiveSessions) avec les
    paramètres choisis dans Organizator — cette page ne fait que les montrer et leur parler.
    Elle ne tient aucune donnée : la file vient de la fenêtre principale (getData, relu à chaque
@@ -39,7 +41,18 @@
     unarchive: SVG + '<rect x="2" y="3" width="20" height="5" rx="1"></rect><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path><path d="m9.5 14.5 2.5-2.5 2.5 2.5"></path><path d="M12 12v6"></path></svg>',
     spark: SVG + '<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"></path><path d="M19 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"></path></svg>',
     /* La bulle du bouton « Remarques » de la fenêtre principale. */
-    remarks: SVG + '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M8 9h8M8 13h5"></path></svg>'
+    remarks: SVG + '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M8 9h8M8 13h5"></path></svg>',
+    pane: SVG + '<rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M14 4v16"></path></svg>',
+    back: SVG + '<path d="m15 18-6-6 6-6"></path></svg>',
+    clip: SVG + '<path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"></path></svg>',
+    mic: SVG + '<rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M19 10v1a7 7 0 0 1-14 0v-1"></path><path d="M12 18v4"></path></svg>',
+    check: SVG + '<path d="M20 6 9 17l-5-5"></path></svg>',
+    download: SVG + '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg>',
+    external: SVG + '<path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>',
+    folder: SVG + '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>',
+    code: SVG + '<path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg>',
+    trash: SVG + '<path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path></svg>',
+    doc: SVG + '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg>'
   };
 
   var C = {
@@ -54,7 +67,12 @@
     stay: '',
     /* L'assistant, tenu par la fenêtre principale : son résumé, puis — quand on le montre — ses
        entrées, en données (assistantView). */
-    as: { summary: null, keys: [], items: {}, restoredAt: 0, toastAt: 0 },
+    as: { summary: null, keys: [], items: {}, restoredAt: 0, toastAt: 0, showAt: 0 },
+    /* Panneau de droite (ouvert, largeur) ; par conversation, le document qu'on y lit (absent : le
+       résumé), les documents montrés depuis l'ouverture, ceux qu'on n'a pas encore regardés. */
+    pane: null, docs: {}, shownLocal: {}, asShown: [], fresh: {},
+    /* Par conversation : les pièces jointes du message en cours d'écriture, les copies en cours. */
+    attach: {}, attachBusy: {},
     seen: loadSeen(), since: loadSince(), loaded: false
   };
 
@@ -103,6 +121,32 @@
   }
 
   function setHtml(el, html) { if (el && el.cvHtml !== html) { el.innerHTML = html; el.cvHtml = html; } }
+
+  function baseName(p) {
+    var s = String(p || '').replace(/[\\\/]+$/, '');
+    var parts = s.split(/[\\\/]/);
+    return parts[parts.length - 1] || s || '—';
+  }
+
+  function extOf(p) {
+    var name = baseName(p);
+    var dot = name.lastIndexOf('.');
+    return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+  }
+
+  /* Le dossier qui contient le fichier (relatif au dossier de travail s'il l'est) ; vide à la racine. */
+  function folderOf(p) {
+    var s = String(p || '').replace(/[\\\/]+$/, '');
+    var i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+    return i > 0 ? s.slice(0, i) : '';
+  }
+
+  function fmtSize(bytes) {
+    bytes = Number(bytes) || 0;
+    if (bytes < 1024) return bytes + ' o';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(bytes < 10240 ? 1 : 0).replace('.', ',') + ' Ko';
+    return (bytes / 1048576).toFixed(1).replace('.', ',') + ' Mo';
+  }
 
   var toastTimer = null;
   function toast(text) {
@@ -355,6 +399,7 @@
         renderSide();
         renderHead();
         renderCompose();
+        renderPane();
         /* Une session en console, ou qui ne répond pas : son journal se relit tel qu'il s'écrit. */
         var c = convoById(C.selected);
         var lv = c ? C.live[c.id] : null;
@@ -381,7 +426,7 @@
       /* La réponse est dans le journal : ce qui s'affichait en direct s'efface. */
       if (lv && !lv.busy && lv.ended) clearTurn(lv);
       if (tr.again) { tr.again = false; loadTranscript(id); }
-      if (id === C.selected) renderThread();
+      if (id === C.selected) { renderThread(); renderPane(); }
     }, function (e) {
       tr.loading = false;
       tr.error = e.message;
@@ -463,6 +508,9 @@
       case 'notice':
         lv.notices.push({ text: p.text, error: false });
         break;
+      case 'show':
+        noteShown(p.sessionId, { path: String(p.path || ''), title: String(p.title || ''), at: toMs(p.at) || now() });
+        break;
       case 'error':
         lv.notices.push({ text: p.error || 'L’agent n’a pas pu répondre.', error: true });
         break;
@@ -479,7 +527,7 @@
         break;
     }
     if (p.sessionId === C.selected) {
-      if (p.phase === 'state' || p.phase === 'question' || p.phase === 'done' || p.phase === 'user') { renderHead(); renderCompose(); }
+      if (p.phase === 'state' || p.phase === 'question' || p.phase === 'done' || p.phase === 'user') { renderHead(); renderCompose(); renderPane(); }
       renderThread();
     }
     reviveArchived();
@@ -495,6 +543,7 @@
     var keep = !!c && placeOf(c) === 'organizator';
     C.selected = id;
     C.stay = keep ? id : '';
+    delete C.fresh[id];
     if (c) { C.seen[id] = Math.max(updatedOf(c), now()); saveSeen(); }
     /* Ouverte depuis la recherche, une notification ou la fenêtre principale : une archivée se
        montre à sa place, section dépliée. */
@@ -534,7 +583,15 @@
   function onAsView(p) {
     if (!p) return;
     var A = C.as;
+    var first = !A.summary;
     if (p.summary) A.summary = p.summary;
+    /* Un document que l'assistant montre ; au premier relevé (fenêtre rouverte), il est noté sans s'ouvrir. */
+    var show = A.summary && A.summary.show;
+    if (show && show.path && show.at > A.showAt) {
+      A.showAt = show.at;
+      if (first) C.asShown.unshift({ path: show.path, title: show.title || '', at: show.at });
+      else noteShown(ASSISTANT_ID, { path: show.path, title: show.title || '', at: show.at });
+    }
     if (Array.isArray(p.keys)) {
       var changed = p.changed || {};
       Object.keys(changed).forEach(function (k) { A.items[k] = changed[k]; });
@@ -548,13 +605,16 @@
     var back = A.summary && A.summary.restore;
     if (back && back.at > A.restoredAt) {
       A.restoredAt = back.at;
-      if (!C.drafts[ASSISTANT_ID]) C.drafts[ASSISTANT_ID] = back.text;
+      /* Ses pièces jointes reviennent en vignettes, pas en texte. */
+      var sp = splitAttachments(back.text);
+      if (sp.files.length && !(C.attach[ASSISTANT_ID] || []).length) C.attach[ASSISTANT_ID] = sp.files;
+      if (!C.drafts[ASSISTANT_ID]) C.drafts[ASSISTANT_ID] = sp.text;
       var box = $('[data-role="cv-input"]');
-      if (box && C.selected === ASSISTANT_ID && !box.value) { box.value = back.text; fit(box); }
+      if (box && C.selected === ASSISTANT_ID && !box.value) { box.value = sp.text; fit(box); }
     }
     asClock();
     renderSide();
-    if (C.selected === ASSISTANT_ID) { renderHead(); renderThread(); renderCompose(); }
+    if (C.selected === ASSISTANT_ID) { renderHead(); renderThread(); renderCompose(); renderPane(); }
   }
 
   /* Pendant une réponse, la durée se met à jour chaque seconde. */
@@ -599,13 +659,21 @@
     var s = C.as.summary;
     if (!s || !s.loaded) { toast('La discussion se charge encore dans la fenêtre principale.'); return; }
     if (s.busy) { toast('L’assistant répond encore : attendez sa réponse, ou arrêtez-la.'); return; }
+    if (C.attachBusy[ASSISTANT_ID]) { toast('Une pièce jointe se copie encore : un instant.'); return; }
+    var files = (C.attach[ASSISTANT_ID] || []).slice();
     box.value = '';
     C.drafts[ASSISTANT_ID] = '';
+    C.attach[ASSISTANT_ID] = [];
     fit(box);
     stick = true;
-    asking('send', { text: text })['catch'](function (e) {
+    renderCompose();
+    asking('send', {
+      text: (text + attachTrailer(files, 'claude')).trim(),
+      images: files.filter(function (a) { return a.kind === 'image'; }).map(function (a) { return a.path; })
+    })['catch'](function (e) {
       toast('Message non envoyé : ' + e.message);
       if (!box.value) { box.value = text; C.drafts[ASSISTANT_ID] = text; fit(box); }
+      if (!(C.attach[ASSISTANT_ID] || []).length) { C.attach[ASSISTANT_ID] = files; renderCompose(); }
     });
   }
 
@@ -646,22 +714,28 @@
   function send() {
     var c = convoById(C.selected);
     var box = $('[data-role="cv-input"]');
-    if (box && C.selected === ASSISTANT_ID) { if (box.value.trim()) asSend(box, box.value.trim()); return; }
+    var files = (C.attach[C.selected] || []).slice();
+    if (box && C.selected === ASSISTANT_ID) { if (box.value.trim() || files.length) asSend(box, box.value.trim()); return; }
     if (!c || !box) return;
     var text = box.value.trim();
-    if (!text) return;
+    if (!text && !files.length) return;
+    if (C.attachBusy[c.id]) { toast('Une pièce jointe se copie encore : un instant.'); return; }
     var lv = C.live[c.id];
     if (lv && lv.question) { toast('L’agent attend la réponse à sa question, plus haut.'); return; }
     if (lv && lv.busy && providerOf(c) === 'copilot') { toast('Copilot répond encore : attendez sa réponse, ou arrêtez-la.'); return; }
     box.value = '';
     C.drafts[c.id] = '';
+    C.attach[c.id] = [];
     fit(box);
     stick = true;
+    renderCompose();
     var payload = launchParams(c);
-    payload.text = text;
+    payload.text = (text + attachTrailer(files, providerOf(c))).trim();
+    payload.images = files.filter(function (a) { return a.kind === 'image'; }).map(function (a) { return a.path; });
     bridge.call('liveSend', payload, 60000)['catch'](function (e) {
       toast('Message non envoyé : ' + e.message);
       if (!box.value) { box.value = text; C.drafts[c.id] = text; fit(box); }
+      if (!(C.attach[c.id] || []).length) { C.attach[c.id] = files; renderCompose(); }
     });
   }
 
@@ -813,6 +887,7 @@
   function render() {
     renderSide();
     renderMain();
+    renderPane();
   }
 
   function renderSide() {
@@ -878,7 +953,7 @@
     return '<div class="cv-item cv-item-as' + (C.selected === ASSISTANT_ID ? ' on' : '') + (sm && sm.unseen ? ' unread' : '') + '" role="button" tabindex="0"'
       + ' data-act="cv-select" data-id="' + ASSISTANT_ID + '" title="' + esc(tip) + '">'
       + '<span class="cv-state' + (st ? ' st-' + st : '') + '"></span>'
-      + '<span class="cv-item-title">' + badge('as') + 'Assistant</span>'
+      + '<span class="cv-item-title">' + badge('as') + 'Assistant' + freshHtml(ASSISTANT_ID) + '</span>'
       + '<span class="cv-item-sub">' + esc((sm ? sm.model : 'Claude') + ' · ' + asStateWords() + (sm && sm.at ? ' · ' + fmtTime(sm.at) : '')) + '</span>'
       + (sm && sm.said && (st === 'ready' || st === 'waiting') ? '<span class="cv-item-said">' + esc(sm.said) + '</span>' : '')
       + '</div>';
@@ -897,12 +972,17 @@
       + ' data-act="cv-select" data-id="' + esc(c.id) + '"'
       + ' title="' + esc((STATE_WORDS[st] || '') + (a && a.said ? ' · ' + a.said : '')) + '">'
       + '<span class="cv-state' + (st ? ' st-' + st : '') + '"></span>'
-      + '<span class="cv-item-title">' + (c.taskId === FEEDBACK_ID ? badge('rm') : '') + esc(convTitle(c)) + '</span>'
+      + '<span class="cv-item-title">' + (c.taskId === FEEDBACK_ID ? badge('rm') : '') + esc(convTitle(c)) + freshHtml(c.id) + '</span>'
       + (task ? '<span class="cv-item-task">' + esc(task) + '</span>' : '')
       + '<span class="cv-item-sub">' + esc(agentTag(c) + ' · ' + (STATE_WORDS[st] || '—') + (updatedOf(c) ? ' · ' + fmtTime(updatedOf(c)) : '')) + '</span>'
       + (said ? '<span class="cv-item-said">' + esc(said) + '</span>' : '')
       + '<span class="cv-item-acts">' + markButtons(c, 'cv-item-act') + '</span>'
       + '</div>';
+  }
+
+  /* L'agent a montré un document qu'on n'a pas encore regardé. */
+  function freshHtml(id) {
+    return C.fresh[id] ? ' <span class="cv-item-doc" title="Un document vous attend : il s’ouvre à droite">' + ICON.doc + '</span>' : '';
   }
 
   /* Épingler / désépingler ; archiver / désarchiver. Pour une tâche, c'est la passer en cours, la
@@ -970,6 +1050,7 @@
       + (c.cwd ? '<button type="button" class="cv-chip" data-act="cv-folder" title="Ouvrir le dossier : ' + esc(c.cwd) + '">' + esc(c.cwd) + '</button>' : '')
       + '</div></div>'
       + '<div class="cv-actions">'
+      + paneButtonHtml()
       + markButtons(c, 'cv-icon-btn')
       + (hosted && !(lv && lv.busy) ? '<button type="button" class="cv-btn" data-act="cv-close" title="Arrêter le processus de l’agent : la session reste, et reprend au prochain message">Mettre en pause</button>' : '')
       + (inConsole(c) ? '' : '<button type="button" class="cv-btn" data-act="cv-terminal"' + (lv && lv.busy ? ' disabled title="L’agent répond encore"' : ' title="Reprendre cette session dans une console"') + '>Ouvrir dans un terminal</button>')
@@ -986,6 +1067,7 @@
       + '<span class="cv-chip">Agit sur la file d’Organizator</span>'
       + '</div></div>'
       + '<div class="cv-actions">'
+      + paneButtonHtml()
       + (sm && sm.count ? '<button type="button" class="cv-btn' + (sm.armed ? ' is-armed' : '') + '" data-act="cv-as-act" data-as="as-reset"'
         + ' title="Effacer la discussion : l’assistant repartira sans son historique">' + (sm.armed ? 'Effacer la discussion ?' : 'Nouvelle discussion') + '</button>' : '')
       + '<button type="button" class="cv-btn" data-act="cv-as-act" data-as="as-open" title="Le panneau ✦ de la fenêtre principale, sur la même discussion">Ouvrir dans la fenêtre principale</button>'
@@ -1148,11 +1230,14 @@
 
   function messageHtml(m, key) {
     if (m.role === 'user') {
-      var text = String(m.text || '');
+      var parts = splitAttachments(m.text);
+      var text = parts.text;
       var long = text.length > FOLD_CHARS || text.split('\n').length > FOLD_LINES;
       var folded = long && !C.open[key];
-      return '<div class="cv-msg user"><div class="cv-bubble md' + (folded ? ' is-folded' : '') + '">' + MD.blocks(text) + '</div>'
+      return '<div class="cv-msg user">'
+        + (text.trim() ? '<div class="cv-bubble md' + (folded ? ' is-folded' : '') + '">' + MD.blocks(text) + '</div>' : '')
         + (long ? '<button type="button" class="cv-unfold" data-act="cv-unfold" data-k="' + esc(key) + '">' + (folded ? 'Afficher tout ▾' : 'Replier ▴') + '</button>' : '')
+        + filesHtml(parts.files)
         + (m.ts ? '<div class="cv-time">' + esc(fmtTime(m.ts)) + '</div>' : '') + '</div>';
     }
     return '<div class="cv-msg assistant md">' + MD.blocks(m.text) + '</div>';
@@ -1161,8 +1246,10 @@
   function stepHtml(s) {
     if (!s) return '';
     var icon = s.status === 'done' ? '✓' : s.status === 'error' ? '✕' : '•';
+    /* L'outil d'Organizator se dit en clair. */
+    var name = /__show_document$/.test(s.name || '') ? 'Montre un document' : (s.name || 'Outil');
     return '<div class="cv-step ' + esc(s.status || '') + '"><span class="cv-step-icon">' + icon + '</span>'
-      + '<span class="cv-step-name">' + esc(s.name || 'Outil') + '</span>'
+      + '<span class="cv-step-name">' + esc(name) + '</span>'
       + (s.detail ? '<span class="cv-step-detail" title="' + esc(s.detail) + '">' + esc(s.detail) + '</span>' : '') + '</div>';
   }
 
@@ -1203,10 +1290,16 @@
     if (!el.cvBox) {
       el.cvBox = true;
       el.cvHtml = null;
-      el.innerHTML = '<div class="cv-box"><textarea class="cv-input" rows="1" data-role="cv-input" spellcheck="true" '
+      el.innerHTML = '<div class="cv-box"><div class="cv-attach" data-role="cv-attach"></div>'
+        + '<textarea class="cv-input" rows="1" data-role="cv-input" spellcheck="true" '
         + 'placeholder="Répondre à l’agent… (Entrée envoie, Maj + Entrée : à la ligne)"></textarea>'
-        + '<div class="cv-box-foot"><span class="cv-box-note" data-role="cv-note"></span><span data-role="cv-btn"></span></div></div>';
+        + '<div class="cv-box-foot"><span class="cv-box-tools" data-role="cv-tools"></span>'
+        + '<span class="cv-box-note" data-role="cv-note"></span><span data-role="cv-btn"></span></div></div>';
     }
+    setHtml(el.querySelector('[data-role="cv-attach"]'), pendingHtml(C.selected));
+    setHtml(el.querySelector('[data-role="cv-tools"]'), dict && dict.key === C.selected ? dictToolsHtml()
+      : '<button type="button" class="cv-tool" data-act="cv-attach-pick" title="Joindre des images ou des fichiers — ou collez une capture, glissez un fichier" aria-label="Joindre des fichiers">' + ICON.clip + '</button>'
+        + (whisperOn() ? '<button type="button" class="cv-tool" data-act="cv-mic" title="Dicter — Whisper, sur ce poste (Ctrl + Maj + Espace)" aria-label="Dicter"' + (dict ? ' disabled' : '') + '>' + ICON.mic + '</button>' : ''));
     var box = el.querySelector('[data-role="cv-input"]');
     if (box.getAttribute('data-for') !== C.selected) {
       box.setAttribute('data-for', C.selected);
@@ -1228,6 +1321,920 @@
   function fit(box) {
     box.style.height = 'auto';
     box.style.height = Math.min(260, Math.max(26, box.scrollHeight)) + 'px';
+  }
+
+  /* ══ Panneau de droite ════════════════════════════════════════════════
+     À la manière de Claude : un document que l'agent montre (outil show_document des sessions
+     hébergées, et de l'assistant) s'ouvre à droite de la conversation — lu au fil de l'eau, et
+     Télécharger, Ouvrir, Dossier, VS Code, Supprimer à portée de main. Sinon, le panneau résume la
+     conversation choisie : sa conclusion, les documents montrés, les rapports et fichiers touchés, ce
+     qu'elle a coûté. Le document se lit comme dans le lecteur de la fenêtre principale : l'hôte rend
+     (readArtifact, dossier servi sous https://report.organizator/ pour cette fenêtre), un cadre isolé
+     affiche. Rien n'est enregistré ici : la fenêtre principale note les documents montrés
+     (`convo.shown`). */
+
+  var PANE_KEY = 'organizator.conversations.pane';
+  var PANE_MIN = 300, SIDE_W = 300, MAIN_MIN = 420;
+  var REPORT_HOST = 'https://report.organizator/';
+  var DOC_FRAMED = { markdown: 1, text: 1, table: 1, image: 1 };
+  var DOC_EXT = {
+    md: 1, markdown: 1, txt: 1, rst: 1, adoc: 1, asciidoc: 1, org: 1, log: 1,
+    pdf: 1, csv: 1, tsv: 1, xlsx: 1, xls: 1, docx: 1, doc: 1, pptx: 1, ppt: 1,
+    odt: 1, ods: 1, odp: 1, rtf: 1, html: 1, htm: 1,
+    png: 1, jpg: 1, jpeg: 1, gif: 1, webp: 1
+  };
+  var SUM_ROWS = 6;
+  var ARM_MS = 4000;
+
+  function loadPane() {
+    var v = {};
+    try { v = JSON.parse(localStorage.getItem(PANE_KEY) || '{}') || {}; } catch (e) { v = {}; }
+    return { open: v.open !== false, width: Math.max(PANE_MIN, Number(v.width) || 440) };
+  }
+
+  function savePane() {
+    try { localStorage.setItem(PANE_KEY, JSON.stringify({ open: C.pane.open, width: C.pane.width })); } catch (e) { /* stockage refusé */ }
+  }
+
+  C.pane = loadPane();
+
+  /* Le panneau ne prend que la place que la conversation lui laisse. */
+  function paneRoom() { return window.innerWidth - SIDE_W - MAIN_MIN; }
+  function paneWidth() { return Math.max(PANE_MIN, Math.min(C.pane.width, paneRoom())); }
+
+  /* Visible : une conversation choisie, le panneau ouvert, et la place — un document montré la prend quand même. */
+  function paneShown() {
+    if (!C.selected || !C.pane.open) return false;
+    return !!C.docs[C.selected] || paneRoom() >= PANE_MIN;
+  }
+
+  var pane = { key: null, stamp: null, frame: null, ready: false, timer: null, token: 0 };
+
+  function renderPane() {
+    var root = $('#cv'), host = $('#cv-pane');
+    if (!root || !host) return;
+    var on = paneShown();
+    root.classList.toggle('has-pane', on);
+    if (on) root.style.setProperty('--cv-pane-w', paneWidth() + 'px');
+    if (!on) {
+      if (host.firstChild) { host.innerHTML = ''; }
+      pane.key = null; pane.stamp = null; pane.frame = null; pane.ready = false;
+      syncDocPolling();
+      return;
+    }
+    if (!host.firstChild) {
+      host.innerHTML = '<div class="cv-pane-grip" data-role="cv-grip" title="Glisser pour élargir ou rétrécir le panneau"></div>'
+        + '<div class="cv-pane-in" data-role="cv-pane-in"></div>';
+    }
+    var inner = host.querySelector('[data-role="cv-pane-in"]');
+    var d = C.docs[C.selected];
+    if (d) {
+      if (!d.view && !d.busy && !d.error) loadDoc(d, false);
+      renderDoc(inner, d);
+    } else {
+      if (pane.key !== 'sum') { inner.innerHTML = ''; inner.cvHtml = null; pane.key = 'sum'; pane.frame = null; pane.ready = false; }
+      setHtml(inner, C.selected === ASSISTANT_ID ? asSummaryHtml() : summaryHtml(convoById(C.selected)));
+    }
+    syncDocPolling();
+  }
+
+  /* ── Le document ── */
+
+  function openDoc(id, path, cwd, title) {
+    if (!id || !path) return;
+    var was = C.docs[id];
+    if (was && was.path === path && !was.error) { was.title = title || was.title; }
+    else C.docs[id] = { path: String(path), cwd: String(cwd || ''), title: String(title || ''), view: null, busy: false, error: '', armed: false };
+    if (id === C.selected) {
+      C.pane.open = true;
+      savePane();
+      renderPane();
+      renderHead();
+    }
+  }
+
+  function closeDoc() {
+    delete C.docs[C.selected];
+    renderPane();
+  }
+
+  function loadDoc(d, silent) {
+    if (!d || (silent && d.busy)) return;
+    var token = ++pane.token;
+    d.token = token;
+    d.busy = true;
+    bridge.call('readArtifact', { path: d.path, cwd: d.cwd, stamp: silent && d.view ? d.view.stamp : '' }).then(function (v) {
+      if (d.token !== token) return;
+      d.busy = false;
+      if (!v || v.changed === false) return;
+      d.view = v;
+      d.error = '';
+      if (C.docs[C.selected] === d) renderPane();
+    }, function (e) {
+      if (d.token !== token) return;
+      d.busy = false;
+      /* Une relecture qui échoue pendant que l'agent écrit n'efface pas ce qu'on lit. */
+      if (!silent || !d.view) { d.error = e.message; d.view = null; if (C.docs[C.selected] === d) renderPane(); }
+    });
+  }
+
+  /* Tant qu'un document est affiché, il est relu toutes les 2 s : l'hôte ne renvoie rien s'il n'a pas changé. */
+  function syncDocPolling() {
+    var want = paneShown() && !!C.docs[C.selected];
+    if (want && !pane.timer) {
+      pane.timer = setInterval(function () {
+        var d = C.docs[C.selected];
+        if (d && paneShown() && document.visibilityState !== 'hidden') loadDoc(d, true);
+      }, 2000);
+    }
+    if (!want && pane.timer) { clearInterval(pane.timer); pane.timer = null; }
+  }
+
+  /* Script d'amorçage du cadre isolé : reçoit le HTML (`html`, `follow` pour garder la fin d'un
+     document qui s'écrit), remonte les liens (`link`), Échap (`close`) et qu'il est prêt (`ready`). */
+  var DOC_SCRIPT = [
+    '(function () {',
+    'var doc = document.getElementById("doc");',
+    'function post(m) { parent.postMessage(m, "*"); }',
+    'addEventListener("message", function (e) {',
+    '  var m = e.data || {}; if (m.type !== "html") return;',
+    '  var root = document.documentElement;',
+    '  var atBottom = innerHeight + scrollY >= root.scrollHeight - 40; var y = scrollY;',
+    '  doc.innerHTML = String(m.html || "");',
+    '  if (m.follow && atBottom) scrollTo(0, root.scrollHeight); else scrollTo(0, m.follow ? y : 0);',
+    '});',
+    'document.addEventListener("click", function (e) {',
+    '  var a = e.target && e.target.closest ? e.target.closest("a[href]") : null; if (!a) return;',
+    '  e.preventDefault(); var href = a.getAttribute("href") || "";',
+    '  if (href.charAt(0) === "#") {',
+    '    var t = null; try { t = document.getElementById(decodeURIComponent(href.slice(1))); } catch (err) { t = null; }',
+    '    if (t) t.scrollIntoView(); return;',
+    '  }',
+    '  post({ type: "link", href: a.href });',
+    '});',
+    'document.addEventListener("keydown", function (e) { if (e.key === "Escape") post({ type: "close" }); });',
+    'post({ type: "ready" });',
+    '})();'
+  ].join('\n');
+
+  /* La CSP du cadre ne laisse passer que nos feuilles (polices, reader.css), les images du dossier
+     servi, et le seul script porteur du nonce : le HTML d'un rapport n'atteint pas la page. */
+  function docFrameDoc() {
+    var nonce = 'n' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    var origin = location.origin;
+    var csp = "default-src 'none'; img-src " + REPORT_HOST.slice(0, -1) + ' ' + origin + " data: blob:; "
+      + "style-src 'unsafe-inline' " + origin + '; font-src ' + origin + "; script-src 'nonce-" + nonce + "'; "
+      + "base-uri 'none'; form-action 'none'";
+    return '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">'
+      + '<meta http-equiv="Content-Security-Policy" content="' + csp + '">'
+      + '<link rel="stylesheet" href="' + origin + '/fonts.css">'
+      + '<link rel="stylesheet" href="' + origin + '/reader.css">'
+      + '</head><body class="pane"><article id="doc" class="doc"></article>'
+      + '<script nonce="' + nonce + '">' + DOC_SCRIPT + '</' + 'script></body></html>';
+  }
+
+  function docMeta(d) {
+    var v = d.view;
+    if (!v) return d.error ? 'Lecture impossible' : 'Lecture…';
+    var ms = toMs(v.modified);
+    var when = ms ? (new Date(ms).toDateString() === new Date().toDateString() ? 'modifié à ' : 'modifié le ') + fmtTime(ms) : '';
+    return [d.title ? baseName(v.full) : '', when, v.size ? fmtSize(v.size) : ''].filter(Boolean).join(' · ');
+  }
+
+  function docShellHtml(d, kind) {
+    var v = d.view;
+    var full = v ? v.full : d.path;
+    var h = ['<div class="cv-doc">'];
+    h.push('<div class="cv-doc-bar">'
+      + '<button type="button" class="cv-doc-back" data-act="cv-doc-close" title="Fermer le document : revenir au résumé de la conversation" aria-label="Revenir au résumé">' + ICON.back + '</button>'
+      + '<div class="cv-doc-head"><div class="cv-doc-name" title="' + esc(full) + '">' + esc(d.title || baseName(full)) + '</div>'
+      + '<div class="cv-doc-meta" data-role="cv-doc-meta">' + esc(docMeta(d)) + '</div></div>'
+      + '<div class="cv-doc-acts" data-role="cv-doc-acts">' + docActsHtml(d) + '</div>'
+      + '</div>');
+    h.push('<div class="cv-doc-body">');
+    if (DOC_FRAMED[kind]) {
+      h.push('<iframe class="cv-doc-frame" title="' + esc(baseName(full)) + '" sandbox="allow-scripts" srcdoc="' + esc(docFrameDoc()) + '"></iframe>');
+    } else if (kind === 'html') {
+      h.push('<iframe class="cv-doc-frame" title="' + esc(baseName(full)) + '" sandbox="allow-scripts" src="' + esc(v.url + '?t=' + encodeURIComponent(v.stamp)) + '"></iframe>');
+    } else if (kind === 'pdf') {
+      /* Pas de sandbox : le lecteur PDF intégré n'y fonctionne pas. */
+      h.push('<iframe class="cv-doc-frame" title="' + esc(baseName(full)) + '" src="' + esc(v.url + '?t=' + encodeURIComponent(v.stamp)) + '"></iframe>');
+    } else if (kind === 'binary') {
+      h.push('<div class="cv-doc-note"><p><strong>Ce document ne s’affiche pas ici</strong> (tableur, document Office, archive…).</p>'
+        + '<button type="button" class="cv-btn cv-btn-primary" data-act="cv-doc-app">Ouvrir avec l’application</button></div>');
+    } else if (kind === 'missing') {
+      h.push('<div class="cv-doc-note"><p><strong>Ce fichier n’existe plus.</strong></p><p>Il a été déplacé ou supprimé depuis que l’agent l’a montré.</p></div>');
+    } else if (kind === 'large') {
+      h.push('<div class="cv-doc-note"><p><strong>Fichier trop volumineux pour être affiché ici</strong> (' + esc(fmtSize(v.size)) + ').</p>'
+        + '<button type="button" class="cv-btn" data-act="cv-doc-code">Ouvrir dans VS Code</button></div>');
+    } else if (kind === 'error') {
+      h.push('<div class="cv-doc-note"><p><strong>Lecture impossible.</strong></p><p>' + esc(d.error) + '</p></div>');
+    } else {
+      h.push('<div class="cv-doc-note is-loading">Lecture…</div>');
+    }
+    h.push('</div></div>');
+    return h.join('');
+  }
+
+  /* Télécharger, Ouvrir, Dossier, VS Code, Supprimer (deux clics : la Corbeille). Rien tant que le fichier manque. */
+  function docActsHtml(d) {
+    var v = d.view;
+    if (!v || v.kind === 'missing') return '';
+    function btn(act, icon, tip, extra) {
+      return '<button type="button" class="cv-doc-act' + (extra || '') + '" data-act="' + act + '" title="' + esc(tip) + '" aria-label="' + esc(tip) + '">' + icon + '</button>';
+    }
+    return btn('cv-doc-save', ICON.download, 'Télécharger — en garder une copie (dossier Téléchargements)')
+      + btn('cv-doc-app', ICON.external, 'Ouvrir avec l’application associée')
+      + btn('cv-doc-folder', ICON.folder, 'Afficher dans l’Explorateur')
+      + btn('cv-doc-code', ICON.code, 'Ouvrir dans Visual Studio Code')
+      + (d.armed
+        ? '<button type="button" class="cv-doc-act is-armed" data-act="cv-doc-delete" title="Cliquer encore pour envoyer le fichier à la Corbeille">' + ICON.trash + '<span>Supprimer ?</span></button>'
+        : btn('cv-doc-delete', ICON.trash, 'Supprimer — le fichier part à la Corbeille'));
+  }
+
+  function renderDoc(inner, d) {
+    var v = d.view;
+    var kind = v ? v.kind : (d.error ? 'error' : 'loading');
+    var key = C.selected + '|' + d.path + '|' + kind;
+    if (pane.key !== key) {
+      inner.cvHtml = null;
+      inner.innerHTML = docShellHtml(d, kind);
+      pane.key = key; pane.stamp = null; pane.ready = false;
+      pane.frame = inner.querySelector('.cv-doc-frame');
+    } else {
+      setHtml(inner.querySelector('[data-role="cv-doc-acts"]'), docActsHtml(d));
+      var meta = inner.querySelector('[data-role="cv-doc-meta"]');
+      if (meta && meta.textContent !== docMeta(d)) meta.textContent = docMeta(d);
+    }
+    if (!v || pane.stamp === v.stamp) return;
+    var first = pane.stamp === null;
+    pane.stamp = v.stamp;
+    if (first) return; /* le cadre vient d'être construit ; le HTML part à son `ready` */
+    if (DOC_FRAMED[kind]) pushDocHtml(true);
+    else if ((kind === 'html' || kind === 'pdf') && pane.frame) pane.frame.src = v.url + '?t=' + encodeURIComponent(v.stamp);
+  }
+
+  function pushDocHtml(follow) {
+    var d = C.docs[C.selected];
+    if (!d || !d.view || !DOC_FRAMED[d.view.kind] || !pane.frame || !pane.ready) return;
+    try { pane.frame.contentWindow.postMessage({ type: 'html', html: d.view.html || '', follow: !!follow }, '*'); } catch (e) { /* cadre remplacé */ }
+  }
+
+  function onFrameMessage(e) {
+    if (!pane.frame || !e.source || e.source !== pane.frame.contentWindow) return;
+    var m = e.data || {};
+    if (m.type === 'ready') { pane.ready = true; pushDocHtml(false); }
+    else if (m.type === 'link') followDocLink(m.href);
+    else if (m.type === 'close') closeDoc();
+  }
+
+  /* Un lien du document : un autre fichier du dossier servi s'ouvre à sa place, une adresse externe dans le navigateur. */
+  function followDocLink(href) {
+    var d = C.docs[C.selected];
+    if (!d || !d.view) return;
+    href = String(href || '');
+    if (href.slice(0, REPORT_HOST.length).toLowerCase() === REPORT_HOST) {
+      var rel = href.slice(REPORT_HOST.length).split(/[?#]/)[0];
+      try { rel = decodeURIComponent(rel); } catch (e) { return; }
+      if (rel) openDoc(C.selected, String(d.view.root || '').replace(/[\\\/]+$/, '') + '\\' + rel.replace(/\//g, '\\'), d.cwd, '');
+      return;
+    }
+    if (/^(https?|mailto):/i.test(href)) bridge.call('openUrl', { url: href })['catch'](function (e) { toast(e.message); });
+  }
+
+  function docFull(d) { return d.view && d.view.full ? d.view.full : d.path; }
+
+  function saveDoc() {
+    var d = C.docs[C.selected];
+    if (!d) return;
+    bridge.call('saveFileAs', { path: docFull(d), cwd: d.cwd }, 3600000).then(function (r) {
+      if (r && r.saved) toast('Téléchargé : ' + r.saved);
+    })['catch'](function (e) { toast('Téléchargement impossible : ' + e.message); });
+  }
+
+  function openDocWith(editor) {
+    var d = C.docs[C.selected];
+    if (!d) return;
+    bridge.call('openPath', { path: docFull(d), cwd: d.cwd, editor: editor }).then(function (r) {
+      if (editor === 'vscode' && r && r.editor !== 'vscode') toast('Visual Studio Code est introuvable : le fichier est montré dans l’Explorateur.');
+    })['catch'](function (e) { toast('Ouverture impossible : ' + e.message); });
+  }
+
+  var armTimer = null;
+  function deleteDoc() {
+    var d = C.docs[C.selected];
+    if (!d) return;
+    clearTimeout(armTimer);
+    if (!d.armed) {
+      d.armed = true;
+      armTimer = setTimeout(function () { d.armed = false; renderPane(); }, ARM_MS);
+      renderPane();
+      return;
+    }
+    d.armed = false;
+    var id = C.selected, name = baseName(docFull(d));
+    bridge.call('recycleFile', { path: docFull(d), cwd: d.cwd }, 120000).then(function (r) {
+      if (!r || !r.removed) { renderPane(); return; }
+      if (C.docs[id] === d) delete C.docs[id];
+      toast('« ' + name + ' » est dans la Corbeille.');
+      renderPane();
+    })['catch'](function (e) { renderPane(); toast('Suppression impossible : ' + e.message); });
+  }
+
+  /* L'agent d'une session hébergée vient de montrer un document : il s'ouvre si l'on regarde cette
+     conversation ; sinon elle le signale (pastille), et il l'attend. */
+  function noteShown(id, doc) {
+    if (!doc || !doc.path) return;
+    var list = C.shownLocal[id] || (C.shownLocal[id] = []);
+    list.unshift(doc);
+    var c = convoById(id);
+    C.docs[id] = { path: doc.path, cwd: id === ASSISTANT_ID ? '' : (c && c.cwd) || '', title: doc.title || '', view: null, busy: false, error: '', armed: false };
+    if (id === C.selected) {
+      C.pane.open = true;
+      savePane();
+      renderPane();
+      renderHead();
+      return;
+    }
+    C.fresh[id] = true;
+    var who = id === ASSISTANT_ID ? 'L’assistant' : '« ' + (c ? convTitle(c) : 'Une conversation') + ' »';
+    toast(who + ' vous montre un document : ' + (doc.title || baseName(doc.path)));
+  }
+
+  /* Documents montrés : ceux que la fenêtre principale a notés, et ceux arrivés depuis, le plus récent d'abord. */
+  function shownOf(id) {
+    var c = convoById(id);
+    var all = (C.shownLocal[id] || []).concat(id === ASSISTANT_ID ? C.asShown : (c && Array.isArray(c.shown) ? c.shown : []));
+    var seen = {}, out = [];
+    all.slice().sort(function (a, b) { return toMs(b.at) - toMs(a.at); }).forEach(function (d) {
+      var k = String(d.path || '').toLowerCase();
+      if (!k || seen[k]) return;
+      seen[k] = true;
+      out.push(d);
+    });
+    return out;
+  }
+
+  /* ── Le résumé ── */
+
+  function isDocPath(p) { return !!DOC_EXT[extOf(p)]; }
+
+  function isScratchPath(path) {
+    var s = String(path || '').replace(/\//g, '\\').toLowerCase();
+    return /\$/.test(s) || /(^|\\)\.claude\\/.test(s) || /(^|\\)scratchpad\\/.test(s) || /(^|\\)(tmp|temp)\\/.test(s);
+  }
+
+  /* Comme la fenêtre principale (artifactEntries) : le rapport est le document que l'agent a cité
+     dans une réponse finale ; les autres documents sont de travail ; le reste, le code touché. */
+  function filesOf(c) {
+    var list = c && Array.isArray(c.artifacts) ? c.artifacts : [];
+    var legacy = !list.some(function (a) { return a && a.cited != null; });
+    var out = { reports: [], docs: [], code: [] };
+    list.forEach(function (a) {
+      if (!a || !a.path || a.action === 'deleted') return;
+      var doc = isDocPath(a.path);
+      var main = doc && !isScratchPath(a.path) && (legacy ? !a.agent : a.cited > 0);
+      (main ? out.reports : doc ? out.docs : out.code).push(a);
+    });
+    out.reports.sort(function (x, y) { return (Number(y.cited) || 0) - (Number(x.cited) || 0); });
+    return out;
+  }
+
+  /* La dernière réponse de l'agent, sans ses lignes d'outils : sa conclusion. */
+  function conclusionOf(id) {
+    var tr = C.transcripts[id];
+    var list = tr && tr.messages ? tr.messages : [];
+    for (var i = list.length - 1; i >= 0; i--) {
+      if (list[i].role !== 'assistant') continue;
+      var text = String(list[i].text || '').split('\n').filter(function (l) { return !/^\s*\[outil\s*:[^\]]*\]\s*$/.test(l); }).join('\n').trim();
+      if (text) return { text: text, ts: list[i].ts };
+    }
+    return null;
+  }
+
+  function fileRowHtml(path, cwd, title, sub) {
+    var name = title || baseName(path);
+    return '<button type="button" class="cv-sum-file" data-act="cv-open-file" data-path="' + esc(path) + '" data-cwd="' + esc(cwd || '') + '"'
+      + (title ? ' data-title="' + esc(title) + '"' : '') + ' title="' + esc(path) + '">'
+      + '<span class="cv-sum-ext">' + esc((extOf(path) || '·').slice(0, 4)) + '</span>'
+      + '<span class="cv-sum-file-text"><span class="cv-sum-file-name">' + esc(name) + '</span>'
+      + (sub ? '<span class="cv-sum-file-sub">' + esc(sub) + '</span>' : '') + '</span></button>';
+  }
+
+  /* Une liste de fichiers, repliée au-delà de quelques lignes. */
+  function fileListHtml(key, title, rows) {
+    if (!rows.length) return '';
+    var open = C.open[key];
+    var shown = open ? rows : rows.slice(0, SUM_ROWS);
+    return '<section class="cv-sum-sec"><h3>' + esc(title) + (rows.length > 1 ? ' <span class="cv-sum-n">' + rows.length + '</span>' : '') + '</h3>'
+      + '<div class="cv-sum-files">' + shown.join('') + '</div>'
+      + (rows.length > SUM_ROWS ? '<button type="button" class="cv-sum-more" data-act="cv-sum-more" data-k="' + esc(key) + '">'
+        + (open ? 'Replier ▴' : rows.length - SUM_ROWS + ' de plus ▾') + '</button>' : '')
+      + '</section>';
+  }
+
+  function money(v) { return '≈ ' + v.toFixed(v < 0.1 ? 3 : 2).replace('.', ',') + ' $'; }
+
+  function fmtTokens(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(1).replace('.', ',') + ' M';
+    if (n >= 1e3) return Math.round(n / 1e3) + ' k';
+    return String(n);
+  }
+
+  function factsHtml(rows) {
+    return '<section class="cv-sum-sec"><h3>Activité</h3><dl class="cv-sum-facts">' + rows.map(function (r) {
+      return '<dt>' + esc(r[0]) + '</dt><dd title="' + esc(r[1]) + '">' + esc(r[1]) + '</dd>';
+    }).join('') + '</dl></section>';
+  }
+
+  function summaryHtml(c) {
+    if (!c) return '<div class="cv-sum"><div class="cv-sum-empty">La conversation démarre…</div></div>';
+    var id = c.id;
+    var h = ['<div class="cv-sum">'];
+    var state = c.taskId === FEEDBACK_ID ? 'Carnet de remarques' : taskDone(c) ? 'Tâche validée' : taskDoing(c) ? 'Tâche en cours' : 'Tâche à faire';
+    h.push('<div class="cv-sum-head"><div class="cv-sum-kicker">Résumé</div><div class="cv-sum-title">' + esc(convTitle(c)) + '</div>'
+      + '<div class="cv-sum-state">' + esc(state) + '</div></div>');
+    var lv = C.live[id];
+    var end = conclusionOf(id);
+    var tr = C.transcripts[id];
+    var busy = lv && lv.busy;
+    h.push('<section class="cv-sum-sec"><h3>Conclusion de l’agent' + (end && end.ts ? ' <span class="cv-sum-n">' + esc(fmtTime(end.ts)) + '</span>' : '') + '</h3>');
+    if (busy) h.push('<div class="cv-sum-live"><i></i>L’agent répond : sa conclusion se mettra à jour à la fin.</div>');
+    if (end) {
+      var key = 'sum:' + id;
+      var long = end.text.length > FOLD_CHARS || end.text.split('\n').length > FOLD_LINES;
+      var folded = long && !C.open[key];
+      h.push('<div class="cv-sum-said md' + (folded ? ' is-folded' : '') + '">' + MD.blocks(end.text) + '</div>'
+        + (long ? '<button type="button" class="cv-sum-more" data-act="cv-sum-more" data-k="' + esc(key) + '">' + (folded ? 'Afficher tout ▾' : 'Replier ▴') + '</button>' : ''));
+    } else if (!busy) {
+      h.push('<div class="cv-sum-empty">' + (tr && tr.messages === null && tr.loading ? 'Lecture de la conversation…' : 'Pas encore de réponse de l’agent.') + '</div>');
+    }
+    h.push('</section>');
+    var shown = shownOf(id);
+    h.push(fileListHtml('sum-shown:' + id, 'Documents montrés', shown.map(function (d) {
+      return fileRowHtml(d.path, c.cwd, d.title, (d.title ? baseName(d.path) + ' · ' : '') + fmtTime(d.at));
+    })));
+    var f = filesOf(c);
+    function rows(list) { return list.map(function (a) { return fileRowHtml(a.path, c.cwd, '', folderOf(a.path) || ''); }); }
+    h.push(fileListHtml('sum-rep:' + id, f.reports.length > 1 ? 'Rapports' : 'Rapport', rows(f.reports)));
+    h.push(fileListHtml('sum-doc:' + id, 'Documents de travail', rows(f.docs)));
+    h.push(fileListHtml('sum-code:' + id, 'Fichiers modifiés', rows(f.code)));
+    var a = C.sessions[id];
+    var facts = [];
+    var count = (a && a.messageCount) || c.messageCount;
+    if (count) facts.push(['Messages', String(count)]);
+    if (c.created) facts.push(['Commencée', fmtTime(c.created)]);
+    if (updatedOf(c)) facts.push(['Dernière activité', fmtTime(updatedOf(c))]);
+    var u = c.usage;
+    if (u && u.cost) facts.push(['Coût estimé', money(u.cost)]);
+    var tokens = u ? (u.input || 0) + (u.output || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0) : 0;
+    if (tokens) facts.push(['Jetons', fmtTokens(tokens)]);
+    if (u && u.premium) facts.push(['Requêtes premium', String(u.premium)]);
+    facts.push(['Agent', agentTag(c)]);
+    if (c.cwd) facts.push(['Dossier', c.cwd]);
+    h.push(factsHtml(facts));
+    if (!shown.length && providerOf(c) === 'claude' && !inConsole(c)) {
+      h.push('<div class="cv-sum-hint">Quand l’agent veut vous montrer un document — un rapport, un plan, une capture —, il s’ouvre ici. Vous pouvez aussi le lui demander.</div>');
+    }
+    h.push('</div>');
+    return h.join('');
+  }
+
+  function asSummaryHtml() {
+    var sm = C.as.summary;
+    var h = ['<div class="cv-sum">'];
+    h.push('<div class="cv-sum-head"><div class="cv-sum-kicker">Résumé</div><div class="cv-sum-title">' + badge('as') + 'Assistant</div>'
+      + '<div class="cv-sum-state">Agit sur la file d’Organizator</div></div>');
+    var shown = shownOf(ASSISTANT_ID);
+    h.push(fileListHtml('sum-shown:as', 'Documents montrés', shown.map(function (d) {
+      return fileRowHtml(d.path, '', d.title, (d.title ? baseName(d.path) + ' · ' : '') + fmtTime(d.at));
+    })));
+    var facts = [];
+    if (sm) {
+      if (sm.count) facts.push(['Messages', String(sm.count)]);
+      if (sm.pending) facts.push(['À valider', sm.pending > 1 ? sm.pending + ' propositions' : 'une proposition']);
+      if (sm.at) facts.push(['Dernière activité', fmtTime(sm.at)]);
+      facts.push(['Modèle', sm.model]);
+    }
+    if (facts.length) h.push(factsHtml(facts));
+    if (!shown.length) h.push('<div class="cv-sum-hint">Demandez-lui de vous montrer un rapport, la consigne d’un mot-clé écrite sur le disque, un document cité : il s’ouvrira ici.</div>');
+    h.push('</div>');
+    return h.join('');
+  }
+
+  function togglePane() {
+    if (paneShown()) { C.pane.open = false; savePane(); renderPane(); renderHead(); return; }
+    C.pane.open = true;
+    savePane();
+    if (!paneShown()) toast('La fenêtre est trop étroite pour le panneau : élargissez-la.');
+    renderPane();
+    renderHead();
+  }
+
+  function paneButtonHtml() {
+    var on = paneShown();
+    return '<button type="button" class="cv-icon-btn' + (on ? ' on' : '') + '" data-act="cv-pane" aria-pressed="' + on + '"'
+      + ' title="' + (on ? 'Masquer le panneau de droite' : 'Afficher le panneau de droite : le résumé de la conversation, les documents que l’agent montre') + '">' + ICON.pane + '</button>';
+  }
+
+  /* La poignée à gauche du panneau : il s'élargit vers la conversation. */
+  function startResize(e) {
+    e.preventDefault();
+    var root = $('#cv');
+    var startX = e.clientX, startW = paneWidth();
+    document.body.classList.add('cv-resizing');
+    function move(ev) {
+      C.pane.width = Math.max(PANE_MIN, Math.min(startW + (startX - ev.clientX), Math.max(PANE_MIN, paneRoom())));
+      root.style.setProperty('--cv-pane-w', C.pane.width + 'px');
+    }
+    function up() {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      document.body.classList.remove('cv-resizing');
+      savePane();
+    }
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  }
+
+  /* ══ Pièces jointes ═══════════════════════════════════════════════════
+     Images et fichiers joints à un message : collés (une capture), déposés ou choisis. L'hôte les copie
+     sous le dossier des pièces jointes de la tâche (comme celles de la fenêtre principale), le message
+     les cite par leur chemin, et Claude reçoit en plus les images dans le message (liveSend `images`) :
+     il les voit comme une capture collée dans son terminal. */
+
+  var ATTACH_DATA_MAX = 40 * 1024 * 1024;
+  var ATTACH_SKIP = {
+    folder: 'un dossier ne se joint pas, joignez ses fichiers', missing: 'introuvable',
+    'too-large': 'trop volumineux', error: 'copie impossible'
+  };
+  var ATTACH_HEAD = 'Pièces jointes :';
+  var ATTACH_LINE = /^- (.+?)( \(image\))? : (\S.*)$/;
+  var ATTACH_OPEN = 'Ouvre ces fichiers : ils font partie du message (ton outil de lecture ouvre aussi les images et les PDF).';
+
+  /* Le dossier des pièces jointes : celui de la tâche, le carnet compris ; l'assistant a le sien. */
+  function attachOwner(id) {
+    if (id === ASSISTANT_ID) return ASSISTANT_ID;
+    var c = convoById(id);
+    return c && !inConsole(c) ? c.taskId : null;
+  }
+
+  function attachBusy(id, delta) {
+    C.attachBusy[id] = Math.max(0, (C.attachBusy[id] || 0) + delta);
+    if (!C.attachBusy[id]) delete C.attachBusy[id];
+  }
+
+  function receiveAttachments(id, r) {
+    var list = C.attach[id] || (C.attach[id] = []);
+    ((r && r.attachments) || []).forEach(function (a) {
+      if (a && a.path) list.push({ name: String(a.name || baseName(a.path)), kind: a.kind === 'image' ? 'image' : 'file', path: String(a.path) });
+    });
+    var skipped = (r && r.skipped) || [];
+    if (skipped.length) toast(skipped.map(function (s) { return '« ' + s.name + ' » : ' + (ATTACH_SKIP[s.reason] || s.reason); }).join(' · '));
+  }
+
+  function readBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { var s = String(fr.result || ''); resolve(s.slice(s.indexOf(',') + 1)); };
+      fr.onerror = function () { reject(fr.error || new Error('lecture impossible')); };
+      fr.readAsDataURL(file);
+    });
+  }
+
+  /* Ce qui n'a pas de chemin (une capture dans le presse-papiers) part par son contenu. */
+  function pasteFiles(id, owner, files) {
+    return files.reduce(function (p, f) {
+      return p.then(function () {
+        if (f.size > ATTACH_DATA_MAX) { toast('« ' + f.name + ' » : trop volumineux pour être collé'); return null; }
+        return readBase64(f).then(function (data) {
+          return bridge.call('pasteAttachment', { taskId: owner, name: f.name || 'capture.png', data: data }, 120000);
+        }).then(function (r) { receiveAttachments(id, r); });
+      });
+    }, Promise.resolve());
+  }
+
+  function attachFiles(fileList) {
+    var id = C.selected, owner = attachOwner(id);
+    var files = Array.prototype.slice.call(fileList || []);
+    if (!owner || !files.length) return;
+    attachBusy(id, 1);
+    renderCompose();
+    bridge.call('addAttachments', { taskId: owner, names: files.map(function (f) { return f.name; }) }, 300000, files)
+      .then(function (r) {
+        receiveAttachments(id, r);
+        var rest = ((r && r.unresolved) || []).map(function (i) { return files[i]; }).filter(Boolean);
+        return rest.length ? pasteFiles(id, owner, rest) : null;
+      }, function (e) {
+        /* Message non parti (WebView2 sans transport de fichiers) : le contenu fait l'affaire. */
+        if (!e || !e.notSent) throw e;
+        return pasteFiles(id, owner, files);
+      })
+      .then(function () { attachBusy(id, -1); renderCompose(); }, function (e) {
+        attachBusy(id, -1);
+        renderCompose();
+        toast('Pièce jointe impossible : ' + e.message);
+      });
+  }
+
+  /* Le bouton trombone : le sélecteur de Windows, sur cette fenêtre. */
+  function pickAttachments() {
+    var id = C.selected, owner = attachOwner(id);
+    if (!owner) return;
+    attachBusy(id, 1);
+    renderCompose();
+    bridge.call('addAttachments', { taskId: owner, pick: true }, 600000).then(function (r) {
+      attachBusy(id, -1);
+      if (!(r && r.cancelled)) receiveAttachments(id, r);
+      renderCompose();
+      var box = $('[data-role="cv-input"]');
+      if (box) box.focus();
+    }, function (e) {
+      attachBusy(id, -1);
+      renderCompose();
+      toast('Pièce jointe impossible : ' + e.message);
+    });
+  }
+
+  function removePending(i) {
+    var list = C.attach[C.selected] || [];
+    var a = list[i];
+    if (!a) return;
+    list.splice(i, 1);
+    /* La copie n'a encore servi à rien : elle s'efface (jamais l'original). */
+    bridge.call('removeAttachment', { path: a.path })['catch'](function () { /* déjà partie */ });
+    renderCompose();
+  }
+
+  /* Ce que le message dit de ses pièces jointes, comme le premier message d'une tâche (attachmentsPrompt). */
+  function attachTrailer(list, provider) {
+    if (!list.length) return '';
+    var lines = ['', '', ATTACH_HEAD].concat(list.map(function (a) { return '- ' + a.name + (a.kind === 'image' ? ' (image)' : '') + ' : ' + a.path; }));
+    if (provider === 'copilot' || list.some(function (a) { return a.kind !== 'image'; })) lines.push(ATTACH_OPEN);
+    return lines.join('\n');
+  }
+
+  /* L'inverse, pour l'affichage : un message qui finit par ses pièces jointes les montre en vignettes. */
+  function splitAttachments(text) {
+    text = String(text || '');
+    var lines = text.split('\n');
+    var at = -1;
+    for (var i = lines.length - 1; i >= 0; i--) if (lines[i].trim() === ATTACH_HEAD) { at = i; break; }
+    if (at < 0) return { text: text, files: [] };
+    var files = [];
+    for (var j = at + 1; j < lines.length; j++) {
+      var l = lines[j].trim();
+      var m = ATTACH_LINE.exec(l);
+      if (m) { files.push({ name: m[1], kind: m[2] ? 'image' : 'file', path: m[3].trim() }); continue; }
+      if (!l || l === ATTACH_OPEN) continue;
+      return { text: text, files: [] };
+    }
+    if (!files.length) return { text: text, files: [] };
+    return { text: lines.slice(0, at).join('\n').replace(/\s+$/, ''), files: files };
+  }
+
+  function attachUrl(path) {
+    var base = String(C.env.attachmentsUrl || ''), dir = String(C.env.attachmentsDir || '').replace(/[\\\/]+$/, '');
+    var p = String(path || '');
+    if (!base || !dir || p.toLowerCase().indexOf(dir.toLowerCase() + '\\') !== 0) return '';
+    return base + p.slice(dir.length + 1).split(/[\\\/]/).map(encodeURIComponent).join('/');
+  }
+
+  /* Les pièces jointes d'un message, sous sa bulle : les images en vignettes, les autres en pastilles ;
+     un clic les ouvre dans le panneau de droite. */
+  function filesHtml(files) {
+    if (!files.length) return '';
+    return '<div class="cv-files">' + files.map(function (f) {
+      var url = f.kind === 'image' ? attachUrl(f.path) : '';
+      return '<button type="button" class="cv-file' + (url ? ' is-img' : '') + '" data-act="cv-open-file" data-path="' + esc(f.path) + '" title="' + esc(f.path) + '">'
+        + (url ? '<img src="' + esc(url) + '" alt="' + esc(f.name) + '" loading="lazy">' : '<span class="cv-file-ext">' + esc((extOf(f.name) || 'fichier').slice(0, 4)) + '</span><span class="cv-file-name">' + esc(f.name) + '</span>')
+        + '</button>';
+    }).join('') + '</div>';
+  }
+
+  function pendingHtml(id) {
+    var list = C.attach[id] || [];
+    var busy = C.attachBusy[id];
+    if (!list.length && !busy) return '';
+    return list.map(function (a, i) {
+      var url = a.kind === 'image' ? attachUrl(a.path) : '';
+      return '<span class="cv-att' + (url ? ' is-img' : '') + '" title="' + esc(a.path) + '">'
+        + (url ? '<img src="' + esc(url) + '" alt="">' : '<span class="cv-file-ext">' + esc((extOf(a.name) || 'fichier').slice(0, 4)) + '</span>')
+        + '<span class="cv-att-name">' + esc(a.name) + '</span>'
+        + '<button type="button" class="cv-att-x" data-act="cv-attach-x" data-i="' + i + '" title="Retirer" aria-label="Retirer ' + esc(a.name) + '">×</button></span>';
+    }).join('') + (busy ? '<span class="cv-att is-busy"><span class="cv-spin"></span><span class="cv-att-name">Copie…</span></span>' : '');
+  }
+
+  function hasFiles(e) {
+    var types = e.dataTransfer && e.dataTransfer.types;
+    return !!types && Array.prototype.indexOf.call(types, 'Files') >= 0;
+  }
+
+  /* ══ Dictée ═══════════════════════════════════════════════════════════
+     La même chaîne que la fenêtre principale (app.js) : le micro, MediaRecorder, un WAV 16 kHz mono,
+     puis Whisper sur ce poste (transcribe) ; le texte s'insère là où était le curseur. Le micro du
+     pied de la zone de saisie, ou Ctrl + Maj + Espace ; Échap annule. */
+
+  var DICTATE_MAX_MS = 10 * 60 * 1000;
+  var WHISPER_PHASES = { queue: 'En attente…', decode: 'Lecture…', load: 'Chargement du modèle…' };
+  /* Dictée en cours : { key (la conversation), phase: starting | recording | transcribing, job, selStart,
+     selEnd, startedAt, chunks, recorder, stream, ctx, analyser, wave, level, timer, progress, cancelled }. */
+  var dict = null;
+
+  function whisperOn() { return C.settings.whisperEnabled !== false; }
+
+  function whisperLabel(p) {
+    if (!p || !p.phase) return 'Transcription…';
+    if (p.phase === 'download') return 'Téléchargement du modèle' + (p.total ? ' · ' + Math.floor(100 * (p.received || 0) / p.total) + ' %' : '…');
+    if (p.phase === 'transcribe') return 'Transcription' + (p.percent ? ' · ' + p.percent + ' %' : '…');
+    return WHISPER_PHASES[p.phase] || 'Transcription…';
+  }
+
+  function micError(e) {
+    var n = e && e.name;
+    if (n === 'NotAllowedError' || n === 'SecurityError') return 'accès refusé (Paramètres Windows › Confidentialité › Microphone).';
+    if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'aucun micro trouvé.';
+    if (n === 'NotReadableError') return 'le micro est déjà pris par une autre application.';
+    return (e && e.message) || String(e);
+  }
+
+  function dictToolsHtml() {
+    if (dict.phase === 'transcribing') {
+      return '<span class="cv-dict is-busy"><span class="cv-spin"></span><span class="cv-dict-label">' + esc(whisperLabel(dict.progress)) + '</span>'
+        + '<button type="button" class="cv-tool" data-act="cv-mic-cancel" title="Abandonner (Échap)" aria-label="Abandonner la dictée">×</button></span>';
+    }
+    return '<span class="cv-dict is-rec"><span class="cv-dict-dot"></span><span class="cv-dict-time" data-role="cv-dict-time">0:00</span>'
+      + '<span class="cv-dict-level"><i data-role="cv-dict-level"></i></span>'
+      + '<button type="button" class="cv-tool cv-dict-ok" data-act="cv-mic-stop" title="Terminer et transcrire (Ctrl + Maj + Espace)" aria-label="Terminer et transcrire">' + ICON.check + '</button>'
+      + '<button type="button" class="cv-tool" data-act="cv-mic-cancel" title="Annuler (Échap)" aria-label="Annuler la dictée">×</button></span>';
+  }
+
+  function startDictation() {
+    var box = $('[data-role="cv-input"]');
+    if (dict || !box || !C.selected || !whisperOn()) return;
+    var md = navigator.mediaDevices;
+    if (!md || !md.getUserMedia || typeof MediaRecorder === 'undefined') { toast('Dictée impossible : pas d’accès au micro dans cette fenêtre.'); return; }
+    var d = dict = {
+      key: C.selected, phase: 'starting', job: 'dj' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      selStart: box.selectionStart, selEnd: box.selectionEnd, chunks: [], startedAt: Date.now(), level: 0
+    };
+    /* Le modèle se télécharge (premier usage) ou se charge pendant qu'on parle. */
+    bridge.call('whisperWarm', { model: C.settings.whisperModel, local: true })['catch'](function () { /* redit à la transcription */ });
+    renderCompose();
+    md.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(function (stream) {
+      if (dict !== d) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+      d.stream = stream;
+      d.recorder = new MediaRecorder(stream);
+      d.recorder.ondataavailable = function (ev) { if (ev.data && ev.data.size) d.chunks.push(ev.data); };
+      d.recorder.onstop = function () { recordingStopped(d); };
+      d.recorder.start(1000);
+      try {
+        d.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        d.analyser = d.ctx.createAnalyser();
+        d.analyser.fftSize = 1024;
+        d.ctx.createMediaStreamSource(stream).connect(d.analyser);
+        d.wave = new Float32Array(d.analyser.fftSize);
+      } catch (err) { d.analyser = null; }
+      d.phase = 'recording';
+      d.startedAt = Date.now();
+      d.timer = setInterval(function () { tickDictation(d); }, 100);
+      renderCompose();
+    })['catch'](function (e) {
+      if (dict !== d) return;
+      endDictation(d);
+      toast('Micro indisponible : ' + micError(e));
+    });
+  }
+
+  /* Chrono et niveau du micro, réécrits sur place : on voit que le son passe. */
+  function tickDictation(d) {
+    if (dict !== d || d.phase !== 'recording') return;
+    var ms = Date.now() - d.startedAt;
+    if (ms >= DICTATE_MAX_MS) { stopDictation(); toast('Dictée arrêtée au bout de dix minutes.'); return; }
+    if (d.analyser) {
+      d.analyser.getFloatTimeDomainData(d.wave);
+      var sum = 0;
+      for (var i = 0; i < d.wave.length; i++) sum += d.wave[i] * d.wave[i];
+      d.level = Math.max(Math.min(1, Math.sqrt(sum / d.wave.length) * 5), d.level * 0.8);
+    }
+    var t = $('[data-role="cv-dict-time"]');
+    if (t) { var s = Math.floor(ms / 1000); t.textContent = Math.floor(s / 60) + ':' + (s % 60 < 10 ? '0' : '') + (s % 60); }
+    var bar = $('[data-role="cv-dict-level"]');
+    if (bar) bar.style.transform = 'scaleX(' + Math.max(0.04, d.level).toFixed(3) + ')';
+  }
+
+  function releaseMic(d) {
+    if (d.timer) { clearInterval(d.timer); d.timer = null; }
+    if (d.stream) { d.stream.getTracks().forEach(function (t) { t.stop(); }); d.stream = null; }
+    if (d.ctx) { try { d.ctx.close(); } catch (e) { /* déjà fermé */ } d.ctx = null; }
+  }
+
+  function stopDictation() {
+    var d = dict;
+    if (!d) return;
+    if (d.phase === 'starting') { cancelDictation(); return; }
+    if (d.phase !== 'recording') return;
+    d.phase = 'transcribing';
+    d.progress = null;
+    renderCompose();
+    /* stop() rend les derniers morceaux puis appelle onstop : la suite est dans recordingStopped. */
+    try { d.recorder.stop(); } catch (e) { recordingStopped(d); }
+    releaseMic(d);
+  }
+
+  function cancelDictation() {
+    var d = dict;
+    if (!d) return;
+    d.cancelled = true;
+    if (d.phase === 'transcribing') bridge.call('cancelTranscribe', { job: d.job, local: true })['catch'](function () { /* déjà finie */ });
+    if (d.recorder && d.recorder.state !== 'inactive') { try { d.recorder.stop(); } catch (e) { /* déjà arrêté */ } }
+    endDictation(d);
+  }
+
+  function endDictation(d) {
+    releaseMic(d);
+    if (dict === d) dict = null;
+    renderCompose();
+  }
+
+  function recordingStopped(d) {
+    if (d.cancelled || dict !== d) return;
+    var blob = new Blob(d.chunks, { type: (d.recorder && d.recorder.mimeType) || 'audio/webm' });
+    d.chunks = [];
+    if (!blob.size || Date.now() - d.startedAt < 400) { endDictation(d); toast('Rien d’enregistré.'); return; }
+    wav16k(blob).then(readBase64).then(function (data) {
+      if (d.cancelled) return null;
+      return bridge.call('transcribe', { job: d.job, local: true, data: data, model: C.settings.whisperModel, language: C.settings.whisperLanguage }, 3600000);
+    }).then(function (r) {
+      if (r && !d.cancelled) insertDictation(d, r.text);
+    }, function (e) {
+      if (!d.cancelled) toast('Dictée impossible : ' + e.message);
+    }).then(function () { endDictation(d); });
+  }
+
+  /* Ce que MediaRecorder rend (webm/opus) devient ce que Whisper lit : WAV 16 kHz mono 16 bits. */
+  function wav16k(blob) {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    var OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (!AC || !OAC) return Promise.reject(new Error('décodage audio indisponible dans cette fenêtre'));
+    return blob.arrayBuffer().then(function (buf) {
+      var ctx = new AC();
+      return ctx.decodeAudioData(buf).then(function (audio) { ctx.close(); return audio; },
+        function () { ctx.close(); throw new Error('enregistrement illisible'); });
+    }).then(function (audio) {
+      var off = new OAC(1, Math.max(1, Math.ceil(audio.duration * 16000)), 16000);
+      var src = off.createBufferSource();
+      src.buffer = audio;
+      src.connect(off.destination);
+      src.start();
+      return off.startRendering();
+    }).then(function (rendered) { return wavBlob(rendered.getChannelData(0), 16000); });
+  }
+
+  function wavBlob(samples, rate) {
+    var n = samples.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+    function str(o, s) { for (var i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); }
+    str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true);
+    v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    str(36, 'data'); v.setUint32(40, n * 2, true);
+    for (var i = 0, o = 44; i < n; i++, o += 2) {
+      var s = Math.max(-1, Math.min(1, samples[i]));
+      v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return new Blob([buf], { type: 'audio/wav' });
+  }
+
+  /* Au curseur — là où il était au départ —, avec les espaces qu'il faut de part et d'autre, et une
+     majuscule en début de phrase. La conversation quittée entre-temps reçoit le texte dans son brouillon. */
+  function insertDictation(d, text) {
+    text = String(text || '').trim();
+    if (!text) { toast('Aucune parole reconnue.'); return; }
+    var box = $('[data-role="cv-input"]');
+    var here = box && box.getAttribute('data-for') === d.key;
+    var v = here ? box.value : (C.drafts[d.key] || '');
+    var focused = here && document.activeElement === box;
+    var s = Math.min(focused ? box.selectionStart : (d.selStart == null ? v.length : d.selStart), v.length);
+    var e = Math.max(s, Math.min(focused ? box.selectionEnd : (d.selEnd == null ? s : d.selEnd), v.length));
+    var before = v.slice(0, s), after = v.slice(e);
+    if (!before.trim() || /[.!?…:]\s*$|\n\s*$/.test(before)) text = text.charAt(0).toUpperCase() + text.slice(1);
+    if (before && !/\s$/.test(before)) text = ' ' + text;
+    if (after && !/^\s/.test(after)) text += ' ';
+    var value = before + text + after;
+    C.drafts[d.key] = value;
+    if (!here) { toast('Dictée ajoutée au brouillon de la conversation quittée.'); return; }
+    box.value = value;
+    fit(box);
+    box.focus();
+    try { box.setSelectionRange(s + text.length, s + text.length); } catch (x) { /* champ non textuel */ }
+  }
+
+  function onWhisper(p) {
+    if (!dict || !p) return;
+    if (p.job === dict.job || (!p.job && p.phase === 'download' && dict.progress && dict.progress.phase === 'download')) {
+      dict.progress = p;
+      if (dict.phase === 'transcribing') renderCompose();
+    }
   }
 
   /* ══ Événements ══════════════════════════════════════════════════════ */
@@ -1266,6 +2273,24 @@
       }
       renderThread();
     },
+    'cv-pane': togglePane,
+    'cv-doc-close': closeDoc,
+    'cv-doc-save': saveDoc,
+    'cv-doc-app': function () { openDocWith('default'); },
+    'cv-doc-folder': function () { openDocWith(''); },
+    'cv-doc-code': function () { openDocWith('vscode'); },
+    'cv-doc-delete': deleteDoc,
+    'cv-open-file': function (el) {
+      var c = convoById(C.selected);
+      var cwd = el.hasAttribute('data-cwd') ? el.getAttribute('data-cwd') : (c && c.cwd) || '';
+      openDoc(C.selected, el.getAttribute('data-path'), cwd, el.getAttribute('data-title') || '');
+    },
+    'cv-sum-more': function (el) { var k = el.getAttribute('data-k'); C.open[k] = !C.open[k]; renderPane(); },
+    'cv-attach-pick': pickAttachments,
+    'cv-attach-x': function (el) { removePending(parseInt(el.getAttribute('data-i'), 10)); },
+    'cv-mic': startDictation,
+    'cv-mic-stop': stopDictation,
+    'cv-mic-cancel': cancelDictation,
     'cv-answer': function () { answer('ask'); },
     'cv-plan-yes': function () { answer('approve'); },
     'cv-plan-no': function () { answer('refuse'); },
@@ -1306,6 +2331,13 @@
   document.addEventListener('keydown', function (e) {
     var t = e.target;
     var role = t && t.getAttribute && t.getAttribute('data-role');
+    /* Ctrl + Maj + Espace démarre et termine la dictée ; Échap l'annule, avant d'arrêter l'agent. */
+    if ((e.code === 'Space' || e.key === ' ') && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      if (dict) { if (dict.phase !== 'transcribing') stopDictation(); } else if (whisperOn() && $('[data-role="cv-input"]')) startDictation();
+      return;
+    }
+    if (e.key === 'Escape' && dict) { e.preventDefault(); cancelDictation(); return; }
     if (role === 'cv-input' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); return; }
     if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'f' || e.key === 'F' || e.key === 'k' || e.key === 'K')) {
       var search = $('[data-role="cv-search"]');
@@ -1330,6 +2362,55 @@
     }
   });
 
+  /* Une capture collée devient une pièce jointe ; du texte copié depuis Word ou Excel, qui arrive
+     aussi en image, se colle en texte. */
+  document.addEventListener('paste', function (e) {
+    var el = e.target;
+    var dt = e.clipboardData;
+    if (!el || !el.getAttribute || el.getAttribute('data-role') !== 'cv-input' || !dt || !dt.files || !dt.files.length) return;
+    var files = Array.prototype.slice.call(dt.files);
+    var text = dt.getData ? dt.getData('text/plain') : '';
+    if (text && text.trim() && files.every(function (f) { return /^image\//.test(f.type); })) return;
+    e.preventDefault();
+    attachFiles(files);
+  });
+
+  /* Des fichiers déposés sur la conversation s'y joignent ; ailleurs le dépôt est refusé (WebView2
+     ouvrirait sinon le fichier à la place de la page). */
+  function dropTarget(target) {
+    var main = target && target.closest ? target.closest('#cv-main') : null;
+    return main && attachOwner(C.selected) ? main : null;
+  }
+
+  document.addEventListener('dragover', function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    var main = dropTarget(e.target);
+    e.dataTransfer.dropEffect = main ? 'copy' : 'none';
+    var m = $('#cv-main');
+    if (m) m.classList.toggle('is-drop', !!main);
+  });
+
+  document.addEventListener('dragleave', function (e) {
+    if (!e.relatedTarget) { var m = $('#cv-main'); if (m) m.classList.remove('is-drop'); }
+  });
+
+  document.addEventListener('drop', function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    var m = $('#cv-main');
+    if (m) m.classList.remove('is-drop');
+    if (dropTarget(e.target)) attachFiles(e.dataTransfer.files);
+  });
+
+  document.addEventListener('mousedown', function (e) {
+    var g = e.target && e.target.closest ? e.target.closest('[data-role="cv-grip"]') : null;
+    if (g && e.button === 0) startResize(e);
+  });
+
+  window.addEventListener('message', onFrameMessage);
+  window.addEventListener('resize', function () { renderPane(); renderHead(); });
+  bridge.on('whisper', onWhisper);
   bridge.on('live', onLive);
   bridge.on('sessionsChanged', refreshSessions);
   bridge.on('dataChanged', reloadData);
@@ -1346,7 +2427,10 @@
     if (!C.as.summary) asking('sync')['catch'](function () { /* la fenêtre principale n'est pas prête */ });
   }, 15000);
 
-  window.__conversations = { state: C, select: select, send: send, onLive: onLive, onAsView: onAsView, placeOf: placeOf, convTitle: convTitle };
+  window.__conversations = {
+    state: C, select: select, send: send, onLive: onLive, onAsView: onAsView, placeOf: placeOf, convTitle: convTitle,
+    openDoc: openDoc, splitAttachments: splitAttachments, attachFiles: attachFiles, pane: pane
+  };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load);
   else load();

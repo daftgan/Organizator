@@ -67,7 +67,8 @@ public sealed class LiveSessions : IDisposable
     /// <c>text</c> (<c>msg</c>, <c>text</c> complet du message jusque-la), <c>tool</c> (<c>id</c>, <c>name</c>,
     /// <c>detail</c>, <c>status</c> running | done | error), <c>question</c> (<c>request</c>, <c>kind</c> ask |
     /// plan, <c>questions</c> ou <c>plan</c>), <c>done</c> (<c>cost</c>, <c>ms</c>, <c>cancelled</c>),
-    /// <c>error</c> (<c>error</c>), <c>notice</c> (<c>text</c>).
+    /// <c>error</c> (<c>error</c>), <c>notice</c> (<c>text</c>), <c>show</c> (<c>path</c> complet, <c>title</c>,
+    /// <c>at</c> : l'agent montre un document a l'utilisateur, outil <c>show_document</c>).
     /// </summary>
     public event Action<JsonObject>? Progress;
 
@@ -126,8 +127,10 @@ public sealed class LiveSessions : IDisposable
     }
 
     /// <summary>
-    /// Message de l'utilisateur : <c>{ sessionId, text, provider, cwd, title, model, effort }</c> — les
-    /// parametres servent a reprendre une session que l'hote ne connaissait pas encore. Rend <c>{ sent }</c>.
+    /// Message de l'utilisateur : <c>{ sessionId, text, images, provider, cwd, title, model, effort }</c> —
+    /// les parametres servent a reprendre une session que l'hote ne connaissait pas encore. <c>images</c> :
+    /// chemins complets d'images jointes (verifies par le pont), que Claude recoit dans le message ; le texte
+    /// les cite deja, c'est ce que lit Copilot. Rend <c>{ sent }</c>.
     /// </summary>
     public JsonObject Send(JsonObject payload)
     {
@@ -142,8 +145,20 @@ public sealed class LiveSessions : IDisposable
             throw new InvalidOperationException("Message trop long.");
         }
 
+        var images = new List<string>();
+        if (payload["images"] is JsonArray list)
+        {
+            foreach (var node in list)
+            {
+                if (node is JsonValue value && value.TryGetValue<string>(out var path) && path.Length > 0)
+                {
+                    images.Add(path);
+                }
+            }
+        }
+
         var session = SessionFor(payload);
-        session.Send(text);
+        session.Send(text, images);
         return new JsonObject { ["sent"] = true };
     }
 
@@ -398,7 +413,7 @@ public sealed class LiveSessions : IDisposable
         }
 
         public abstract Task<string> StartAsync(string prompt);
-        public abstract void Send(string text);
+        public abstract void Send(string text, IReadOnlyList<string> images);
         public abstract bool Interrupt();
         public abstract bool Answer(JsonObject payload);
 
@@ -749,6 +764,7 @@ public sealed class LiveSessions : IDisposable
         private string? _writing;
         private int _messages;
         private string? _startPrompt;
+        private readonly List<string> _startImages = new();
 
         /// <summary>Requetes <c>can_use_tool</c> en attente d'une reponse de l'utilisateur : id → saisie de l'outil.</summary>
         private readonly Dictionary<string, JsonObject> _asks = new(StringComparer.Ordinal);
@@ -756,6 +772,50 @@ public sealed class LiveSessions : IDisposable
         public ClaudeLive(LiveSessions owner, string id, LiveLaunch launch, bool existing)
             : base(owner, id, launch, existing)
         {
+        }
+
+        /// <summary>Le serveur MCP d'Organizator : ses outils s'appellent <c>mcp__organizator__&lt;nom&gt;</c> cote Claude.</summary>
+        private const string McpServer = "organizator";
+        private const string ShowTool = "show_document";
+
+        private static readonly string McpConfig = new JsonObject
+        {
+            ["mcpServers"] = new JsonObject
+            {
+                [McpServer] = new JsonObject { ["type"] = "sdk", ["name"] = McpServer },
+            },
+        }.ToJsonString();
+
+        private static JsonObject ShowToolDefinition() => new()
+        {
+            ["name"] = ShowTool,
+            ["description"] = "Montre un fichier à l'utilisateur dans le panneau de droite de la fenêtre Conversations d'Organizator, à côté de cette conversation : "
+                + "Markdown, PDF, image, page HTML, CSV, texte. Il peut l'y lire, le télécharger ou le supprimer. Sers-t'en pour lui présenter un livrable "
+                + "(rapport, plan, note, schéma, capture) plutôt que d'en recopier le contenu dans ta réponse. Un fichier déjà écrit sur le disque, un à la fois.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Chemin du fichier, absolu ou relatif au dossier de travail." },
+                    ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Titre court à afficher (facultatif)." },
+                },
+                ["required"] = new JsonArray("path"),
+            },
+        };
+
+        private static JsonObject Rpc(JsonNode? id, JsonObject result)
+            => new() { ["jsonrpc"] = "2.0", ["id"] = id, ["result"] = result };
+
+        private static JsonObject ToolResult(JsonNode? id, bool ok, string text)
+        {
+            var result = new JsonObject { ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }) };
+            if (!ok)
+            {
+                result["isError"] = true;
+            }
+
+            return Rpc(id, result);
         }
 
         public override Task<string> StartAsync(string prompt)
@@ -774,7 +834,7 @@ public sealed class LiveSessions : IDisposable
             return Task.FromResult(Id);
         }
 
-        public override void Send(string text)
+        public override void Send(string text, IReadOnlyList<string> images)
         {
             lock (this)
             {
@@ -797,10 +857,11 @@ public sealed class LiveSessions : IDisposable
                         _startPrompt = _startPrompt is null ? text : _startPrompt + "\n\n" + text;
                     }
 
+                    _startImages.AddRange(images);
                     return;
                 }
 
-                WriteUser(text);
+                WriteUser(text, images);
             }
         }
 
@@ -937,6 +998,11 @@ public sealed class LiveSessions : IDisposable
                     info.ArgumentList.Add("--append-system-prompt");
                     info.ArgumentList.Add(Launch.Context);
                 }
+
+                // Les outils d'Organizator (show_document), servis par l'hote sur le protocole de controle,
+                // comme ceux de l'assistant ; les serveurs MCP de l'utilisateur restent la.
+                info.ArgumentList.Add("--mcp-config");
+                info.ArgumentList.Add(McpConfig);
             }
 
             try
@@ -950,7 +1016,9 @@ public sealed class LiveSessions : IDisposable
                     if (_startPrompt is { } first)
                     {
                         _startPrompt = null;
-                        WriteUser(first);
+                        var images = _startImages.ToList();
+                        _startImages.Clear();
+                        WriteUser(first, images);
                     }
                 }
             }
@@ -965,15 +1033,24 @@ public sealed class LiveSessions : IDisposable
             }
         }
 
-        /// <summary>Ecrit un message ; sous le verrou. Le premier fait exister la session sur le disque.</summary>
-        private void WriteUser(string text)
+        /// <summary>
+        /// Ecrit un message, ses images jointes comprises ; sous le verrou. Le premier fait exister la
+        /// session sur le disque.
+        /// </summary>
+        private void WriteUser(string text, IReadOnlyList<string>? images = null)
         {
             try
             {
+                var content = MessageContent.Build(text, images, Owner._log);
+                if (MessageContent.ImageCount(content) is var count and > 0)
+                {
+                    Owner._log.Info($"Session claude hebergee {Id} : message avec {count} image(s).");
+                }
+
                 Write(new JsonObject
                 {
                     ["type"] = "user",
-                    ["message"] = new JsonObject { ["role"] = "user", ["content"] = text },
+                    ["message"] = new JsonObject { ["role"] = "user", ["content"] = content },
                 });
                 HasHistory = true;
             }
@@ -1142,6 +1219,26 @@ public sealed class LiveSessions : IDisposable
                 return;
             }
 
+            if (Text(body, "subtype") == "mcp_message" && Text(body, "server_name") == McpServer
+                && body.TryGetProperty("message", out var rpc) && rpc.ValueKind == JsonValueKind.Object)
+            {
+                if (OnMcp(rpc) is { } reply)
+                {
+                    Write(new JsonObject
+                    {
+                        ["type"] = "control_response",
+                        ["response"] = new JsonObject
+                        {
+                            ["subtype"] = "success",
+                            ["request_id"] = request,
+                            ["response"] = new JsonObject { ["mcp_response"] = reply },
+                        },
+                    });
+                }
+
+                return;
+            }
+
             if (Text(body, "subtype") != "can_use_tool")
             {
                 Write(new JsonObject
@@ -1169,6 +1266,100 @@ public sealed class LiveSessions : IDisposable
 
             // Sans confirmation, comme en console : tout le reste est accorde.
             Respond(request, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = input });
+        }
+
+        /// <summary>
+        /// Une requete JSON-RPC du client MCP de Claude Code pour le serveur d'Organizator ; sous le verrou.
+        /// Rend la reponse a ecrire (une notification recoit un accuse vide, comme pour l'assistant).
+        /// </summary>
+        private JsonObject? OnMcp(JsonElement message)
+        {
+            var method = Text(message, "method");
+            var id = message.TryGetProperty("id", out var raw) ? JsonNode.Parse(raw.GetRawText()) : null;
+            switch (method)
+            {
+                case "initialize":
+                    // Le serveur ne sert que des outils : il accepte la version que propose le client.
+                    var version = message.TryGetProperty("params", out var p) && Text(p, "protocolVersion") is { Length: > 0 } asked ? asked : "2024-11-05";
+                    return Rpc(id, new JsonObject
+                    {
+                        ["protocolVersion"] = version,
+                        ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
+                        ["serverInfo"] = new JsonObject { ["name"] = McpServer, ["version"] = "1.0.0" },
+                    });
+
+                case "notifications/initialized":
+                    return new JsonObject { ["jsonrpc"] = "2.0", ["result"] = new JsonObject() };
+
+                case "ping":
+                    return Rpc(id, new JsonObject());
+
+                case "tools/list":
+                    return Rpc(id, new JsonObject { ["tools"] = new JsonArray(ShowToolDefinition()) });
+
+                case "tools/call":
+                    var call = message.TryGetProperty("params", out var parameters) ? parameters : default;
+                    if (Text(call, "name") != ShowTool)
+                    {
+                        return ToolResult(id, false, "Outil inconnu : " + Text(call, "name"));
+                    }
+
+                    return call.ValueKind == JsonValueKind.Object && call.TryGetProperty("arguments", out var input) && input.ValueKind == JsonValueKind.Object
+                        ? ShowDocument(id, input)
+                        : ToolResult(id, false, "Indique le chemin du fichier (path).");
+
+                default:
+                    return new JsonObject
+                    {
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = id,
+                        ["error"] = new JsonObject { ["code"] = -32601, ["message"] = "Méthode inconnue : " + method },
+                    };
+            }
+        }
+
+        /// <summary>
+        /// L'agent montre un fichier, qui doit exister : la fenetre Conversations l'ouvre a droite de la
+        /// conversation, la fenetre principale le note sur elle (<c>convo.shown</c>).
+        /// </summary>
+        private JsonObject ShowDocument(JsonNode? id, JsonElement input)
+        {
+            var path = Text(input, "path").Trim();
+            if (path.Length == 0)
+            {
+                return ToolResult(id, false, "Indique le chemin du fichier (path).");
+            }
+
+            string full;
+            try
+            {
+                full = ArtifactReader.Resolve(path, Launch.Cwd);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return ToolResult(id, false, ex.Message);
+            }
+
+            if (Directory.Exists(full))
+            {
+                return ToolResult(id, false, "C'est un dossier : montre un fichier.");
+            }
+
+            if (!File.Exists(full))
+            {
+                return ToolResult(id, false, "Fichier introuvable : " + full + ". Écris-le d'abord, puis montre-le.");
+            }
+
+            FlushText(force: true);
+            Emit("show", new JsonObject
+            {
+                ["path"] = full,
+                ["title"] = Short(Text(input, "title"), 120),
+                ["at"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            });
+            Owner._log.Info($"Session claude hebergee {Id} : document montre ({Path.GetFileName(full)}).");
+            return ToolResult(id, true, "Document ouvert pour l'utilisateur dans le panneau de droite de la fenêtre Conversations (" + full
+                + ") : il peut l'y lire, le télécharger ou le supprimer. Inutile d'en recopier le contenu.");
         }
 
         private void OnResult(JsonElement root)
@@ -1268,8 +1459,9 @@ public sealed class LiveSessions : IDisposable
             return Id;
         }
 
-        public override void Send(string text)
+        public override void Send(string text, IReadOnlyList<string> images)
         {
+            // Copilot n'a que le texte, qui cite les images jointes par leur chemin.
             lock (this)
             {
                 if (Pending > 0)

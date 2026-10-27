@@ -171,6 +171,28 @@ public sealed class TaskAttachments
         return Describe(target);
     }
 
+    /// <summary>
+    /// Chemin complet d'un fichier existant sous le dossier des pieces jointes ; null sinon. Les images
+    /// jointes a un message de la fenetre Conversations ne se lisent que la.
+    /// </summary>
+    public string? Owned(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            var full = Path.GetFullPath(path);
+            return IsUnder(full, Root) && File.Exists(full) ? full : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     /// <summary>Supprime le fichier d'une piece jointe (seulement sous le dossier des pieces jointes).</summary>
     public bool Remove(string? path)
     {

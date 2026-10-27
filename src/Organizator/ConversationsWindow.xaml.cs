@@ -9,7 +9,8 @@ namespace Organizator;
 
 /// <summary>
 /// Fenetre Conversations : les sessions d'agent hebergees par Organizator (reglage « Terminal » = app),
-/// a la maniere de Claude Code Desktop — les sessions par tache a gauche, la conversation au centre.
+/// a la maniere de Claude Code Desktop — les sessions par tache a gauche, la conversation au centre, et
+/// a droite un panneau (document montre par l'agent, resume de la conversation).
 /// Une seconde WebView2 du meme environnement que la fenetre principale, branchee sur le meme pont
 /// (<see cref="BridgeHost.AttachView"/>), qui sert <c>conversations.html</c>. La fermer la masque : les
 /// sessions continuent de tourner ; elle ne se ferme vraiment qu'avec Organizator.
@@ -107,10 +108,35 @@ public partial class ConversationsWindow : Window
                     MainWindow.OpenExternally(args.Uri, _log);
                 }
             };
+            // Le panneau de droite affiche les documents dans des cadres (page HTML, PDF) : un lien externe
+            // qui y est clique part dans le navigateur, comme dans le lecteur de la fenetre principale.
+            core.FrameNavigationStarting += (_, args) =>
+            {
+                if (Uri.TryCreate(args.Uri, UriKind.Absolute, out var uri)
+                    && uri.Scheme is ("http" or "https")
+                    && !string.Equals(uri.Host, VirtualHost, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(uri.Host, ArtifactReader.Host, StringComparison.OrdinalIgnoreCase))
+                {
+                    args.Cancel = true;
+                    MainWindow.OpenExternally(args.Uri, _log);
+                }
+            };
+            // La dictee enregistre le micro depuis la page : accorde a la page de l'application, et a elle seule.
+            core.PermissionRequested += (_, args) =>
+            {
+                if (args.PermissionKind == CoreWebView2PermissionKind.Microphone
+                    && Uri.TryCreate(args.Uri, UriKind.Absolute, out var uri)
+                    && string.Equals(uri.Host, VirtualHost, StringComparison.OrdinalIgnoreCase))
+                {
+                    args.State = CoreWebView2PermissionState.Allow;
+                }
+            };
             core.ProcessFailed += (_, args) => _log.Error($"Fenetre Conversations : processus WebView2 en echec : {args.ProcessFailedKind} / {args.Reason}");
 
             core.SetVirtualHostNameToFolderMapping(VirtualHost, _wwwFolder, CoreWebView2HostResourceAccessKind.Allow);
-            _bridge.AttachView(core);
+            // Images jointes aux messages : la zone de saisie et le fil en montrent les vignettes.
+            core.SetVirtualHostNameToFolderMapping(TaskAttachments.Host, _bridge.AttachmentsRoot, CoreWebView2HostResourceAccessKind.Allow);
+            _bridge.AttachView(core, this);
             _core = core;
 
             var url = $"https://{VirtualHost}/conversations.html";

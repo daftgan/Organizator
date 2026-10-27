@@ -310,6 +310,14 @@ public sealed class ClaudeSessions
         if (isUser)
         {
             text = ExtractUserText(message);
+
+            // Ajout de Claude Code lui-meme (isMeta) : la source d'une image jointe (« [Image: source: …] »),
+            // un avertissement... Ce n'est pas l'utilisateur qui parle : ni message, ni titre, ni etat.
+            if (IsTrue(root, "isMeta") && !HasBlock(message, "tool_result"))
+            {
+                return;
+            }
+
             TrackUserState(root, message, text, ts, result);
             TrackAgents(message, true, text, ts, result);
 

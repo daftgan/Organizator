@@ -98,6 +98,8 @@ body.finding h3, body.finding h4 { font-size: 16px; margin-top: 1.3em; }
    courant (son Markdown, rendu par l'hôte), lectures de l'agent en cours de réponse. */
 body.chat { font-size: 14.5px; line-height: 1.55; }
 body.chat .doc { max-width: none; margin: 0; padding: 16px 18px 28px; }
+/* Panneau de droite de la fenêtre Conversations : une colonne étroite. */
+body.pane .doc { max-width: none; margin: 0; padding: 22px 24px 56px; }
 body.chat h1, body.chat h2 { font-family: inherit; font-weight: 700; font-size: 17px; border: 0; padding: 0; margin: 1.1em 0 0.4em; }
 body.chat h3, body.chat h4 { font-size: 15px; margin: 1em 0 0.35em; }
 body.chat pre { font-size: 12.3px; }

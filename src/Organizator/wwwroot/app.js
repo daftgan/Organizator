@@ -6489,6 +6489,20 @@
      (désépingler la sort d'« en cours », sortir des Archives la rouvre). Seules les sessions du carnet
      de remarques, sans tâche, gardent leurs propres marques (les deux gestes s'excluent : la fenêtre
      envoie les deux). */
+  /* L'agent d'une session hébergée montre un document (outil show_document) : la fenêtre
+     Conversations l'ouvre à droite ; la conversation le retient, le plus récent d'abord, pour son résumé. */
+  var SHOWN_MAX = 12;
+  function noteShownDoc(p) {
+    if (!p || p.phase !== 'show' || !p.path) return;
+    var c = convoById(p.sessionId);
+    if (!c) return;
+    var path = String(p.path);
+    var list = (c.shown || []).filter(function (d) { return d.path.toLowerCase() !== path.toLowerCase(); });
+    list.unshift({ path: path, title: String(p.title || ''), at: toMs(p.at) || Date.now() });
+    c.shown = list.slice(0, SHOWN_MAX);
+    saveDataSoon();
+  }
+
   function markConvo(p) {
     var ids = p && Array.isArray(p.sessionIds) ? p.sessionIds : [];
     var changed = false, tasks = [];
@@ -9497,6 +9511,13 @@
       c.keywords = keywordIdsFor(taskById(c.taskId), c.keywords || c.keyword);
       delete c.keyword;
       c.artifacts = normalizeArtifacts(c.artifacts);
+      /* Documents que l'agent a montrés dans la fenêtre Conversations (voir noteShownDoc). */
+      if (c.shown != null) {
+        c.shown = (Array.isArray(c.shown) ? c.shown : []).filter(function (d) { return d && d.path; }).slice(0, SHOWN_MAX).map(function (d) {
+          return { path: String(d.path), title: String(d.title || ''), at: toMs(d.at) };
+        });
+        if (!c.shown.length) delete c.shown;
+      }
       var used = normalizeUsage(c.usage);
       if (used) c.usage = used; else delete c.usage;
       c.messageCount = typeof c.messageCount === 'number' ? c.messageCount : 0;
@@ -9625,6 +9646,8 @@
     /* Discussion sur un constat : la réponse de l'agent arrive au fil de l'eau. */
     bridge.on('findingChat', onFindingChat);
     bridge.on('convoMark', markConvo);
+    /* Un document que l'agent d'une session hébergée montre : noté sur la conversation (convo.shown). */
+    bridge.on('live', noteShownDoc);
 
     /* Dictée et transcription : le micro des zones de saisie, l'avancement de Whisper. */
     bindDictate();
