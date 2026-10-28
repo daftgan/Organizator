@@ -1130,6 +1130,7 @@
             convos: Array.isArray(data.convos) ? data.convos : [],
             remarks: Array.isArray(data.remarks) ? data.remarks : [],
             notifications: Array.isArray(data.notifications) ? data.notifications : [],
+            events: Array.isArray(data.events) ? data.events : [],
             lastType: data.lastType || null
           },
           settings: settings,
@@ -1148,6 +1149,7 @@
           convos: p.convos || [],
           remarks: p.remarks || [],
           notifications: p.notifications || [],
+          events: p.events || [],
           lastType: p.lastType || null
         });
         return {};

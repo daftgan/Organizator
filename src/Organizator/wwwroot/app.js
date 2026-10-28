@@ -157,7 +157,7 @@
   /* ══ État ═════════════════════════════════════════════════════════════ */
 
   var S = {
-    data: { tasks: [], types: [], convos: [], remarks: [], notifications: [], lastType: null },
+    data: { tasks: [], types: [], convos: [], remarks: [], notifications: [], events: [], lastType: null },
     settings: Object.assign({}, DEFAULTS),
     env: { version: '?', hasClaude: true, hasCopilot: false, hasWt: false, defaultCwd: '', dataDir: '', userProfile: '', repoDir: '',
       bitbucketUrl: '', bitbucketSource: '', bitbucketToken: false, jiraUrl: '', attachmentsDir: '', attachmentsUrl: '', models: null, efforts: null,
@@ -304,13 +304,15 @@
 
   function saveDataNow() {
     if (dataTimer) { clearTimeout(dataTimer); dataTimer = null; }
+    /* Ce qui a changé depuis le dernier enregistrement part au journal avec lui. */
+    if (!RZ_ONLY) trackEvents();
     dataDirty = false;
     /* Révizator seul : aucune tâche ici, et le serveur refuse saveData. */
     if (RZ_ONLY) return Promise.resolve();
     if (S.ui.composerType) S.data.lastType = S.ui.composerType;
     dataInFlight = bridge.call('saveData', {
       tasks: S.data.tasks, types: S.data.types, convos: S.data.convos, remarks: S.data.remarks,
-      notifications: S.data.notifications, lastType: S.data.lastType
+      notifications: S.data.notifications, events: S.data.events, lastType: S.data.lastType
     })['catch'](function (e) { toast('Sauvegarde impossible : ' + e.message); });
     return dataInFlight;
   }
@@ -6392,6 +6394,157 @@
 
   /* ══ Actions — tâches ═════════════════════════════════════════════════ */
 
+  /* ══ Journal des événements ═══════════════════════════════════════════
+     Ce qui arrive aux tâches, daté et sourcé, pour pouvoir le retracer — « qu'est-ce que je viens
+     d'archiver ? » : l'assistant le lit (get_history). Plutôt que d'instrumenter chaque geste, la page
+     — seule à écrire data.json — compare à chaque enregistrement l'état d'avant à celui d'après :
+     tâche créée, supprimée, terminée (avec les sous-tâches qu'elle emporte), rouverte, passée en cours
+     ou plus, changée de catégorie, déplacée (celle qu'on a bougée, pas celles qui ont suivi),
+     conversation lancée, session du carnet archivée ou ressortie. `from` dit d'où vient le geste quand
+     ce n'est pas la file : la fenêtre Conversations, l'assistant. Le plus récent d'abord,
+     EVENTS_MAX au plus (data.json, `events`). */
+  var EVENTS_MAX = 1000;
+  var EVENT_KINDS = { created: 1, removed: 1, done: 1, reopened: 1, doing: 1, undoing: 1, type: 1, moved: 1, launched: 1, archived: 1, unarchived: 1 };
+  var eventSnap = null, eventFrom = '', eventHints = {}, doneHints = {};
+
+  function normalizeEvents(list) {
+    if (!Array.isArray(list)) return [];
+    return list.filter(function (e) { return e && typeof e === 'object' && EVENT_KINDS[e.kind] && toMs(e.at); }).slice(0, EVENTS_MAX);
+  }
+
+  /* Ce que le journal compare : l'état de chaque tâche, l'ordre des tâches de premier niveau et celui
+     des sous-tâches de chaque parent, les conversations. */
+  function eventState() {
+    var tasks = {}, top = [], subs = {};
+    S.data.tasks.forEach(function (t) {
+      tasks[t.id] = {
+        done: !!t.done, doing: !!t.doing && !t.done, type: t.type || '', parent: t.parent || '',
+        title: firstLine(t.text, 120), mark: !!t.doneWithParent
+      };
+      if (t.parent) (subs[t.parent] = subs[t.parent] || []).push(t.id); else top.push(t.id);
+    });
+    var convos = {};
+    S.data.convos.forEach(function (c) { convos[c.id] = { taskId: c.taskId, archived: !!c.archived, agent: agentTag(c) }; });
+    return { tasks: tasks, top: top, subs: subs, convos: convos };
+  }
+
+  /* La tâche qu'un geste déplace (glisser-déposer, flèches, « en bas », assistant) : c'est elle que le
+     journal dira déplacée — sans quoi, deux voisines échangées, il ne saurait laquelle a bougé. */
+  function hintMoved(id) { if (id) eventHints[id] = true; }
+
+  /* Celles qui ont quitté leur ordre relatif : hors de la plus longue sous-suite restée dans l'ordre. */
+  function outOfOrder(before, after) {
+    var pos = {};
+    before.forEach(function (id, i) { pos[id] = i; });
+    var seq = after.filter(function (id) { return id in pos; });
+    var tails = [], prev = [];
+    seq.forEach(function (id, i) {
+      var lo = 0, hi = tails.length;
+      while (lo < hi) { var mid = (lo + hi) >> 1; if (pos[seq[tails[mid]]] < pos[id]) lo = mid + 1; else hi = mid; }
+      prev[i] = lo > 0 ? tails[lo - 1] : -1;
+      tails[lo] = i;
+    });
+    var kept = {};
+    for (var k = tails.length ? tails[tails.length - 1] : -1; k >= 0; k = prev[k]) kept[seq[k]] = true;
+    return seq.filter(function (id) { return !kept[id]; });
+  }
+
+  /* Un déplacement désigné a-t-il changé quelque chose : de parent, ou de voisines ? */
+  function shifted(id, was, now) {
+    var a = was.tasks[id], b = now.tasks[id];
+    if (!a || !b) return false;
+    if (a.parent !== b.parent) return true;
+    function around(state, info) {
+      var list = (info.parent ? state.subs[info.parent] : state.top) || [];
+      var i = list.indexOf(id);
+      return (list[i - 1] || '') + '|' + (list[i + 1] || '');
+    }
+    return around(was, a) !== around(now, b);
+  }
+
+  function trackEvents() {
+    var now = eventState();
+    var was = eventSnap;
+    eventSnap = now;
+    var hints = eventHints, targets = doneHints;
+    eventHints = {};
+    doneHints = {};
+    var aimed = Object.keys(targets).length > 0;
+    if (!was) return;
+    var at = Date.now(), out = [];
+    function add(kind, id, info, extra) {
+      var e = { at: at, kind: kind, taskId: id, title: info ? info.title : '' };
+      if (eventFrom) e.from = eventFrom;
+      out.push(Object.assign(e, extra || {}));
+    }
+    /* Une sous-tâche terminée (ou rouverte) avec sa parente compte dans l'événement de la parente. */
+    function withParent(id) {
+      var a = was.tasks[id], b = now.tasks[id];
+      var p = b.parent && was.tasks[b.parent] && now.tasks[b.parent];
+      return !!p && was.tasks[b.parent].done !== now.tasks[b.parent].done && (b.done ? b.mark : a.mark);
+    }
+    Object.keys(now.tasks).forEach(function (id) {
+      var a = was.tasks[id], b = now.tasks[id];
+      if (!a) { add('created', id, b, b.parent && now.tasks[b.parent] ? { under: now.tasks[b.parent].title } : null); return; }
+      if (a.done !== b.done) {
+        /* Gestes visés (setDone) : la cible porte l'événement, ses sous-tâches emportées y comptent, une
+           parente rouverte par l'une d'elles dit pourquoi. Sans cible (annulation), la marque doneWithParent. */
+        var carried = aimed
+          ? !targets[id] && !!b.parent && !!targets[b.parent] && !!was.tasks[b.parent] && !!now.tasks[b.parent] && was.tasks[b.parent].done !== now.tasks[b.parent].done
+          : withParent(id);
+        if (!carried) {
+          var n = (now.subs[id] || []).filter(function (k) {
+            return was.tasks[k] && was.tasks[k].done !== now.tasks[k].done && (aimed ? !targets[k] : withParent(k));
+          }).length;
+          var extra = n ? { subs: n } : {};
+          var by = aimed && !targets[id] ? (now.subs[id] || []).filter(function (k) { return targets[k]; })[0] : null;
+          if (by) extra.by = now.tasks[by].title;
+          add(b.done ? 'done' : 'reopened', id, b, extra);
+        }
+      } else if (a.doing !== b.doing) {
+        add(b.doing ? 'doing' : 'undoing', id, b);
+      }
+      if (a.type !== b.type) add('type', id, b, { fromType: typeOf(a.type).label, toType: typeOf(b.type).label });
+    });
+    Object.keys(was.tasks).forEach(function (id) { if (!now.tasks[id]) add('removed', id, was.tasks[id]); });
+
+    var moved = Object.keys(hints).filter(function (id) { return shifted(id, was, now); });
+    if (!Object.keys(hints).length) {
+      moved = outOfOrder(was.top, now.top);
+      Object.keys(now.subs).forEach(function (p) { if (was.subs[p]) moved = moved.concat(outOfOrder(was.subs[p], now.subs[p])); });
+      Object.keys(now.tasks).forEach(function (id) {
+        if (was.tasks[id] && was.tasks[id].parent !== now.tasks[id].parent && moved.indexOf(id) < 0) moved.push(id);
+      });
+    }
+    var active = now.top.filter(function (id) { return !now.tasks[id].done; });
+    moved.forEach(function (id) {
+      var b = now.tasks[id];
+      if (!b) return;
+      var where = {};
+      if (b.parent) where.under = now.tasks[b.parent] ? now.tasks[b.parent].title : '';
+      else if (now.top[now.top.length - 1] === id && now.top.length > 1) where.bottom = true;
+      else if (!b.done) where.rank = active.indexOf(id) + 1;
+      add('moved', id, b, where);
+    });
+
+    Object.keys(now.convos).forEach(function (cid) {
+      var a = was.convos[cid], b = now.convos[cid];
+      var info = b.taskId === FEEDBACK_ID ? { title: FEEDBACK_NAME } : now.tasks[b.taskId];
+      if (!a) { add('launched', b.taskId, info, { convoId: cid, agent: b.agent }); return; }
+      if (b.taskId === FEEDBACK_ID && a.archived !== b.archived) add(b.archived ? 'archived' : 'unarchived', b.taskId, info, { convoId: cid });
+    });
+    if (out.length) S.data.events = out.concat(S.data.events).slice(0, EVENTS_MAX);
+  }
+
+  /* Un geste venu d'ailleurs que la file : ce qui attendait d'être noté l'est d'abord sous sa
+     propre origine, puis ce geste-ci sous la sienne. */
+  function fromSource(src, fn) {
+    trackEvents();
+    var prev = eventFrom;
+    eventFrom = src;
+    try { return fn(); } finally { trackEvents(); eventFrom = prev; }
+  }
+
   function commit() { regroupTasks(); saveDataNow(); render(); }
 
   /* Terminer une tâche termine ses sous-tâches : celles qui restaient à faire portent
@@ -6400,6 +6553,8 @@
      rouvre aussi sa parente. Rend ce qui a suivi : { closed, reopened, parent }. */
   function setDone(t, done) {
     var out = { closed: 0, reopened: 0, parent: null };
+    /* La tâche visée par le geste : le journal lui rattache ce qui a suivi (sous-tâches, parente). */
+    doneHints[t.id] = true;
     t.done = !!done;
     delete t.doneWithParent;
     childrenOf(t.id).forEach(function (k) {
@@ -6504,6 +6659,10 @@
   }
 
   function markConvo(p) {
+    fromSource('conversations', function () { markConvoNow(p); });
+  }
+
+  function markConvoNow(p) {
     var ids = p && Array.isArray(p.sessionIds) ? p.sessionIds : [];
     var changed = false, tasks = [];
     ids.forEach(function (id) {
@@ -6546,6 +6705,7 @@
     var j = i + delta;
     if (i < 0 || j < 0 || j >= S.data.tasks.length) return;
     S.data.tasks.splice(j, 0, S.data.tasks.splice(i, 1)[0]);
+    hintMoved(id);
     commit();
   }
 
@@ -6567,6 +6727,7 @@
       rest = rest.concat(block);
     }
     S.data.tasks = rest;
+    hintMoved(id);
     commit();
   }
 
@@ -6896,6 +7057,7 @@
     var to = S.data.tasks.indexOf(anchor);
     if (to < 0) to = S.data.tasks.length; else if (after) to += 1;
     Array.prototype.splice.apply(S.data.tasks, [to, 0].concat(block));
+    hintMoved(dragId);
     endDrag();
     commit();
   }
@@ -9468,6 +9630,7 @@
     S.data.convos = Array.isArray(d.convos) ? d.convos : [];
     S.data.remarks = Array.isArray(d.remarks) ? d.remarks : [];
     S.data.notifications = normalizeNotifications(d.notifications);
+    S.data.events = normalizeEvents(d.events);
     S.data.lastType = d.lastType || null;
 
     S.data.types.forEach(function (type) {
@@ -9703,6 +9866,8 @@
       /* Données d'avant reprises (épingles devenues « en cours ») : enregistrées, pour que la fenêtre
          Conversations, qui lit data.json, les voie aussi. */
       if (normalize(st || {}) && !RZ_ONLY) saveDataSoon();
+      /* Le journal part de l'état chargé (migrations comprises) : il ne note que ce qui change ensuite. */
+      eventSnap = eventState();
       /* Serveur Révizator réglé et session ouverte : branché avant le démarrage des pages (Révizator lit ses données). */
       if (bridge.configureRemote && S.settings.revizatorServerToken) bridge.configureRemote({ url: S.settings.revizatorServerUrl, token: S.settings.revizatorServerToken });
       booted = true;
@@ -9830,6 +9995,7 @@
     defaultProviderId: defaultProviderId, modelSettingKey: modelSettingKey, effortSettingKey: effortSettingKey,
     saveSettingsSoon: saveSettingsSoon, commit: commit, saveDataSoon: saveDataSoon, saveDataNow: saveDataNow,
     setDone: setDone, doneSnapshot: doneSnapshot, restoreDone: restoreDone,
+    fromSource: fromSource, hintMoved: hintMoved, events: function () { return S.data.events; },
     palettes: PALETTES, notype: NOTYPE, agentRoles: AGENT_ROLES, keywordMax: KEYWORD_MAX, agentMax: AGENT_MAX,
     taskById: taskById, typeOf: typeOf, parentOf: parentOf, childrenOf: childrenOf, lastOfGroup: lastOfGroup,
     subtaskProgress: subtaskProgress, attachmentsOf: attachmentsOf, taskPullRequests: taskPullRequests,
