@@ -68,7 +68,8 @@ public sealed class LiveSessions : IDisposable
     /// <c>detail</c>, <c>status</c> running | done | error), <c>question</c> (<c>request</c>, <c>kind</c> ask |
     /// plan, <c>questions</c> ou <c>plan</c>), <c>done</c> (<c>cost</c>, <c>ms</c>, <c>cancelled</c>),
     /// <c>error</c> (<c>error</c>), <c>notice</c> (<c>text</c>), <c>show</c> (<c>path</c> complet, <c>title</c>,
-    /// <c>at</c> : l'agent montre un document a l'utilisateur, outil <c>show_document</c>).
+    /// <c>at</c> : l'agent montre un document a l'utilisateur, outil <c>show_document</c>), <c>turn</c> (l'agent
+    /// repart sans message de l'utilisateur, reveille par le retour d'un sous-agent ou d'une tache de fond).
     /// </summary>
     public event Action<JsonObject>? Progress;
 
@@ -486,6 +487,28 @@ public sealed class LiveSessions : IDisposable
 
             Pending++;
             Emit("user", new JsonObject { ["text"] = text });
+            EmitState();
+        }
+
+        /// <summary>
+        /// L'agent repart sans message de l'utilisateur — reveille par le retour d'un sous-agent ou d'une
+        /// tache de fond (notification) : c'est un tour comme un autre, jusqu'a son <c>result</c>. Sans
+        /// lui, la fenetre le croirait au repos pendant qu'il ecrit ; sous le verrou.
+        /// </summary>
+        protected void BeginImplicitTurn()
+        {
+            if (Pending > 0)
+            {
+                return;
+            }
+
+            TurnStarted = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            Order.Clear();
+            Texts.Clear();
+            Steps.Clear();
+            Phase = "thinking";
+            Pending = 1;
+            Emit("turn");
             EmitState();
         }
 
@@ -1138,6 +1161,7 @@ public sealed class LiveSessions : IDisposable
             switch (Text(ev, "type"))
             {
                 case "message_start":
+                    BeginImplicitTurn();
                     _writing = ev.TryGetProperty("message", out var m) ? Text(m, "id") : "";
                     if (string.IsNullOrEmpty(_writing))
                     {
@@ -1172,6 +1196,12 @@ public sealed class LiveSessions : IDisposable
 
         private void OnAssistant(JsonElement message, bool sub)
         {
+            if (!sub)
+            {
+                // Sans flux partiel, c'est la premiere ligne de la reponse qui dit qu'un tour a commence.
+                BeginImplicitTurn();
+            }
+
             if (!message.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
             {
                 return;

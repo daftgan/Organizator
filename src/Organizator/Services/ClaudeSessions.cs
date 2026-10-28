@@ -96,7 +96,7 @@ public sealed class ClaudeSessions
             var parsed = scan.Accumulator;
             return new SessionSummary(
                 sessionId, true, parsed.MessageCount, GetUpdated(path), parsed.Title,
-                parsed.State, parsed.StateTs, parsed.Detail, parsed.Agents.ToArray(), parsed.Said);
+                parsed.State, parsed.StateTs, parsed.Detail, parsed.Agents.ToArray(), parsed.Said, parsed.Crew.ToArray());
         }
     }
 
@@ -318,6 +318,14 @@ public sealed class ClaudeSessions
                 return;
             }
 
+            // Un vrai message de l'utilisateur ouvre une nouvelle demande : l'equipe de la precedente
+            // n'en fait plus partie (une notification de fin, elle, commence par « < »).
+            if (text.Length > 0 && text[0] != '<' && !text.StartsWith("[Request interrupted", StringComparison.Ordinal)
+                && !HasBlock(message, "tool_result") && !IsTrue(root, "isCompactSummary"))
+            {
+                result.NewRound();
+            }
+
             TrackUserState(root, message, text, ts, result);
             TrackAgents(message, true, text, ts, result);
 
@@ -438,15 +446,22 @@ public sealed class ClaudeSessions
     // ── Agents lances par la session ────────────────────────────────────────
     // Un agent part par l'outil `Agent` (ou `Task`, `Workflow`), et son resultat revient aussitot :
     // « Spawned successfully … name: <nom> » pour un coequipier, « launched in background. Task ID:
-    // <id> » pour une tache de fond. L'agent, lui, travaille encore. La session principale peut donc
-    // terminer son tour (`end_turn`) avec toute son equipe au travail : sans ce suivi, l'interface
-    // annoncerait « reponse prete » alors que rien n'est fini. Le retour se lit plus loin dans le
-    // meme fichier : `<task-notification>` pour une tache, `idle_notification` pour un coequipier.
+    // <id> » pour une tache de fond, et — Claude Code 2.1.3xx — « Async agent launched successfully …
+    // agentId: <id> » pour un sous-agent parti en arriere-plan. L'agent, lui, travaille encore. La
+    // session principale peut donc terminer son tour (`end_turn`) avec toute son equipe au travail :
+    // sans ce suivi, l'interface annoncerait « reponse prete » alors que rien n'est fini. Le retour se
+    // lit plus loin dans le meme fichier : `<task-notification>` (identifiant de la tache ou de l'agent,
+    // et son `<status>`) pour une tache, `idle_notification` pour un coequipier. Un sous-agent revenu se
+    // relance par SendMessage, dont le resultat dit « Resuming agent … » (`resumedAgentId`).
     private const int LabelLength = 60;
     private static readonly Regex SpawnedName = new(@"^\s*name:[ \t]*(\S.*?)\s*$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex BackgroundTaskId = new(@"Task ID:[ \t]*(\S+)", RegexOptions.Compiled);
     private static readonly Regex BackgroundSummary = new(@"^\s*Summary:[ \t]*(\S.*?)\s*$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex TaskNotificationId = new(@"<task-id>\s*([^<\s]+)\s*</task-id>", RegexOptions.Compiled);
+    private static readonly Regex TaskNotificationStatus = new(@"<status>\s*([A-Za-z_-]+)\s*</status>", RegexOptions.Compiled);
+    private static readonly Regex AsyncAgentId = new(@"agentId:[ \t]*([A-Za-z0-9_-]+)", RegexOptions.Compiled);
+    private static readonly Regex ResumedAgentId = new(@"""resumedAgentId""\s*:\s*""([^""]+)""", RegexOptions.Compiled);
+    private static readonly Regex ResumedName = new(@"""name""\s*:\s*""([^""]+)""", RegexOptions.Compiled);
     private static readonly Regex TeammateId = new(@"teammate_id=""([^""]+)""", RegexOptions.Compiled);
     private static readonly Regex NotificationFrom = new(@"""from""\s*:\s*""([^""]+)""", RegexOptions.Compiled);
 
@@ -468,7 +483,7 @@ public sealed class ClaudeSessions
                         break;
 
                     case "tool_result":
-                        TrackAgentSpawn(block, result);
+                        TrackAgentSpawn(block, ts, result);
                         break;
                 }
             }
@@ -476,7 +491,7 @@ public sealed class ClaudeSessions
 
         if (isUser)
         {
-            TrackAgentReturn(text, result);
+            TrackAgentReturn(text, ts, result);
         }
     }
 
@@ -491,7 +506,10 @@ public sealed class ClaudeSessions
             var id = GetString(block, "id") ?? "";
             if (id.Length > 0)
             {
-                result.AgentStarted("tool:" + id, AgentLabel(hasInput ? input : default, tool), ts);
+                // Son nom quand il en a un, et alors sa mission en quelques mots a cote.
+                var named = hasInput && !string.IsNullOrWhiteSpace(GetString(input, "name"));
+                var about = named ? Shorten(GetString(input, "description") ?? "") : "";
+                result.AgentStarted("tool:" + id, AgentLabel(hasInput ? input : default, tool), ts, about);
             }
 
             return;
@@ -511,7 +529,7 @@ public sealed class ClaudeSessions
     /// Resultat de l'outil qui a lance l'agent : il donne son identite durable s'il part en fond,
     /// et vaut retour s'il a travaille sur place (le rapport est deja la).
     /// </summary>
-    private static void TrackAgentSpawn(JsonElement block, TranscriptAccumulator result)
+    private static void TrackAgentSpawn(JsonElement block, long ts, TranscriptAccumulator result)
     {
         var id = GetString(block, "tool_use_id") ?? "";
         if (id.Length == 0)
@@ -540,17 +558,45 @@ public sealed class ClaudeSessions
             return;
         }
 
-        result.AgentFinished(key);
+        // Sous-agent parti en arriere-plan : sa notification de fin porte cet identifiant.
+        if (body.Contains("Async agent launched", StringComparison.Ordinal) || body.Contains("working in the background", StringComparison.Ordinal))
+        {
+            var agent = AsyncAgentId.Match(body);
+            if (agent.Success)
+            {
+                result.AgentIdentified(key, "task:" + agent.Groups[1].Value, "");
+                return;
+            }
+        }
+
+        // SendMessage a un sous-agent revenu : il se remet au travail.
+        var resumed = ResumedAgentId.Match(body);
+        if (resumed.Success)
+        {
+            var again = "task:" + resumed.Groups[1].Value;
+            var known = result.LabelOf(again);
+            var name = ResumedName.Match(body);
+            result.AgentStarted(again, known.Length > 0 ? known : name.Success ? Shorten(name.Groups[1].Value) : "agent", ts);
+            return;
+        }
+
+        result.AgentFinished(key, ts);
     }
 
     /// <summary>Retour d'un agent : notification de tache terminee, ou coequipier redevenu disponible.</summary>
-    private static void TrackAgentReturn(string text, TranscriptAccumulator result)
+    private static void TrackAgentReturn(string text, long ts, TranscriptAccumulator result)
     {
         if (text.Contains("<task-notification", StringComparison.Ordinal))
         {
-            foreach (Match match in TaskNotificationId.Matches(text))
+            // Une notification par tache : son identifiant, et comment elle a fini.
+            foreach (var part in text.Split("<task-notification", StringSplitOptions.RemoveEmptyEntries))
             {
-                result.AgentFinished("task:" + match.Groups[1].Value);
+                var id = TaskNotificationId.Match(part);
+                if (id.Success)
+                {
+                    var status = TaskNotificationStatus.Match(part);
+                    result.AgentFinished("task:" + id.Groups[1].Value, ts, status.Success ? status.Groups[1].Value.ToLowerInvariant() : "completed");
+                }
             }
 
             return;
@@ -565,11 +611,11 @@ public sealed class ClaudeSessions
         var from = NotificationFrom.Match(text);
         if (teammate.Success)
         {
-            result.AgentFinished("agent:" + teammate.Groups[1].Value);
+            result.AgentFinished("agent:" + teammate.Groups[1].Value, ts);
         }
         else if (from.Success)
         {
-            result.AgentFinished("agent:" + from.Groups[1].Value);
+            result.AgentFinished("agent:" + from.Groups[1].Value, ts);
         }
     }
 
