@@ -60,7 +60,7 @@ public sealed class DataStore
         }
     }
 
-    /// <summary>Enregistre <c>{ tasks, types, convos, lastType }</c> venant du JS.</summary>
+    /// <summary>Enregistre <c>{ tasks, types, convos, remarks, notifications, events, lastType }</c> venant du JS.</summary>
     public void SaveData(JsonObject? payload)
     {
         lock (_gate)
@@ -80,6 +80,8 @@ public sealed class DataStore
             ["convos"] = CloneArray(source, "convos"),
             ["remarks"] = CloneArray(source, "remarks"),
             ["notifications"] = CloneArray(source, "notifications"),
+            // Journal des evenements de la file (ce qui est arrive a quelle tache, quand, d'ou), le plus recent d'abord.
+            ["events"] = CloneArray(source, "events"),
         };
 
         var lastType = source?["lastType"];

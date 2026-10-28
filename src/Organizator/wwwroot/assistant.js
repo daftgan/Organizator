@@ -160,9 +160,68 @@
       + (said ? ' : « ' + clip(said.replace(/\s+/g, ' '), 140) + ' »' : '');
   }
 
+  /* ── Historique (journal des événements de la fenêtre principale, le plus récent d'abord) ── */
+  var EVENT_WORDS = {
+    created: 'créée', removed: 'supprimée', done: 'terminée', reopened: 'rouverte', doing: 'passée en cours',
+    undoing: 'n’est plus en cours', type: 'catégorie changée', moved: 'déplacée', launched: 'conversation lancée',
+    archived: 'session archivée', unarchived: 'session sortie des Archives'
+  };
+  var FROM_WORDS = { conversations: 'depuis la fenêtre Conversations', assistant: 'par toi, l’assistant' };
+
+  function events() { return (A.events && A.events()) || []; }
+
+  /* Quand la tâche a-t-elle été terminée (dernier événement « terminée ») ; 0 si le journal ne le sait pas. */
+  function doneAt(t) {
+    var list = events();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].taskId !== t.id) continue;
+      if (list[i].kind === 'done') return list[i].at;
+      if (list[i].kind === 'reopened') return 0;
+    }
+    return 0;
+  }
+
+  function eventLine(e) {
+    var details = [];
+    if (e.subs) details.push(e.kind === 'done' ? 'avec ' + e.subs + (e.subs > 1 ? ' sous-tâches qui restaient' : ' sous-tâche qui restait')
+      : 'avec ' + e.subs + (e.subs > 1 ? ' sous-tâches terminées avec elle' : ' sous-tâche terminée avec elle'));
+    if (e.by) details.push('parce que sa sous-tâche « ' + clip(e.by, 80) + ' » l’a été');
+    if (e.kind === 'type') details.push(e.fromType + ' → ' + e.toType);
+    if (e.kind === 'moved') details.push(e.bottom ? 'en bas de la file' : e.rank ? 'au rang ' + e.rank : e.under ? 'sous « ' + e.under + ' »' : '');
+    if (e.kind === 'created' && e.under) details.push('sous-tâche de « ' + e.under + ' »');
+    if (e.agent) details.push(e.agent);
+    if (e.from) details.push(FROM_WORDS[e.from] || e.from);
+    details = details.filter(Boolean);
+    var who = e.taskId && e.taskId !== '__feedback__' ? '[' + e.taskId + '] ' : '';
+    return '- ' + A.fmtDate(e.at) + ' · ' + (EVENT_WORDS[e.kind] || e.kind) + ' — ' + who + '« ' + clip(e.title || '', 120) + ' »'
+      + (details.length ? ' (' + details.join(', ') + ')' : '');
+  }
+
+  function historyText(a) {
+    var list = events();
+    if (!list.length) return ok('L’historique est vide : Organizator n’a encore rien noté (il note chaque geste sur la file depuis cette version).');
+    var since = Number(a.since_hours) > 0 ? Date.now() - Number(a.since_hours) * 3600000 : 0;
+    var t = a.id ? findTask(a.id) : null;
+    if (a.id && !t && !list.some(function (e) { return e.taskId === a.id; })) return fail(unknownTask(a.id));
+    var ids = {};
+    if (a.id) { ids[a.id] = true; if (t) A.childrenOf(t.id).forEach(function (k) { ids[k.id] = true; }); }
+    var limit = Math.max(1, Math.min(300, parseInt(a.limit, 10) || 60));
+    var kept = list.filter(function (e) {
+      return (!since || e.at >= since) && (!a.id || ids[e.taskId]) && (!a.kind || e.kind === a.kind);
+    });
+    var oldest = list[list.length - 1];
+    var head = 'Historique de la file, le plus récent d’abord — noté depuis le ' + A.fmtDate(oldest.at) + ' (rien d’antérieur n’est connu)'
+      + (a.id ? ', tâche [' + a.id + '] et ses sous-tâches' : '') + (since ? ', dernières ' + Number(a.since_hours) + ' h' : '')
+      + (a.kind ? ', seulement « ' + (EVENT_WORDS[a.kind] || a.kind) + ' »' : '') + ' :';
+    if (!kept.length) return ok(head + '\n(aucun événement)');
+    return ok([head].concat(kept.slice(0, limit).map(eventLine))
+      .concat(kept.length > limit ? ['… et ' + (kept.length - limit) + ' plus anciens (augmente limit).'] : []).join('\n'));
+  }
+
   function taskSummary(t, rank) {
     var parts = [A.typeOf(t.type).label];
-    if (t.done) parts.push('terminée');
+    var ended = t.done ? doneAt(t) : 0;
+    if (t.done) parts.push(ended ? 'terminée le ' + A.fmtDate(ended) : 'terminée');
     else if (t.doing) parts.push('en cours');
     var kids = A.childrenOf(t.id);
     if (kids.length) parts.push(kids.length + ' sous-tâche' + (kids.length > 1 ? 's' : '') + ' (' + A.subtaskProgress(t).done + ' terminée' + (A.subtaskProgress(t).done > 1 ? 's' : '') + ')');
@@ -217,7 +276,7 @@
     var parent = A.parentOf(t);
     var out = ['Tâche [' + t.id + '], rang ' + ranks[t.id] + (bandOf(ranks[t.id]) ? ' (bande ' + bandOf(ranks[t.id]) + ')' : ''),
       'Catégorie : ' + A.typeOf(t.type).label,
-      'État : ' + (t.done ? 'terminée' : (t.doing ? 'en cours' : 'à faire')),
+      'État : ' + (t.done ? 'terminée' + (doneAt(t) ? ' le ' + A.fmtDate(doneAt(t)) : '') : (t.doing ? 'en cours' : 'à faire')),
       'Créée le ' + A.fmtDate(t.created)];
     if (parent) out.push('Sous-tâche de [' + parent.id + '] « ' + title(parent) + ' »');
     out.push('', 'Texte (1re ligne = titre) :', String(t.text || ''));
@@ -225,6 +284,11 @@
     if (kids.length) {
       out.push('', 'Sous-tâches :');
       kids.forEach(function (k) { out.push('- ' + taskSummary(k, ranks[k.id])); });
+    }
+    var past = events().filter(function (e) { return e.taskId === t.id; }).slice(0, 8);
+    if (past.length) {
+      out.push('', 'Historique récent (get_history pour la suite) :');
+      past.forEach(function (e) { out.push(eventLine(e)); });
     }
     var atts = A.attachmentsOf(t);
     if (atts.length) {
@@ -311,6 +375,7 @@
   }
 
   function placeTask(t, parentId, where) {
+    A.hintMoved(t.id);
     var asSub = !!parentId;
     var block = blockOf(t, asSub);
     var ids = {};
@@ -371,7 +436,7 @@
   function undoCard(e) {
     if (!e || !e.undo || (e.status !== 'done' && e.status !== 'applied')) return;
     var res;
-    try { res = runUndo(e.undo); } catch (err) { res = fail(err.message); }
+    try { res = A.fromSource('assistant', function () { return runUndo(e.undo); }); } catch (err) { res = fail(err.message); }
     if (!res.ok) { warn('Annulation impossible : ' + res.text); return; }
     e.status = 'undone';
     note('L’utilisateur a annulé : ' + e.title + (e.subject ? ' « ' + e.subject + ' »' : '') + '.');
@@ -457,7 +522,7 @@
     var p = e.proposal;
     if (p.op === 'launch') { launchCard(e); return; }
     var res;
-    try { res = applyProposal(p); } catch (err) { res = fail(err.message); }
+    try { res = A.fromSource('assistant', function () { return applyProposal(p); }); } catch (err) { res = fail(err.message); }
     if (!res.ok) { warn('Impossible d’appliquer : ' + res.text); return; }
     e.status = 'applied';
     e.undo = res.undo || null;
@@ -726,6 +791,18 @@
         cwd: { type: 'string', description: 'Dossier de travail (défaut : celui des conversations de la tâche, ou le réglage).' }
       }, ['id']),
       run: proposeLaunch
+    },
+    {
+      name: 'get_history',
+      label: 'Lit l’historique',
+      description: 'L’historique de la file, le plus récent d’abord, daté et sourcé : tâches créées, terminées (avec les sous-tâches qu’elles emportent), rouvertes, passées en cours ou plus, déplacées, changées de catégorie, supprimées ; conversations lancées ; sessions du carnet de remarques archivées. Chaque ligne dit d’où vient le geste : la file, la fenêtre Conversations (y « archiver » une conversation termine sa tâche, l’« épingler » la passe en cours), ou toi. Pour « qu’est-ce que je viens de faire / d’archiver / de terminer », « quand ai-je… ».',
+      inputSchema: schema({
+        since_hours: { type: 'number', description: 'Seulement les dernières heures (2 = depuis deux heures).' },
+        id: { type: 'string', description: 'Seulement cette tâche et ses sous-tâches.' },
+        kind: { type: 'string', enum: Object.keys(EVENT_WORDS), description: 'Seulement ce genre d’événement (done = terminée, archived = session du carnet archivée…).' },
+        limit: { type: 'integer', description: 'Nombre de lignes au plus (60 par défaut).' }
+      }),
+      run: historyText
     },
     {
       name: 'show_document',
@@ -1056,7 +1133,7 @@
     }
     if (tool && tool.label) addToolLine(p.turn, tool.label);
     try {
-      res = tool ? tool.run(p.args && typeof p.args === 'object' ? p.args : {}) : fail('Outil inconnu : ' + p.name);
+      res = tool ? A.fromSource('assistant', function () { return tool.run(p.args && typeof p.args === 'object' ? p.args : {}); }) : fail('Outil inconnu : ' + p.name);
     } catch (err) {
       res = fail('Erreur dans Organizator : ' + (err && err.message ? err.message : String(err)));
       if (window.console) console.error('[assistant] ' + p.name, err);
@@ -1082,6 +1159,7 @@
     'Tes outils (serveur « organizator ») :',
     '- Relis avant d’agir (get_queue, get_task, get_categories) : la file change aussi sans toi. Désigne les tâches par leur identifiant entre crochets, jamais par un rang qui a pu bouger.',
     '- Créer, modifier, déplacer une tâche, la marquer en cours ou terminée, créer une catégorie ou un mot-clé : s’applique tout de suite, l’utilisateur peut annuler d’un clic. Fais-le quand on te le demande, sans redemander confirmation, puis dis en une ligne ce que tu as fait.',
+    '- L’historique (get_history) date chaque geste sur la file et dit d’où il vient. Dans la fenêtre Conversations, « archiver » une conversation termine sa tâche, l’« épingler » la passe en cours : « qu’est-ce que je viens d’archiver » se lit dans l’historique (terminée, depuis la fenêtre Conversations).',
     '- Réécrire ou supprimer un mot-clé existant, lancer une conversation : ce sont des PROPOSITIONS, que l’utilisateur applique ou refuse d’un clic. Ne les présente jamais comme faites. Ce qu’il en a décidé t’est dit en tête de son message suivant.',
     '- Tu ne supprimes pas de tâche : pour en écarter une, marque-la terminée ou descends-la en bas de file.',
     '- Tu peux lire le disque (Read, Grep, Glob) — rapports des conversations, sources d’un projet — mais rien y écrire.',
