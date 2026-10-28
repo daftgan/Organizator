@@ -400,6 +400,7 @@
         renderHead();
         renderCompose();
         renderPane();
+        if (C.selected && C.selected !== ASSISTANT_ID) renderThread();
         /* Une session en console, ou qui ne répond pas : son journal se relit tel qu'il s'écrit. */
         var c = convoById(C.selected);
         var lv = c ? C.live[c.id] : null;
@@ -461,6 +462,7 @@
     lv.question = null;
     lv.ended = false;
     lv.base = null;
+    lv.implicit = false;
   }
 
   function onLive(p) {
@@ -486,6 +488,16 @@
         lv.busy = true;
         lv.end = null;
         lv.echo.push({ text: p.text, at: now() });
+        lv.phase = 'thinking';
+        break;
+      case 'turn':
+        /* L'agent repart seul, réveillé par le retour d'un sous-agent : un tour comme un autre, sans message. */
+        if (!lv.busy || lv.ended) clearTurn(lv);
+        var known = C.transcripts[p.sessionId];
+        if (lv.base == null && known && known.messages) lv.base = known.messages.length;
+        lv.implicit = true;
+        lv.busy = true;
+        lv.end = null;
         lv.phase = 'thinking';
         break;
       case 'thinking':
@@ -527,7 +539,7 @@
         break;
     }
     if (p.sessionId === C.selected) {
-      if (p.phase === 'state' || p.phase === 'question' || p.phase === 'done' || p.phase === 'user') { renderHead(); renderCompose(); renderPane(); }
+      if (p.phase === 'state' || p.phase === 'question' || p.phase === 'done' || p.phase === 'user' || p.phase === 'turn') { renderHead(); renderCompose(); renderPane(); }
       renderThread();
     }
     reviveArchived();
@@ -1178,7 +1190,10 @@
     /* Pendant une réponse, le journal s'arrête au début du tour : la suite s'affiche en direct. */
     if (lv && (lv.busy || lv.echo.length) && !lv.ended) {
       var cut = lv.base;
-      if (cut == null) {
+      if (cut == null && lv.implicit) {
+        /* Un tour sans message : le journal reste entier, la suite s'affiche en direct. */
+        cut = lv.base = messages.length;
+      } else if (cut == null) {
         for (cut = messages.length - 1; cut >= 0 && messages[cut].role !== 'user'; cut--) { /* dernier message de l'utilisateur */ }
         if (cut < 0) cut = messages.length;
         if (!lv.echo.length && messages[cut]) lv.echo.push({ text: messages[cut].text, at: toMs(messages[cut].ts) });
@@ -1186,6 +1201,7 @@
       }
       messages = messages.slice(0, cut);
     }
+    var crew = crewHtml(id);
     if (!tr || (tr.messages === null && tr.loading)) {
       items.push({ key: 'loading', html: '<div class="cv-notice">Lecture de la conversation…</div>' });
     } else if (tr.error) {
@@ -1202,7 +1218,7 @@
       var block = [];
       function flushSteps() {
         if (!block.length) return;
-        items.push({ key: 's' + block[0], html: '<div class="cv-steps">' + block.map(function (sid) { return stepHtml(lv.steps[sid]); }).join('') + '</div>' });
+        items.push({ key: 's' + block[0], html: stepsHtml(lv, block, 'steps:' + id + ':' + block[0]) });
         block = [];
       }
       lv.items.forEach(function (it) {
@@ -1212,6 +1228,7 @@
       });
       flushSteps();
       lv.notices.forEach(function (n, k) { items.push({ key: 'n' + k, html: '<div class="cv-notice' + (n.error ? ' is-error' : '') + '">' + esc(n.text) + '</div>' }); });
+      if (crew) { items.push({ key: 'crew', html: crew }); crew = ''; }
       if (lv.question) items.push({ key: 'q' + lv.question.request, html: questionHtml(lv.question) });
       else if (lv.busy) items.push({ key: 'think', html: '<div class="cv-thinking"><i></i>' + esc(lv.phase === 'tool' ? 'Au travail…' : lv.phase === 'text' ? 'Écrit…' : 'Réfléchit…') + '</div>' });
       if (lv.end && !lv.busy) {
@@ -1222,6 +1239,7 @@
         if (parts.length) items.push({ key: 'end', html: '<div class="cv-end">' + esc(parts.join(' · ')) + '</div>' });
       }
     }
+    if (crew) items.push({ key: 'crew', html: crew });
     if (!items.length) {
       items.push({ key: 'empty', html: '<div class="cv-notice">Pas encore de message dans cette conversation.</div>' });
     }
@@ -1243,11 +1261,76 @@
     return '<div class="cv-msg assistant md">' + MD.blocks(m.text) + '</div>';
   }
 
+  /* L'outil d'Organizator se dit en clair. */
+  function stepName(s) {
+    return /__show_document$/.test(s.name || '') ? 'Montre un document' : (s.name || 'Outil');
+  }
+
+  /* Les outils d'un passage de la réponse, en une ligne : combien, et celui qui tourne (sinon le
+     dernier) ; le détail se déplie d'un clic. Les étapes des sous-agents (« · ») ne s'y comptent
+     pas : l'équipe a son bloc, plus bas. */
+  function stepsHtml(lv, ids, key) {
+    var steps = ids.map(function (sid) { return lv.steps[sid]; }).filter(Boolean);
+    var own = steps.filter(function (s) { return !/^· /.test(s.name || ''); });
+    var list = own.length ? own : steps;
+    if (!list.length) return '';
+    var now = list.filter(function (s) { return s.status === 'running'; }).pop() || list[list.length - 1];
+    var failed = list.filter(function (s) { return s.status === 'error'; }).length;
+    var running = now.status === 'running';
+    var open = !!C.open[key];
+    var count = list.length + (list.length > 1 ? ' étapes' : ' étape') + (own.length ? '' : ' des sous-agents');
+    return '<button type="button" class="cv-work' + (running ? ' is-running' : '') + '" data-act="cv-steps" data-k="' + esc(key) + '" aria-expanded="' + open + '"'
+      + ' title="' + (open ? 'Replier le détail' : 'Voir chaque étape') + '">'
+      + '<span class="cv-work-icon">' + (running ? '•' : failed ? '!' : '✓') + '</span>'
+      + '<span class="cv-work-count">' + esc(count) + '</span>'
+      + '<span class="cv-work-now">' + esc(stepName(now) + (now.detail ? ' · ' + now.detail : '')) + '</span>'
+      + (failed ? '<span class="cv-work-failed">' + failed + ' en échec</span>' : '')
+      + '<span class="cv-work-chev">' + (open ? '▾' : '▸') + '</span></button>'
+      + (open ? '<div class="cv-steps">' + steps.map(stepHtml).join('') + '</div>' : '');
+  }
+
+  /* L'équipe de la demande en cours (getSessions `crew`) : chaque agent, son nom, sa mission, son état. */
+  function crewOf(id) {
+    var a = C.sessions[id];
+    return a && Array.isArray(a.crew) ? a.crew : [];
+  }
+
+  function crewState(m) {
+    var at = m.finishedAt ? ' à ' + fmtTime(m.finishedAt) : '';
+    if (m.running) return { st: 'working', text: 'au travail depuis ' + fmtTime(m.startedAt) };
+    if (m.outcome === 'failed') return { st: 'error', text: 'en échec' + at };
+    if (m.outcome === 'killed' || m.outcome === 'stopped') return { st: 'idle', text: 'arrêté' + at };
+    if (m.outcome === 'silent') return { st: 'idle', text: 'sans nouvelles depuis ' + fmtTime(m.startedAt) };
+    return { st: 'ready', text: 'terminé' + at };
+  }
+
+  function crewRowsHtml(crew) {
+    return crew.map(function (m) {
+      var s = crewState(m);
+      return '<div class="cv-crew-row" title="' + esc(m.label + (m.about ? ' — ' + m.about : '')) + '">'
+        + '<span class="cv-state st-' + s.st + '"></span>'
+        + '<span class="cv-crew-name">' + esc(m.label || 'agent') + '</span>'
+        + (m.about ? '<span class="cv-crew-about">' + esc(m.about) + '</span>' : '')
+        + '<span class="cv-crew-state">' + esc(s.text) + '</span></div>';
+    }).join('');
+  }
+
+  function crewWords(crew) {
+    var working = crew.filter(function (m) { return m.running; }).length;
+    return (crew.length > 1 ? crew.length + ' agents' : 'Un agent') + ' · '
+      + (working ? (working > 1 ? working + ' au travail' : (crew.length > 1 ? 'un au travail' : 'au travail')) : (crew.length > 1 ? 'tous revenus' : 'revenu'));
+  }
+
+  function crewHtml(id) {
+    var crew = crewOf(id);
+    if (!crew.length) return '';
+    return '<div class="cv-crew"><div class="cv-crew-head">' + esc(crewWords(crew)) + '</div>' + crewRowsHtml(crew) + '</div>';
+  }
+
   function stepHtml(s) {
     if (!s) return '';
     var icon = s.status === 'done' ? '✓' : s.status === 'error' ? '✕' : '•';
-    /* L'outil d'Organizator se dit en clair. */
-    var name = /__show_document$/.test(s.name || '') ? 'Montre un document' : (s.name || 'Outil');
+    var name = stepName(s);
     return '<div class="cv-step ' + esc(s.status || '') + '"><span class="cv-step-icon">' + icon + '</span>'
       + '<span class="cv-step-name">' + esc(name) + '</span>'
       + (s.detail ? '<span class="cv-step-detail" title="' + esc(s.detail) + '">' + esc(s.detail) + '</span>' : '') + '</div>';
@@ -1685,19 +1768,13 @@
   }
 
   /* Comme la fenêtre principale (artifactEntries) : le rapport est le document que l'agent a cité
-     dans une réponse finale ; les autres documents sont de travail ; le reste, le code touché. */
-  function filesOf(c) {
+     dans une réponse finale, hors brouillons ; le plus récemment cité d'abord. */
+  function reportsOf(c) {
     var list = c && Array.isArray(c.artifacts) ? c.artifacts : [];
     var legacy = !list.some(function (a) { return a && a.cited != null; });
-    var out = { reports: [], docs: [], code: [] };
-    list.forEach(function (a) {
-      if (!a || !a.path || a.action === 'deleted') return;
-      var doc = isDocPath(a.path);
-      var main = doc && !isScratchPath(a.path) && (legacy ? !a.agent : a.cited > 0);
-      (main ? out.reports : doc ? out.docs : out.code).push(a);
-    });
-    out.reports.sort(function (x, y) { return (Number(y.cited) || 0) - (Number(x.cited) || 0); });
-    return out;
+    return list.filter(function (a) {
+      return a && a.path && a.action !== 'deleted' && isDocPath(a.path) && !isScratchPath(a.path) && (legacy ? !a.agent : a.cited > 0);
+    }).sort(function (x, y) { return (Number(y.cited) || 0) - (Number(x.cited) || 0); });
   }
 
   /* La dernière réponse de l'agent, sans ses lignes d'outils : sa conclusion. */
@@ -1733,20 +1810,6 @@
       + '</section>';
   }
 
-  function money(v) { return '≈ ' + v.toFixed(v < 0.1 ? 3 : 2).replace('.', ',') + ' $'; }
-
-  function fmtTokens(n) {
-    if (n >= 1e6) return (n / 1e6).toFixed(1).replace('.', ',') + ' M';
-    if (n >= 1e3) return Math.round(n / 1e3) + ' k';
-    return String(n);
-  }
-
-  function factsHtml(rows) {
-    return '<section class="cv-sum-sec"><h3>Activité</h3><dl class="cv-sum-facts">' + rows.map(function (r) {
-      return '<dt>' + esc(r[0]) + '</dt><dd title="' + esc(r[1]) + '">' + esc(r[1]) + '</dd>';
-    }).join('') + '</dl></section>';
-  }
-
   function summaryHtml(c) {
     if (!c) return '<div class="cv-sum"><div class="cv-sum-empty">La conversation démarre…</div></div>';
     var id = c.id;
@@ -1754,6 +1817,9 @@
     var state = c.taskId === FEEDBACK_ID ? 'Carnet de remarques' : taskDone(c) ? 'Tâche validée' : taskDoing(c) ? 'Tâche en cours' : 'Tâche à faire';
     h.push('<div class="cv-sum-head"><div class="cv-sum-kicker">Résumé</div><div class="cv-sum-title">' + esc(convTitle(c)) + '</div>'
       + '<div class="cv-sum-state">' + esc(state) + '</div></div>');
+    /* L'essentiel : qui travaille encore, ce que l'agent conclut, ce qu'il a montré et livré. */
+    var crew = crewOf(id);
+    if (crew.length) h.push('<section class="cv-sum-sec"><h3>' + esc(crewWords(crew)) + '</h3><div class="cv-crew is-pane">' + crewRowsHtml(crew) + '</div></section>');
     var lv = C.live[id];
     var end = conclusionOf(id);
     var tr = C.transcripts[id];
@@ -1774,25 +1840,10 @@
     h.push(fileListHtml('sum-shown:' + id, 'Documents montrés', shown.map(function (d) {
       return fileRowHtml(d.path, c.cwd, d.title, (d.title ? baseName(d.path) + ' · ' : '') + fmtTime(d.at));
     })));
-    var f = filesOf(c);
-    function rows(list) { return list.map(function (a) { return fileRowHtml(a.path, c.cwd, '', folderOf(a.path) || ''); }); }
-    h.push(fileListHtml('sum-rep:' + id, f.reports.length > 1 ? 'Rapports' : 'Rapport', rows(f.reports)));
-    h.push(fileListHtml('sum-doc:' + id, 'Documents de travail', rows(f.docs)));
-    h.push(fileListHtml('sum-code:' + id, 'Fichiers modifiés', rows(f.code)));
-    var a = C.sessions[id];
-    var facts = [];
-    var count = (a && a.messageCount) || c.messageCount;
-    if (count) facts.push(['Messages', String(count)]);
-    if (c.created) facts.push(['Commencée', fmtTime(c.created)]);
-    if (updatedOf(c)) facts.push(['Dernière activité', fmtTime(updatedOf(c))]);
-    var u = c.usage;
-    if (u && u.cost) facts.push(['Coût estimé', money(u.cost)]);
-    var tokens = u ? (u.input || 0) + (u.output || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0) : 0;
-    if (tokens) facts.push(['Jetons', fmtTokens(tokens)]);
-    if (u && u.premium) facts.push(['Requêtes premium', String(u.premium)]);
-    facts.push(['Agent', agentTag(c)]);
-    if (c.cwd) facts.push(['Dossier', c.cwd]);
-    h.push(factsHtml(facts));
+    var reports = reportsOf(c);
+    h.push(fileListHtml('sum-rep:' + id, reports.length > 1 ? 'Rapports' : 'Rapport', reports.map(function (a) {
+      return fileRowHtml(a.path, c.cwd, '', folderOf(a.path) || '');
+    })));
     if (!shown.length && providerOf(c) === 'claude' && !inConsole(c)) {
       h.push('<div class="cv-sum-hint">Quand l’agent veut vous montrer un document — un rapport, un plan, une capture —, il s’ouvre ici. Vous pouvez aussi le lui demander.</div>');
     }
@@ -1809,14 +1860,7 @@
     h.push(fileListHtml('sum-shown:as', 'Documents montrés', shown.map(function (d) {
       return fileRowHtml(d.path, '', d.title, (d.title ? baseName(d.path) + ' · ' : '') + fmtTime(d.at));
     })));
-    var facts = [];
-    if (sm) {
-      if (sm.count) facts.push(['Messages', String(sm.count)]);
-      if (sm.pending) facts.push(['À valider', sm.pending > 1 ? sm.pending + ' propositions' : 'une proposition']);
-      if (sm.at) facts.push(['Dernière activité', fmtTime(sm.at)]);
-      facts.push(['Modèle', sm.model]);
-    }
-    if (facts.length) h.push(factsHtml(facts));
+    if (sm && sm.pending) h.push('<div class="cv-sum-live">' + esc(sm.pending > 1 ? sm.pending + ' propositions attendent votre accord, dans la discussion.' : 'Une proposition attend votre accord, dans la discussion.') + '</div>');
     if (!shown.length) h.push('<div class="cv-sum-hint">Demandez-lui de vous montrer un rapport, la consigne d’un mot-clé écrite sur le disque, un document cité : il s’ouvrira ici.</div>');
     h.push('</div>');
     return h.join('');
@@ -2286,6 +2330,7 @@
       openDoc(C.selected, el.getAttribute('data-path'), cwd, el.getAttribute('data-title') || '');
     },
     'cv-sum-more': function (el) { var k = el.getAttribute('data-k'); C.open[k] = !C.open[k]; renderPane(); },
+    'cv-steps': function (el) { var k = el.getAttribute('data-k'); C.open[k] = !C.open[k]; renderThread(); },
     'cv-attach-pick': pickAttachments,
     'cv-attach-x': function (el) { removePending(parseInt(el.getAttribute('data-i'), 10)); },
     'cv-mic': startDictation,

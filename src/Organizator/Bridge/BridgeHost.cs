@@ -1767,6 +1767,24 @@ public sealed class BridgeHost
                 agents.Add(agent.Label);
             }
 
+            // L'equipe de la demande en cours, revenue ou non. Un agent sans retour annonce qui n'est
+            // plus compte au travail (silencieux depuis longtemps, ou d'avant une relance) est « silent ».
+            var crew = new JsonArray();
+            foreach (var member in summary.Crew ?? Array.Empty<AgentRun>())
+            {
+                var running = member.FinishedAt == 0
+                    && snapshot.Agents.Any(a => string.Equals(a.Key, member.Key, StringComparison.OrdinalIgnoreCase));
+                crew.Add(new JsonObject
+                {
+                    ["label"] = member.Label,
+                    ["about"] = member.About,
+                    ["startedAt"] = member.StartedAt,
+                    ["finishedAt"] = member.FinishedAt,
+                    ["outcome"] = member.FinishedAt > 0 ? member.Outcome : running ? "" : "silent",
+                    ["running"] = running,
+                });
+            }
+
             var entry = new JsonObject
             {
                 ["sessionId"] = summary.SessionId,
@@ -1782,6 +1800,8 @@ public sealed class BridgeHost
                 ["artifactsStamp"] = snapshot.ArtifactsStamp,
                 // Agents lances par la session et pas encore revenus, par leur nom.
                 ["agents"] = agents,
+                // Agents de la demande en cours : nom, mission, depart, retour, etat.
+                ["crew"] = crew,
                 // true/false quand le balayage des processus a repondu, null sinon.
                 ["alive"] = Alive(summary.SessionId),
             };

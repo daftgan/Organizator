@@ -30,8 +30,11 @@ public static class SessionState
 /// <param name="Key">Identite interne : <c>tool:&lt;tool_use_id&gt;</c> tant qu'on ne sait rien de plus,
 /// puis <c>agent:&lt;nom&gt;</c> pour un coequipier nomme ou <c>task:&lt;id&gt;</c> pour une tache de fond.</param>
 /// <param name="Label">Ce que l'interface affiche : nom de l'agent, ou resume de la tache.</param>
-/// <param name="StartedAt">Horodatage (ms Unix) du lancement.</param>
-public sealed record AgentRun(string Key, string Label, long StartedAt);
+/// <param name="StartedAt">Horodatage (ms Unix) du lancement (ou de sa reprise).</param>
+/// <param name="FinishedAt">Retour de l'agent (ms Unix) ; 0 tant qu'il n'a rien annonce.</param>
+/// <param name="Outcome">Comment il est revenu : <c>completed</c>, <c>failed</c>, <c>killed</c>… ; vide tant qu'il travaille.</param>
+/// <param name="About">Sa mission en quelques mots (la description donnee au lancement), quand <paramref name="Label"/> est son nom.</param>
+public sealed record AgentRun(string Key, string Label, long StartedAt, long FinishedAt = 0, string Outcome = "", string About = "");
 
 /// <summary>
 /// Un sous-agent dont le transcript propre a ete ecrit recemment : la preuve qu'il travaille encore.
@@ -45,6 +48,7 @@ public sealed record SubagentActivity(string Name, long WrittenAt);
 /// <param name="Detail">Precision facultative : outil en cours, motif d'interruption, message d'erreur.</param>
 /// <param name="Agents">Agents lances par la session et encore au travail, du plus ancien au plus recent.</param>
 /// <param name="Said">Derniere parole de l'agent — sa reponse, ou la question qu'il pose — raccourcie ; <c>null</c> s'il n'a rien dit.</param>
+/// <param name="Crew">Agents lances depuis le dernier message de l'utilisateur, revenus ou non, dans l'ordre de leur depart.</param>
 public sealed record SessionSummary(
     string SessionId,
     bool Exists,
@@ -55,7 +59,8 @@ public sealed record SessionSummary(
     long StateTs,
     string? Detail,
     IReadOnlyList<AgentRun> Agents,
-    string? Said = null)
+    string? Said = null,
+    IReadOnlyList<AgentRun>? Crew = null)
 {
     public static SessionSummary Missing(string sessionId)
         => new(sessionId, false, 0, 0, TranscriptAccumulator.DefaultTitle, SessionState.Idle, 0, null, Array.Empty<AgentRun>());
@@ -100,18 +105,44 @@ internal sealed class TranscriptAccumulator
     private readonly List<AgentRun> _agents = new();
     private readonly HashSet<string> _knownAgents = new(StringComparer.OrdinalIgnoreCase);
 
+    // L'equipe de la demande en cours : chaque agent lance (ou relance) depuis le dernier message de
+    // l'utilisateur, avec son retour quand il l'a annonce. Videe a chaque nouveau message.
+    private readonly List<AgentRun> _crew = new();
+
     /// <summary>Agents encore au travail, du plus ancien au plus recent.</summary>
     public IReadOnlyList<AgentRun> Agents => _agents;
+
+    /// <summary>Agents de la demande en cours, revenus ou non, dans l'ordre de leur depart.</summary>
+    public IReadOnlyList<AgentRun> Crew => _crew;
+
+    /// <summary>L'utilisateur ecrit : une nouvelle demande commence, avec une equipe neuve.</summary>
+    public void NewRound() => _crew.Clear();
 
     /// <summary>Un agent de ce nom a-t-il deja ete lance par cette session ?</summary>
     public bool KnowsAgent(string name) => name.Length > 0 && _knownAgents.Contains(name);
 
-    /// <summary>Note un agent parti au travail ; un deuxieme depart sous la meme cle ne compte pas double.</summary>
-    public void AgentStarted(string key, string label, long ts)
+    /// <summary>
+    /// Note un agent parti au travail ; un deuxieme depart sous la meme cle ne compte pas double. Un
+    /// agent revenu qu'on relance se remet au travail dans l'equipe de la demande en cours.
+    /// </summary>
+    public void AgentStarted(string key, string label, long ts, string about = "")
     {
         if (key.StartsWith("agent:", StringComparison.Ordinal))
         {
             _knownAgents.Add(key["agent:".Length..]);
+        }
+
+        var member = IndexOf(_crew, key);
+        if (member >= 0)
+        {
+            var known = _crew[member];
+            _crew[member] = known.FinishedAt > 0
+                ? known with { StartedAt = ts, FinishedAt = 0, Outcome = "", Label = label.Length > 0 ? label : known.Label }
+                : known with { Label = label.Length > 0 ? label : known.Label };
+        }
+        else
+        {
+            _crew.Add(new AgentRun(key, label, ts, About: about));
         }
 
         var index = IndexOfAgent(key);
@@ -121,7 +152,20 @@ internal sealed class TranscriptAccumulator
             return;
         }
 
-        _agents.Add(new AgentRun(key, label, ts));
+        _agents.Add(new AgentRun(key, label, ts, About: about));
+    }
+
+    /// <summary>Le libelle connu d'un agent (son nom au lancement), pour le reconnaitre quand il est relance.</summary>
+    public string LabelOf(string key)
+    {
+        var member = IndexOf(_crew, key);
+        if (member >= 0)
+        {
+            return _crew[member].Label;
+        }
+
+        var index = IndexOfAgent(key);
+        return index >= 0 ? _agents[index].Label : "";
     }
 
     /// <summary>L'agent s'est fait connaitre : sa cle provisoire devient son identite durable.</summary>
@@ -144,23 +188,45 @@ internal sealed class TranscriptAccumulator
         {
             _agents.Add(run with { Key = newKey, Label = label.Length > 0 ? label : run.Label });
         }
+
+        var member = IndexOf(_crew, key);
+        if (member >= 0)
+        {
+            var known = _crew[member];
+            _crew.RemoveAt(member);
+            if (IndexOf(_crew, newKey) < 0)
+            {
+                _crew.Insert(member, known with { Key = newKey, Label = label.Length > 0 ? label : known.Label });
+            }
+        }
     }
 
-    /// <summary>L'agent a rendu son rapport : il ne travaille plus.</summary>
-    public void AgentFinished(string key)
+    /// <summary>
+    /// L'agent a rendu son rapport : il ne travaille plus. <paramref name="outcome"/> : ce qu'en dit sa
+    /// notification (<c>completed</c> par defaut, <c>failed</c>, <c>killed</c>…).
+    /// </summary>
+    public void AgentFinished(string key, long ts = 0, string outcome = "completed")
     {
         var index = IndexOfAgent(key);
         if (index >= 0)
         {
             _agents.RemoveAt(index);
         }
+
+        var member = IndexOf(_crew, key);
+        if (member >= 0 && _crew[member].FinishedAt == 0)
+        {
+            _crew[member] = _crew[member] with { FinishedAt = ts > 0 ? ts : Math.Max(1, _crew[member].StartedAt), Outcome = outcome.Length > 0 ? outcome : "completed" };
+        }
     }
 
-    private int IndexOfAgent(string key)
+    private int IndexOfAgent(string key) => IndexOf(_agents, key);
+
+    private static int IndexOf(List<AgentRun> list, string key)
     {
-        for (var i = 0; i < _agents.Count; i++)
+        for (var i = 0; i < list.Count; i++)
         {
-            if (string.Equals(_agents[i].Key, key, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(list[i].Key, key, StringComparison.OrdinalIgnoreCase))
             {
                 return i;
             }
